@@ -251,7 +251,9 @@ func (p *AnthropicProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/v1/messages", p.apiKey, "x-api-key")
 }
 func (p *AnthropicProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := p.baseURL + r.URL.Path
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/v1")
+	upstreamURL := p.baseURL + path
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -303,7 +305,9 @@ func (p *GeminiProvider) GetModels() []string {
 }
 func (p *GeminiProvider) TestConnection() error { return nil }
 func (p *GeminiProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := p.baseURL + "/v1beta" + r.URL.Path + "?key=" + p.apiKey
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/v1")
+	upstreamURL := p.baseURL + "/v1beta/openai" + path + "?key=" + p.apiKey
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -373,7 +377,7 @@ func (p *MiniMaxProvider) GetModels() []string {
 }
 func (p *MiniMaxProvider) TestConnection() error { return nil }
 func (p *MiniMaxProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := p.baseURL + "/v1" + r.URL.Path
+	upstreamURL := p.baseURL + r.URL.Path
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -514,7 +518,9 @@ func (p *DoubaoProvider) TestConnection() error {
 	return testConnection("https://ark.cn-beijing.volces.com/api/v3/models", p.apiKey, "Bearer")
 }
 func (p *DoubaoProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := p.baseURL + r.URL.Path
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/v1")
+	upstreamURL := p.baseURL + path
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -555,7 +561,7 @@ type QwenProvider struct {
 func NewQwenProvider(apiKey string) *QwenProvider {
 	return &QwenProvider{
 		name:    "qwen",
-		baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		baseURL: "https://dashscope.aliyuncs.com/compatible-mode",
 		apiKey:  apiKey,
 	}
 }
@@ -583,7 +589,7 @@ type MoonshotProvider struct {
 func NewMoonshotProvider(apiKey string) *MoonshotProvider {
 	return &MoonshotProvider{
 		name:    "moonshot",
-		baseURL: "https://api.moonshot.cn/v1",
+		baseURL: "https://api.moonshot.cn",
 		apiKey:  apiKey,
 	}
 }
@@ -611,7 +617,7 @@ type YiProvider struct {
 func NewYiProvider(apiKey string) *YiProvider {
 	return &YiProvider{
 		name:    "yi",
-		baseURL: "https://api.lingyiwanwu.com/v1",
+		baseURL: "https://api.lingyiwanwu.com",
 		apiKey:  apiKey,
 	}
 }
@@ -639,7 +645,7 @@ type OpenRouterProvider struct {
 func NewOpenRouterProvider(apiKey string) *OpenRouterProvider {
 	return &OpenRouterProvider{
 		name:    "openrouter",
-		baseURL: "https://openrouter.ai/api/v1",
+		baseURL: "https://openrouter.ai/api",
 		apiKey:  apiKey,
 	}
 }

@@ -766,6 +766,16 @@ func (p *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 
 	openAIReq := p.convertAnthropicToOpenAI(req)
 	openAIReq.Model = modelName
+
+	newBody, err := json.Marshal(openAIReq)
+	if err != nil {
+		http.Error(w, "Failed to create request body", http.StatusInternalServerError)
+		return
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(newBody))
+	r.ContentLength = int64(len(newBody))
+	r.URL.Path = "/v1/chat/completions"
 	provider.ProxyRequest(w, r)
 }
 
@@ -1992,12 +2002,12 @@ var knownProviders = map[string]string{
 	"deepseek":    "https://api.deepseek.com",
 	"gemini":      "https://generativelanguage.googleapis.com",
 	"minimax":     "https://api.minimax.chat",
-	"glm":         "https://open.bigmodel.cn",
-	"doubao":      "https://ark.cn-beijing.volces.com",
-	"qwen":        "https://dashscope.aliyuncs.com",
+	"glm":         "https://open.bigmodel.cn/api/paas/v4",
+	"doubao":      "https://ark.cn-beijing.volces.com/api/v3",
+	"qwen":        "https://dashscope.aliyuncs.com/compatible-mode",
 	"moonshot":    "https://api.moonshot.cn",
 	"yi":          "https://api.lingyiwanwu.com",
-	"openrouter":  "https://openrouter.ai",
+	"openrouter":  "https://openrouter.ai/api",
 }
 
 func knownProviderBaseURL(model string) string {
