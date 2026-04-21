@@ -121,6 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get_alert_stats,
             get_request_logs,
             export_logs,
+            get_caller_top10,
+            get_security_token_stats,
 
             // API Key管理命令
             list_api_keys,

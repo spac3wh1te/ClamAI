@@ -1465,6 +1465,34 @@ pub async fn get_vector_config(state: tauri::State<'_, AppState>) -> Result<Stri
 // ==================== 认证命令 ====================
 
 #[tauri::command]
+pub async fn get_caller_top10(state: tauri::State<'_, AppState>, period: Option<u32>) -> Result<String, String> {
+    let p = period.unwrap_or(60 * 24 * 7);
+    let (url, auth) = get_proxy_url(&state, &format!("stats/callers?period={}", p)).await?;
+    let client = https_client()?;
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn get_security_token_stats(state: tauri::State<'_, AppState>, period: Option<u32>) -> Result<String, String> {
+    let p = period.unwrap_or(60 * 24 * 7);
+    let (url, auth) = get_proxy_url(&state, &format!("stats/security-tokens?period={}", p)).await?;
+    let client = https_client()?;
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
+#[tauri::command]
 pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/status").await?;
     let client = https_client()?;

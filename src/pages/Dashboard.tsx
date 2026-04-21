@@ -9,6 +9,8 @@ import {
   ArrowDownRight,
   FolderOpen,
   ShieldAlert,
+  Users,
+  Brain,
 } from "lucide-react";
 import {
   BarChart,
@@ -151,6 +153,40 @@ export default function Dashboard() {
     queryFn: () => invoke<AlertStats>("get_alert_stats", { period }),
     refetchInterval: 15000,
     staleTime: 0,
+  });
+
+  const { data: callerTop10 } = useQuery({
+    queryKey: ["caller-top10", period],
+    queryFn: async () => {
+      const raw = await invoke<string>("get_caller_top10", { period });
+      return JSON.parse(raw) as {
+        callers: {
+          api_key_used: string;
+          client_ip: string;
+          requests: number;
+          input_tokens: number;
+          output_tokens: number;
+        }[];
+      };
+    },
+    staleTime: 0,
+    refetchInterval: 15000,
+  });
+
+  const { data: securityTokenStats } = useQuery({
+    queryKey: ["security-token-stats", period],
+    queryFn: async () => {
+      const raw = await invoke<string>("get_security_token_stats", { period });
+      return JSON.parse(raw) as {
+        total_checks: number;
+        total_tokens: number;
+        input_tokens: number;
+        output_tokens: number;
+        by_type: Record<string, number>;
+      };
+    },
+    staleTime: 0,
+    refetchInterval: 15000,
   });
 
   const stats = usageStats || {
@@ -529,6 +565,113 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-card rounded-lg p-6 border border-border">
+          <div className="flex items-center gap-2 mb-4">
+            <Users className="w-5 h-5 text-blue-400" />
+            <h3 className="text-lg font-semibold">调用者 TOP 10 (Key-IP)</h3>
+          </div>
+          {callerTop10?.callers && callerTop10.callers.length > 0 ? (
+            <div className="space-y-2">
+              {callerTop10.callers.map((c, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between py-1.5 border-b border-border last:border-0"
+                >
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <span className="text-xs text-muted-foreground w-6 shrink-0">
+                      {i + 1}.
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-mono text-sm truncate">
+                        {c.api_key_used}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {c.client_ip}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0 ml-3">
+                    <span className="text-sm font-medium">{c.requests} 次</span>
+                    <span className="text-xs text-muted-foreground ml-2">
+                      {formatTokens(c.input_tokens + c.output_tokens)} tok
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-center py-8">
+              暂无调用者数据
+            </p>
+          )}
+        </div>
+
+        <div className="bg-card rounded-lg p-6 border border-border">
+          <div className="flex items-center gap-2 mb-4">
+            <Brain className="w-5 h-5 text-purple-400" />
+            <h3 className="text-lg font-semibold">安全分析 Token 消耗</h3>
+          </div>
+          {securityTokenStats && securityTokenStats.total_checks > 0 ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-background rounded-lg p-3 border border-border text-center">
+                  <p className="text-2xl font-bold">
+                    {securityTokenStats.total_checks}
+                  </p>
+                  <p className="text-xs text-muted-foreground">分析次数</p>
+                </div>
+                <div className="bg-background rounded-lg p-3 border border-border text-center">
+                  <p className="text-2xl font-bold">
+                    {formatTokens(securityTokenStats.total_tokens)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">总 Token</p>
+                </div>
+                <div className="bg-background rounded-lg p-3 border border-border text-center">
+                  <p className="text-2xl font-bold">
+                    {securityTokenStats.total_checks > 0
+                      ? formatTokens(
+                          Math.round(
+                            securityTokenStats.total_tokens /
+                              securityTokenStats.total_checks,
+                          ),
+                        )
+                      : 0}
+                  </p>
+                  <p className="text-xs text-muted-foreground">平均 Token/次</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">按分析类型分布</p>
+                {Object.entries(securityTokenStats.by_type || {}).map(
+                  ([type, tokens]) => (
+                    <div
+                      key={type}
+                      className="flex items-center justify-between"
+                    >
+                      <span className="text-sm">
+                        {type === "user_profile"
+                          ? "调用者画像"
+                          : type === "skills_detection"
+                            ? "Skills 检测"
+                            : type}
+                      </span>
+                      <span className="text-sm text-muted-foreground">
+                        {formatTokens(tokens)} tokens
+                      </span>
+                    </div>
+                  ),
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-center py-8">
+              暂无安全分析数据
+            </p>
+          )}
+        </div>
+      </div>
 
       <div className="bg-card rounded-lg p-6 border border-border">
         <h3 className="text-lg font-semibold mb-4">快速操作</h3>

@@ -748,3 +748,82 @@ func dbGetUsageStats(periodMinutes int) *DBUsageStats {
 
 	return stats
 }
+
+type CallerTopEntry struct {
+	APIKeyUsed   string `json:"api_key_used"`
+	ClientIP     string `json:"client_ip"`
+	Requests     int64  `json:"requests"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+}
+
+func dbGetCallerTop10(periodMinutes int) []CallerTopEntry {
+	cutoff := time.Now().Add(-time.Duration(periodMinutes) * time.Minute).UTC()
+	rows, err := db.Query(`SELECT api_key_used, client_ip, COUNT(*) as cnt,
+		COALESCE(SUM(input_tokens), 0) as it, COALESCE(SUM(output_tokens), 0) as ot
+		FROM request_logs WHERE timestamp >= ? AND api_key_used != ''
+		GROUP BY api_key_used, client_ip ORDER BY cnt DESC LIMIT 10`, cutoff.Format(time.RFC3339))
+	if err != nil {
+		log.Printf("[ERROR] dbGetCallerTop10: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var result []CallerTopEntry
+	for rows.Next() {
+		var e CallerTopEntry
+		if err := rows.Scan(&e.APIKeyUsed, &e.ClientIP, &e.Requests, &e.InputTokens, &e.OutputTokens); err != nil {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result
+}
+
+type SecurityTokenStats struct {
+	TotalChecks  int64            `json:"total_checks"`
+	TotalTokens  int64            `json:"total_tokens"`
+	InputTokens  int64            `json:"input_tokens"`
+	OutputTokens int64            `json:"output_tokens"`
+	ByType       map[string]int64 `json:"by_type"`
+}
+
+func dbGetSecurityTokenStats(periodMinutes int) *SecurityTokenStats {
+	cutoff := time.Now().Add(-time.Duration(periodMinutes) * time.Minute).UTC()
+	stats := &SecurityTokenStats{
+		ByType: make(map[string]int64),
+	}
+
+	row := db.QueryRow(`SELECT COUNT(*),
+		COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+		FROM request_logs WHERE timestamp >= ? AND path = '/analysis/v1/chat/completions'`,
+		cutoff.Format(time.RFC3339))
+	row.Scan(&stats.TotalChecks, &stats.InputTokens, &stats.OutputTokens)
+	stats.TotalTokens = stats.InputTokens + stats.OutputTokens
+
+	rows, err := db.Query(`SELECT request_content, COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) as tok
+		FROM request_logs WHERE timestamp >= ? AND path = '/analysis/v1/chat/completions'
+		GROUP BY request_content`, cutoff.Format(time.RFC3339))
+	if err != nil {
+		return stats
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var content string
+		var tok int64
+		if rows.Scan(&content, &tok) != nil {
+			continue
+		}
+		var reqMap map[string]interface{}
+		if json.Unmarshal([]byte(content), &reqMap) != nil {
+			continue
+		}
+		analysisType, _ := reqMap["analysis_type"].(string)
+		if analysisType == "" {
+			analysisType = "other"
+		}
+		stats.ByType[analysisType] += tok
+	}
+	return stats
+}

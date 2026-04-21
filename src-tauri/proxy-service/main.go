@@ -581,6 +581,8 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/stats/usage", p.handleStatsUsage).Methods("GET")
 	api.HandleFunc("/stats/logs", p.handleStatsLogs).Methods("GET")
 	api.HandleFunc("/stats/alerts", p.handleAlertStats).Methods("GET")
+	api.HandleFunc("/stats/callers", p.handleCallerTop10).Methods("GET")
+	api.HandleFunc("/stats/security-tokens", p.handleSecurityTokenStats).Methods("GET")
 	api.HandleFunc("/proxy/test", p.handleProxyTest).Methods("GET")
 	api.HandleFunc("/security/check", p.handleContentCheck).Methods("POST")
 	api.HandleFunc("/skills/history", p.handleSkillsHistory).Methods("GET")
@@ -1259,6 +1261,32 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 		"minute":      minuteResult,
 		"granularity": granularity,
 	})
+}
+
+func (p *ProxyServer) handleCallerTop10(w http.ResponseWriter, r *http.Request) {
+	period := 60 * 24 * 7
+	if p := r.URL.Query().Get("period"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			period = parsed
+		}
+	}
+	callers := dbGetCallerTop10(period)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"callers": callers,
+	})
+}
+
+func (p *ProxyServer) handleSecurityTokenStats(w http.ResponseWriter, r *http.Request) {
+	period := 60 * 24 * 7
+	if p := r.URL.Query().Get("period"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			period = parsed
+		}
+	}
+	stats := dbGetSecurityTokenStats(period)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request) {
