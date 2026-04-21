@@ -1027,7 +1027,7 @@ pub async fn test_chat_request(
             tracing::warn!("sync_provider_key: could not determine provider name from model {}", model);
         }
 
-        let proxy_url = format!("http://127.0.0.1:{}/v1/chat/completions", port);
+        let proxy_url = format!("https://127.0.0.1:{}/v1/chat/completions", port);
         let client = https_client()?;
         let body = build_test_body(&model, &message, model_type, &provider_type);
 
