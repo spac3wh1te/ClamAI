@@ -10,6 +10,8 @@ import {
   AlertTriangle,
   CheckCircle,
   Save,
+  Database,
+  Trash2,
 } from "lucide-react";
 
 interface DirectionConfig {
@@ -17,6 +19,7 @@ interface DirectionConfig {
   mode: "block" | "detect";
   keyword_enabled: boolean;
   semantic_enabled: boolean;
+  vector_enabled: boolean;
 }
 
 interface SecurityConfig {
@@ -53,12 +56,14 @@ const defaultConfig: SecurityConfig = {
     mode: "block",
     keyword_enabled: true,
     semantic_enabled: false,
+    vector_enabled: false,
   },
   output: {
     enabled: true,
     mode: "block",
     keyword_enabled: true,
     semantic_enabled: false,
+    vector_enabled: false,
   },
   keywords: [],
   block_message: "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
@@ -70,10 +75,15 @@ const defaultConfig: SecurityConfig = {
 
 export default function Security() {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"config" | "alerts">("config");
+  const [tab, setTab] = useState<"config" | "alerts" | "vector">("config");
   const [newKeyword, setNewKeyword] = useState("");
   const [draft, setDraft] = useState<SecurityConfig | null>(null);
   const [saved, setSaved] = useState(false);
+  const [newSample, setNewSample] = useState({
+    content: "",
+    category: "general",
+  });
+  const [newSampleSource, setNewSampleSource] = useState("manual");
 
   const { data: remoteConfig, isLoading } = useQuery({
     queryKey: ["security-config"],
@@ -92,6 +102,26 @@ export default function Security() {
     },
     staleTime: 0,
     refetchInterval: 10000,
+  });
+
+  const { data: vectorSamplesData, refetch: refetchVectorSamples } = useQuery({
+    queryKey: ["vector-samples"],
+    queryFn: async () => {
+      const raw = await invoke<string>("get_vector_samples", { limit: 100 });
+      return JSON.parse(raw) as {
+        samples: {
+          id: number;
+          content: string;
+          category: string;
+          source: string;
+          created_at: string;
+          auto_added: boolean;
+        }[];
+        total: number;
+      };
+    },
+    staleTime: 0,
+    enabled: tab === "vector",
   });
 
   const saveMutation = useMutation({
@@ -194,6 +224,13 @@ export default function Security() {
             </span>
           )}
         </button>
+        <button
+          onClick={() => setTab("vector")}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${tab === "vector" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
+        >
+          <Database size={14} />
+          向量样本库
+        </button>
       </div>
 
       {tab === "config" && (
@@ -295,6 +332,17 @@ export default function Security() {
                     />
                     <span className="text-sm">语义安全检测</span>
                   </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cfg.input.vector_enabled}
+                      onChange={(e) =>
+                        updateInput({ vector_enabled: e.target.checked })
+                      }
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm">向量相似度检测</span>
+                  </label>
                 </div>
               </>
             )}
@@ -369,6 +417,17 @@ export default function Security() {
                       className="w-4 h-4"
                     />
                     <span className="text-sm">语义安全检测</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cfg.output.vector_enabled}
+                      onChange={(e) =>
+                        updateOutput({ vector_enabled: e.target.checked })
+                      }
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm">向量相似度检测</span>
                   </label>
                 </div>
                 {cfg.output.mode === "detect" && (
@@ -541,11 +600,13 @@ export default function Security() {
                             {alert.mode === "block" ? "拦截" : "检测"}
                           </span>
                           <span
-                            className={`px-1.5 py-0.5 rounded text-xs font-medium ${alert.trigger_type === "keyword" ? "bg-orange-500/10 text-orange-400" : "bg-red-500/10 text-red-400"}`}
+                            className={`px-1.5 py-0.5 rounded text-xs font-medium ${alert.trigger_type === "keyword" ? "bg-orange-500/10 text-orange-400" : alert.trigger_type === "vector" ? "bg-teal-500/10 text-teal-400" : "bg-red-500/10 text-red-400"}`}
                           >
                             {alert.trigger_type === "keyword"
                               ? "关键词"
-                              : "语义检测"}
+                              : alert.trigger_type === "vector"
+                                ? "向量检测"
+                                : "语义检测"}
                           </span>
                           {alert.trigger_detail && (
                             <code className="text-xs text-muted-foreground">
@@ -591,6 +652,124 @@ export default function Security() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "vector" && (
+        <div className="space-y-6">
+          <div className="bg-card rounded-lg p-6 border border-border space-y-4">
+            <h3 className="text-lg font-semibold">添加恶意样本</h3>
+            <p className="text-sm text-muted-foreground">
+              添加已知恶意内容到向量库，用于相似度检测。系统会自动调用 Embedding
+              API 生成向量。
+            </p>
+            <textarea
+              value={newSample.content}
+              onChange={(e) =>
+                setNewSample({ ...newSample, content: e.target.value })
+              }
+              placeholder="输入恶意内容样本..."
+              rows={4}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+            />
+            <div className="flex gap-3 items-center">
+              <select
+                value={newSample.category}
+                onChange={(e) =>
+                  setNewSample({ ...newSample, category: e.target.value })
+                }
+                className="px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="general">通用恶意</option>
+                <option value="prompt_injection">提示注入</option>
+                <option value="data_exfiltration">数据窃取</option>
+                <option value="jailbreak">越狱攻击</option>
+                <option value="phishing">钓鱼社工</option>
+                <option value="sensitive_data">敏感数据</option>
+                <option value="pornography">涉黄</option>
+                <option value="violence">涉暴</option>
+                <option value="politics">涉政</option>
+              </select>
+              <button
+                onClick={async () => {
+                  if (!newSample.content.trim()) return;
+                  await invoke("add_vector_sample", {
+                    content: newSample.content,
+                    category: newSample.category,
+                    source: newSampleSource,
+                  });
+                  setNewSample({ content: "", category: "general" });
+                  refetchVectorSamples();
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 text-sm"
+              >
+                <Plus size={16} />
+                添加样本
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-card rounded-lg border border-border">
+            <div className="p-4 border-b border-border flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold">样本列表</h3>
+                <p className="text-sm text-muted-foreground">
+                  共 {vectorSamplesData?.total || 0} 个样本
+                </p>
+              </div>
+            </div>
+            {!vectorSamplesData?.samples ||
+            vectorSamplesData.samples.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground">
+                <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p>暂无向量样本</p>
+                <p className="text-xs mt-1">
+                  添加恶意内容样本以启用向量相似度检测
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {vectorSamplesData.samples.map((sample) => (
+                  <div key={sample.id} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-teal-500/10 text-teal-400">
+                            {sample.category}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-secondary text-secondary-foreground">
+                            {sample.source}
+                          </span>
+                          {sample.auto_added && (
+                            <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-500/10 text-blue-400">
+                              自动积累
+                            </span>
+                          )}
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(sample.created_at).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground line-clamp-3">
+                          {sample.content}
+                        </p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          await invoke("delete_vector_sample", {
+                            id: sample.id,
+                          });
+                          refetchVectorSamples();
+                        }}
+                        className="p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded-lg shrink-0"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

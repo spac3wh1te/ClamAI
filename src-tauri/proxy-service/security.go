@@ -23,6 +23,7 @@ type DirectionConfig struct {
 	Mode            string `json:"mode"` // "block" or "detect"
 	KeywordEnabled  bool   `json:"keyword_enabled"`
 	SemanticEnabled bool   `json:"semantic_enabled"`
+	VectorEnabled   bool   `json:"vector_enabled"`
 }
 
 type SecurityConfig struct {
@@ -112,12 +113,14 @@ func defaultSecurityConfig() SecurityConfig {
 			Mode:            "block",
 			KeywordEnabled:  true,
 			SemanticEnabled: false,
+			VectorEnabled:   false,
 		},
 		Output: DirectionConfig{
 			Enabled:         true,
 			Mode:            "block",
 			KeywordEnabled:  true,
 			SemanticEnabled: false,
+			VectorEnabled:   false,
 		},
 		Keywords:          []string{},
 		BlockMessage:      "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
@@ -294,12 +297,37 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 								dbInsertAlert(alert)
 							}
 							dbInsertBlockedLog(reqModel, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), "input semantic blocked")
+							autoAddBlockedSample(truncate(inputContent, 500), "input_semantic")
 							sendBlockResponse(w, cfg.BlockMessage)
 							return
 						}
 					}
 				} else {
 					go p.asyncInputSemanticCheck(inputContent, reqModel, apiKey, clientIP, cfg)
+				}
+			}
+			if cfg.Input.VectorEnabled {
+				if cfg.Input.Mode == "block" {
+					vr, verr := vectorCheck(inputContent)
+					if verr != nil {
+						log.Printf("[WARN] input vector check error: %v", verr)
+					} else if len(vr) > 0 {
+						best := vr[0]
+						log.Printf("[SECURITY] input vector block: similarity=%.2f, category=%s", best.Similarity, best.Category)
+						alert := &SecurityAlert{
+							Timestamp: time.Now(), Direction: "input", Mode: "block",
+							TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
+							ContentPreview: truncate(inputContent, 200), Model: reqModel,
+							APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "block",
+						}
+						dbInsertAlert(alert)
+						dbInsertBlockedLog(reqModel, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), "input vector blocked")
+						autoAddBlockedSample(truncate(inputContent, 500), "input_vector")
+						sendBlockResponse(w, cfg.BlockMessage)
+						return
+					}
+				} else {
+					go p.asyncInputVectorCheck(inputContent, reqModel, apiKey, clientIP)
 				}
 			}
 		}
@@ -317,12 +345,15 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 					}
 					w.WriteHeader(bw.statusCode)
 					w.Write(bw.Bytes())
-					if bw.statusCode == http.StatusOK && bw.Len() > 0 && (cfg.Output.KeywordEnabled || cfg.Output.SemanticEnabled) {
+					if bw.statusCode == http.StatusOK && bw.Len() > 0 && (cfg.Output.KeywordEnabled || cfg.Output.SemanticEnabled || cfg.Output.VectorEnabled) {
 						var resp map[string]interface{}
 						if json.Unmarshal(bw.Bytes(), &resp) == nil {
 							outputContent := extractContentFromResponse(resp)
 							if outputContent != "" {
 								go p.asyncOutputCheck(outputContent, reqModel, apiKey, clientIP, cfg)
+								if cfg.Output.VectorEnabled {
+									go p.asyncOutputVectorCheck(outputContent, reqModel, apiKey, clientIP)
+								}
 							}
 						}
 					}
@@ -389,11 +420,33 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 											}
 											dbInsertAlert(alert)
 										}
+										autoAddBlockedSample(truncate(outputContent, 500), "output_semantic")
 										w.Header().Set("Content-Type", "application/json")
 										w.Header().Set("X-Security-Block", "output")
 										json.NewEncoder(w).Encode(buildBlockChatResponse(cfg.BlockMessage, resp))
 										blocked = true
 									}
+								}
+							}
+							if !blocked && cfg.Output.VectorEnabled {
+								vr, verr := vectorCheck(outputContent)
+								if verr != nil {
+									log.Printf("[WARN] output vector check error: %v", verr)
+								} else if len(vr) > 0 {
+									best := vr[0]
+									log.Printf("[SECURITY] output vector block: similarity=%.2f, category=%s", best.Similarity, best.Category)
+									alert := &SecurityAlert{
+										Timestamp: time.Now(), Direction: "output", Mode: "block",
+										TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
+										ContentPreview: truncate(outputContent, 200), Model: reqModel,
+										APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "replace",
+									}
+									dbInsertAlert(alert)
+									autoAddBlockedSample(truncate(outputContent, 500), "output_vector")
+									w.Header().Set("Content-Type", "application/json")
+									w.Header().Set("X-Security-Block", "output")
+									json.NewEncoder(w).Encode(buildBlockChatResponse(cfg.BlockMessage, resp))
+									blocked = true
 								}
 							}
 							if !blocked {
@@ -427,6 +480,12 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 				accumulated := sw.GetAccumulated()
 				if accumulated != "" {
 					go p.asyncOutputCheck(accumulated, reqModel, apiKey, clientIP, cfg)
+				}
+			}
+			if cfg.Output.VectorEnabled && !sw.aborted {
+				accumulated := sw.GetAccumulated()
+				if accumulated != "" {
+					go p.asyncOutputVectorCheck(accumulated, reqModel, apiKey, clientIP)
 				}
 			}
 			return
@@ -508,6 +567,48 @@ func (p *ProxyServer) asyncOutputCheck(content, model, apiKey, clientIP string, 
 			}
 		}
 	}
+}
+
+func (p *ProxyServer) asyncInputVectorCheck(content, model, apiKey, clientIP string) {
+	results, err := vectorCheck(content)
+	if err != nil {
+		log.Printf("[WARN] async input vector: %v", err)
+		return
+	}
+	if len(results) == 0 {
+		return
+	}
+	best := results[0]
+	log.Printf("[SECURITY] async input vector alert: similarity=%.2f, category=%s", best.Similarity, best.Category)
+	alert := &SecurityAlert{
+		Timestamp: time.Now(), Direction: "input", Mode: "detect",
+		TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
+		ContentPreview: truncate(content, 200), Model: model,
+		APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
+	}
+	dbInsertAlert(alert)
+	autoAddBlockedSample(truncate(content, 500), "input_vector")
+}
+
+func (p *ProxyServer) asyncOutputVectorCheck(content, model, apiKey, clientIP string) {
+	results, err := vectorCheck(content)
+	if err != nil {
+		log.Printf("[WARN] async output vector: %v", err)
+		return
+	}
+	if len(results) == 0 {
+		return
+	}
+	best := results[0]
+	log.Printf("[SECURITY] async output vector alert: similarity=%.2f, category=%s", best.Similarity, best.Category)
+	alert := &SecurityAlert{
+		Timestamp: time.Now(), Direction: "output", Mode: "detect",
+		TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
+		ContentPreview: truncate(content, 200), Model: model,
+		APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
+	}
+	dbInsertAlert(alert)
+	autoAddBlockedSample(truncate(content, 500), "output_vector")
 }
 
 // ==================== Stream/Buffer Writers ====================
@@ -894,6 +995,8 @@ func categoryLabel(cat string) string {
 		return "涉政"
 	case "terrorism":
 		return "涉恐"
+	case "vector":
+		return "向量检测"
 	default:
 		return cat
 	}

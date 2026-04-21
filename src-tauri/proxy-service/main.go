@@ -490,6 +490,10 @@ func NewProxyServer(config *Config) (*ProxyServer, error) {
 	secConfigMu.Lock()
 	secConfig = dbLoadSecurityConfig()
 	secConfigMu.Unlock()
+	if err := initVectorDB(); err != nil {
+		log.Printf("[WARN] initVectorDB failed (non-fatal): %v", err)
+	}
+	setProxyServer(proxy)
 	proxy.setupRoutes()
 	go proxy.periodicSave()
 	return proxy, nil
@@ -584,6 +588,7 @@ func (p *ProxyServer) setupRoutes() {
 	p.router.HandleFunc("/analysis/v1/chat/completions", p.handleAnalysisChat).Methods("POST")
 
 	p.setupSecurityRoutes(api)
+	p.setupVectorRoutes(api)
 	p.setupRateLimitRoutes(api)
 	p.setupAuthRoutes(p.router)
 	p.setupFrontendRoutes()

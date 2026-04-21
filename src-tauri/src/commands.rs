@@ -1400,6 +1400,68 @@ pub async fn resolve_security_alert(state: tauri::State<'_, AppState>, id: u64) 
     Ok(body)
 }
 
+// ==================== 向量样本管理命令 ====================
+
+#[tauri::command]
+pub async fn get_vector_samples(state: tauri::State<'_, AppState>, limit: Option<u32>, offset: Option<u32>) -> Result<String, String> {
+    let l = limit.unwrap_or(50);
+    let o = offset.unwrap_or(0);
+    let (url, auth) = get_proxy_url(&state, &format!("security/vector/samples?limit={}&offset={}", l, o)).await?;
+    let client = https_client()?;
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn add_vector_sample(state: tauri::State<'_, AppState>, content: String, category: String, source: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "security/vector/samples").await?;
+    let client = https_client()?;
+    let mut req = client.post(&url)
+        .timeout(std::time::Duration::from_secs(60))
+        .json(&serde_json::json!({
+            "content": content,
+            "category": category,
+            "source": source,
+        }));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn delete_vector_sample(state: tauri::State<'_, AppState>, id: u64) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("security/vector/samples/{}", id)).await?;
+    let client = https_client()?;
+    let mut req = client.delete(&url).timeout(std::time::Duration::from_secs(5));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn get_vector_config(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "security/vector/config").await?;
+    let client = https_client()?;
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(body)
+}
+
 // ==================== 认证命令 ====================
 
 #[tauri::command]

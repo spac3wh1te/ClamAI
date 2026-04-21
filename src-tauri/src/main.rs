@@ -146,6 +146,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             resolve_security_alert,
             check_content_safety,
 
+            // 向量样本管理命令
+            get_vector_samples,
+            add_vector_sample,
+            delete_vector_sample,
+            get_vector_config,
+
             // 认证命令
             get_auth_status,
             setup_admin,
