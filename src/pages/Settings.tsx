@@ -9,9 +9,13 @@ import {
   CheckCircle,
   XCircle,
   Loader2,
+  Monitor,
+  Globe,
+  RefreshCw,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useApp } from "../context/AppContext";
+import { useSetup } from "../context/SetupContext";
 
 interface AppConfig {
   gateway: {
@@ -64,6 +68,19 @@ export default function Settings() {
   const [proxyTestResult, setProxyTestResult] =
     useState<ProxyTestResult | null>(null);
   const [proxyTesting, setProxyTesting] = useState(false);
+  const {
+    checkSetup,
+    deployMode: currentMode,
+    connected: currentConnected,
+  } = useSetup();
+  const [switchMode, setSwitchMode] = useState<"pc" | "server">("pc");
+  const [switchRemoteUrl, setSwitchRemoteUrl] = useState("");
+  const [switchPort, setSwitchPort] = useState(8080);
+  const [switching, setSwitching] = useState(false);
+  const [connectTestResult, setConnectTestResult] =
+    useState<ProxyTestResult | null>(null);
+  const [connectTesting, setConnectTesting] = useState(false);
+  const [showSwitchPanel, setShowSwitchPanel] = useState(false);
 
   const { data: currentConfig, isLoading } = useQuery<AppConfig>({
     queryKey: ["config"],
@@ -159,6 +176,70 @@ export default function Settings() {
 
   const proxyType = detectProxyType(config.advanced.proxy_url || "");
 
+  const handleSwitchTest = async () => {
+    setConnectTesting(true);
+    setConnectTestResult(null);
+    try {
+      const url =
+        switchMode === "pc"
+          ? `https://127.0.0.1:${switchPort}`
+          : switchRemoteUrl.trim() || "";
+      if (!url) {
+        setConnectTestResult({ success: false, message: "请输入服务地址" });
+        setConnectTesting(false);
+        return;
+      }
+      const result = await invoke<ProxyTestResult>("check_service_connection", {
+        serviceUrl: url,
+      });
+      setConnectTestResult(result);
+    } catch (e: any) {
+      setConnectTestResult({
+        success: false,
+        message: e?.toString() || "测试失败",
+      });
+    } finally {
+      setConnectTesting(false);
+    }
+  };
+
+  const handleSwitch = async () => {
+    setSwitching(true);
+    try {
+      const remoteUrl =
+        switchMode === "server" ? switchRemoteUrl.trim() || null : null;
+      await invoke("switch_deploy_mode", {
+        deployMode: switchMode,
+        remoteUrl,
+        port: switchMode === "pc" ? switchPort : null,
+      });
+      setShowSwitchPanel(false);
+      await checkSetup();
+    } catch (e: any) {
+      alert("切换失败: " + (e?.toString() || "未知错误"));
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      await invoke("disconnect_service");
+      await checkSetup();
+    } catch (e: any) {
+      alert("断开失败: " + (e?.toString() || "未知错误"));
+    }
+  };
+
+  const handleReconnect = async () => {
+    try {
+      await invoke("connect_service");
+      await checkSetup();
+    } catch (e: any) {
+      alert("连接失败: " + (e?.toString() || "未知错误"));
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-end gap-2">
@@ -183,6 +264,153 @@ export default function Settings() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* 服务连接管理 */}
+        <div className="bg-card rounded-lg p-6 border border-border lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold">服务连接</h2>
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                  currentConnected
+                    ? "bg-green-500/10 text-green-500"
+                    : "bg-red-500/10 text-red-500"
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${currentConnected ? "bg-green-500" : "bg-red-500"}`}
+                />
+                {currentConnected ? "已连接" : "未连接"}
+              </span>
+              <span className="text-xs text-muted-foreground px-2 py-1 bg-secondary rounded-md">
+                {currentMode === "pc" ? "PC 本地模式" : "服务器模式"}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 mb-4">
+            <code className="text-sm bg-secondary px-3 py-1.5 rounded-md font-mono">
+              {currentMode === "pc"
+                ? `https://127.0.0.1:${config.gateway.port}`
+                : "远程服务"}
+            </code>
+            <div className="flex gap-2">
+              {currentConnected ? (
+                <button
+                  onClick={handleDisconnect}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-500/10 text-red-500 rounded-lg hover:bg-red-500/20 transition-colors"
+                >
+                  <WifiOff size={14} />
+                  <span>断开</span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleReconnect}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-500/10 text-green-500 rounded-lg hover:bg-green-500/20 transition-colors"
+                >
+                  <Wifi size={14} />
+                  <span>重连</span>
+                </button>
+              )}
+              <button
+                onClick={() => setShowSwitchPanel(!showSwitchPanel)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors"
+              >
+                <RefreshCw size={14} />
+                <span>切换模式</span>
+              </button>
+            </div>
+          </div>
+          {showSwitchPanel && (
+            <div className="border border-border rounded-lg p-4 bg-secondary/30 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setSwitchMode("pc")}
+                  className={`p-3 rounded-lg border text-left text-sm transition-all ${
+                    switchMode === "pc"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50"
+                  }`}
+                >
+                  <Monitor className="w-5 h-5 mb-1 text-primary" />
+                  <div className="font-medium">PC 本地模式</div>
+                </button>
+                <button
+                  onClick={() => setSwitchMode("server")}
+                  className={`p-3 rounded-lg border text-left text-sm transition-all ${
+                    switchMode === "server"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50"
+                  }`}
+                >
+                  <Globe className="w-5 h-5 mb-1 text-primary" />
+                  <div className="font-medium">服务器模式</div>
+                </button>
+              </div>
+              {switchMode === "pc" ? (
+                <div>
+                  <label className="block text-sm font-medium mb-1">端口</label>
+                  <input
+                    type="number"
+                    value={switchPort}
+                    onChange={(e) =>
+                      setSwitchPort(parseInt(e.target.value) || 8080)
+                    }
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    min="1024"
+                    max="65535"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    远程服务地址
+                  </label>
+                  <input
+                    type="text"
+                    value={switchRemoteUrl}
+                    onChange={(e) => setSwitchRemoteUrl(e.target.value)}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    placeholder="https://your-server.com:8080"
+                  />
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSwitchTest}
+                  disabled={connectTesting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors disabled:opacity-50"
+                >
+                  {connectTesting ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Wifi size={14} />
+                  )}
+                  测试连接
+                </button>
+                {connectTestResult && (
+                  <span
+                    className={`text-sm flex items-center gap-1 ${connectTestResult.success ? "text-green-500" : "text-red-500"}`}
+                  >
+                    {connectTestResult.success ? (
+                      <CheckCircle size={14} />
+                    ) : (
+                      <XCircle size={14} />
+                    )}
+                    {connectTestResult.message}
+                  </span>
+                )}
+                <div className="flex-1" />
+                <button
+                  onClick={handleSwitch}
+                  disabled={switching}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {switching && <Loader2 size={14} className="animate-spin" />}
+                  确认切换
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="bg-card rounded-lg p-6 border border-border">
           <h2 className="text-xl font-semibold mb-4">网关配置</h2>
           <div className="space-y-4">

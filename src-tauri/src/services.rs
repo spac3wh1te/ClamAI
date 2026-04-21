@@ -1,4 +1,4 @@
-use crate::config::ConfigManager;
+use crate::config::{ConfigManager, DeployMode};
 use crate::error::{ClamAIError, Result};
 use crate::proxy::ProxyService;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ pub struct ServiceStatus {
     pub uptime_seconds: u64,
     pub active_connections: u32,
     pub total_requests: u64,
+    pub deploy_mode: String,
+    pub service_url: String,
 }
 
 #[derive(Debug)]
@@ -42,13 +44,42 @@ impl ServiceManager {
         }
     }
 
+    pub fn get_service_url(&self) -> String {
+        match self.config_manager.try_lock() {
+            Ok(mgr) => {
+                let config = mgr.get_config();
+                match config.service.deploy_mode {
+                    DeployMode::PC => format!("https://127.0.0.1:{}", config.gateway.port),
+                    DeployMode::Server => {
+                        config.service.remote_service_url.clone()
+                            .unwrap_or_else(|| format!("https://127.0.0.1:{}", config.gateway.port))
+                    }
+                }
+            }
+            Err(_) => "https://127.0.0.1:8080".to_string(),
+        }
+    }
+
     pub async fn start_proxy_service(&mut self) -> Result<()> {
-        tracing::info!("[ServiceManager] 开始启动代理服务...");
         let config = self.config_manager.lock().await.get_config();
+        match config.service.deploy_mode {
+            DeployMode::PC => self.start_local_service(&config).await,
+            DeployMode::Server => {
+                if config.service.remote_service_url.is_none() {
+                    return Err(ClamAIError::ProxyService("Server模式下未配置远程服务地址".to_string()));
+                }
+                tracing::info!("[ServiceManager] Server模式：连接远程服务 {}", 
+                    config.service.remote_service_url.as_ref().unwrap());
+                Ok(())
+            }
+        }
+    }
+
+    async fn start_local_service(&mut self, config: &crate::config::AppConfig) -> Result<()> {
+        tracing::info!("[ServiceManager] PC模式：启动本地代理服务...");
         let gateway = &config.gateway;
         tracing::info!("[ServiceManager] 获取网关配置: port={}, host={}", gateway.port, gateway.host);
 
-        // 检查是否已经在运行
         {
             let process_guard = self.proxy_process.lock().await;
             if process_guard.is_some() {
@@ -83,28 +114,32 @@ impl ServiceManager {
         let child = proxy_service.start(&start_config).await?;
         tracing::info!("[ServiceManager] Go代理进程已启动，获取到child");
 
-        // 保存进程句柄
         let mut process_guard = self.proxy_process.lock().await;
         *process_guard = Some(child);
         tracing::info!("[ServiceManager] 进程句柄已保存");
 
-        // 更新统计信息
         let mut stats = self.stats.lock().await;
         stats.start_time = Some(chrono::Utc::now());
 
-        tracing::info!("✅ 代理服务启动成功，监听端口: {}", start_config.port);
+        tracing::info!("✅ 本地代理服务启动成功，监听端口: {}", start_config.port);
         Ok(())
     }
 
     pub async fn stop_proxy_service(&mut self) -> Result<()> {
-        // 停止进程
-        let mut process_guard = self.proxy_process.lock().await;
-        if let Some(mut child) = process_guard.take() {
-            child.kill().await?;
-            tracing::info!("⏹️ 代理服务已停止");
+        let config = self.config_manager.lock().await.get_config();
+        match config.service.deploy_mode {
+            DeployMode::PC => {
+                let mut process_guard = self.proxy_process.lock().await;
+                if let Some(mut child) = process_guard.take() {
+                    child.kill().await?;
+                    tracing::info!("⏹️ 本地代理服务已停止");
+                }
+            }
+            DeployMode::Server => {
+                tracing::info!("⏹️ 已断开远程服务连接");
+            }
         }
 
-        // 重置统计信息
         let mut stats = self.stats.lock().await;
         stats.start_time = None;
         stats.active_connections = 0;
@@ -126,9 +161,20 @@ impl ServiceManager {
         }
     }
 
+    pub fn get_deploy_mode(&self) -> DeployMode {
+        match self.config_manager.try_lock() {
+            Ok(mgr) => mgr.get_config().service.deploy_mode.clone(),
+            Err(_) => DeployMode::PC,
+        }
+    }
+
     pub async fn get_service_status(&self) -> ServiceStatus {
+        let config = self.config_manager.lock().await.get_config();
         let process_guard = self.proxy_process.lock().await;
-        let is_running = process_guard.is_some();
+        let is_running = match config.service.deploy_mode {
+            DeployMode::PC => process_guard.is_some(),
+            DeployMode::Server => config.service.remote_service_url.is_some(),
+        };
 
         let stats = self.stats.lock().await;
         let uptime = stats.start_time
@@ -137,12 +183,23 @@ impl ServiceManager {
             })
             .unwrap_or(0);
 
+        let service_url = match config.service.deploy_mode {
+            DeployMode::PC => format!("https://127.0.0.1:{}", config.gateway.port),
+            DeployMode::Server => config.service.remote_service_url.clone()
+                .unwrap_or_default(),
+        };
+
         ServiceStatus {
             proxy_running: is_running,
-            proxy_port: self.config_manager.lock().await.get_config().gateway.port,
+            proxy_port: config.gateway.port,
             uptime_seconds: uptime,
             active_connections: stats.active_connections,
             total_requests: stats.total_requests,
+            deploy_mode: match config.service.deploy_mode {
+                DeployMode::PC => "pc".to_string(),
+                DeployMode::Server => "server".to_string(),
+            },
+            service_url,
         }
     }
 

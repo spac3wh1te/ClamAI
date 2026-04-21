@@ -5,6 +5,37 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum DeployMode {
+    PC,
+    Server,
+}
+
+impl Default for DeployMode {
+    fn default() -> Self {
+        DeployMode::PC
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServiceConfig {
+    pub deploy_mode: DeployMode,
+    pub setup_complete: bool,
+    pub remote_service_url: Option<String>,
+}
+
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        Self {
+            deploy_mode: DeployMode::PC,
+            setup_complete: false,
+            remote_service_url: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub version: String,
@@ -13,6 +44,8 @@ pub struct AppConfig {
     pub gateway: GatewayConfig,
     pub ui: UiConfig,
     pub advanced: AdvancedConfig,
+    #[serde(default)]
+    pub service: ServiceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +255,7 @@ impl ConfigManager {
                 proxy_url: None,
                 timeout_seconds: 30,
             },
+            service: ServiceConfig::default(),
         }
     }
 

@@ -10,6 +10,7 @@ mod oauth;
 
 use commands::*;
 use config::ConfigManager;
+use config::DeployMode;
 use services::ServiceManager;
 use std::sync::Arc;
 use tauri::Manager;
@@ -66,10 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         service_manager,
     };
 
-    // 启动Go代理服务
+    // 根据部署模式决定是否自动启动服务
     {
-        let mut service_manager = app_state.service_manager.lock().await;
-        service_manager.start_proxy_service().await?;
+        let config = app_state.config_manager.lock().await.get_config();
+        if config.service.setup_complete && config.service.deploy_mode == DeployMode::PC {
+            let mut service_manager = app_state.service_manager.lock().await;
+            if let Err(e) = service_manager.start_proxy_service().await {
+                tracing::warn!("自动启动本地服务失败（非致命）: {}", e);
+            }
+        } else {
+            info!("等待安装向导或手动连接服务...");
+        }
     }
 
     info!("✅ ClamAI ready!");
@@ -169,6 +177,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             analyze_user_profile,
             check_skills_content,
             get_skills_detection_history,
+
+            // 安装向导和服务连接命令
+            get_setup_state,
+            check_service_connection,
+            complete_setup,
+            connect_service,
+            disconnect_service,
+            switch_deploy_mode,
         ])
         .run(tauri::generate_context!())?;
 

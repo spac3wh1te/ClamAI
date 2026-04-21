@@ -11,12 +11,14 @@ import Security from "./pages/Security";
 import SecuritySquare from "./pages/SecuritySquare";
 import RateLimit from "./pages/RateLimit";
 import Login from "./pages/Login";
+import SetupWizard from "./pages/SetupWizard";
 
 import Layout from "./components/Layout";
 import StatusBar from "./components/StatusBar";
 import { ApiKeySecretsProvider } from "./context/ApiKeySecretsContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AppProvider } from "./context/AppContext";
+import { SetupProvider, useSetup } from "./context/SetupContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,13 +31,18 @@ const queryClient = new QueryClient({
 
 function AppContent() {
   const { isAuthenticated, isInitialized, initialized } = useAuth();
+  const { setupComplete, setupChecked, checkSetup } = useSetup();
 
-  if (!isInitialized) {
+  if (!isInitialized || !setupChecked) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-muted-foreground">Loading...</div>
       </div>
     );
+  }
+
+  if (!setupComplete) {
+    return <SetupWizard onComplete={checkSetup} />;
   }
 
   if (!initialized || !isAuthenticated) {
@@ -69,7 +76,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <AppProvider>
-          <AppContent />
+          <SetupProvider>
+            <AppContent />
+          </SetupProvider>
         </AppProvider>
       </AuthProvider>
     </QueryClientProvider>

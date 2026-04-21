@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::config::ProviderConfig;
+use crate::config::DeployMode;
 use crate::oauth::{OAuthCallback, OAuthState};
 use crate::services::ServiceStatus;
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,6 @@ pub async fn save_config(
 
 #[tauri::command]
 pub async fn reset_config(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    // 重置为默认配置
     let default_config = crate::config::AppConfig {
         version: "1.0.0".to_string(),
         providers: std::collections::HashMap::new(),
@@ -47,6 +47,7 @@ pub async fn reset_config(state: tauri::State<'_, AppState>) -> Result<(), Strin
             proxy_url: None,
             timeout_seconds: 30,
         },
+        service: crate::config::ServiceConfig::default(),
     };
 
     let mut manager = state.config_manager.lock().await;
@@ -652,10 +653,14 @@ async fn get_proxy_port(state: &tauri::State<'_, AppState>) -> u16 {
     state.service_manager.lock().await.get_port()
 }
 
+async fn get_service_base_url(state: &tauri::State<'_, AppState>) -> String {
+    state.service_manager.lock().await.get_service_url()
+}
+
 async fn get_proxy_url(state: &tauri::State<'_, AppState>, path: &str) -> Result<(String, Option<String>), String> {
-    let port = state.service_manager.lock().await.get_port();
+    let base_url = get_service_base_url(state).await;
     let config = state.config_manager.lock().await.get_config();
-    let url = format!("https://127.0.0.1:{}/api/v1/{}", port, path);
+    let url = format!("{}/api/v1/{}", base_url.trim_end_matches('/'), path);
     let auth = if !config.gateway.api_key.is_empty() {
         Some(config.gateway.api_key)
     } else {
@@ -665,9 +670,9 @@ async fn get_proxy_url(state: &tauri::State<'_, AppState>, path: &str) -> Result
 }
 
 async fn get_proxy_url_no_prefix(state: &tauri::State<'_, AppState>, path: &str) -> Result<(String, Option<String>), String> {
-    let port = state.service_manager.lock().await.get_port();
+    let base_url = get_service_base_url(state).await;
     let config = state.config_manager.lock().await.get_config();
-    let url = format!("https://127.0.0.1:{}/{}", port, path);
+    let url = format!("{}/{}", base_url.trim_end_matches('/'), path);
     let auth = if !config.gateway.api_key.is_empty() {
         Some(config.gateway.api_key)
     } else {
@@ -695,6 +700,28 @@ fn https_client() -> Result<reqwest::Client, String> {
             .map_err(|e| format!("Build HTTP client failed: {}", e))?
     };
     Ok(client)
+}
+
+fn https_client_for_url(remote_url: &str) -> Result<reqwest::Client, String> {
+    let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let local_cert_path = exe_path.parent().unwrap_or(std::path::Path::new(".")).join("clamai-cert.pem");
+
+    if remote_url.starts_with("https://127.0.0.1") || remote_url.starts_with("https://localhost") {
+        if local_cert_path.exists() {
+            let cert_pem = std::fs::read(&local_cert_path).map_err(|e| format!("Read cert failed: {}", e))?;
+            let cert = reqwest::Certificate::from_pem(&cert_pem).map_err(|e| format!("Parse cert failed: {}", e))?;
+            return Ok(reqwest::Client::builder()
+                .add_root_certificate(cert)
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| format!("Build HTTPS client failed: {}", e))?);
+        }
+    }
+
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| format!("Build HTTP client failed: {}", e))
 }
 
 async fn sync_provider_key_internal(state: &tauri::State<'_, AppState>, provider_name: &str, api_key: &str) -> Result<(), String> {
@@ -978,7 +1005,7 @@ pub async fn test_chat_request(
 
     if test_mode == "proxy" {
         let service_manager = state.service_manager.lock().await;
-        let port = service_manager.get_port();
+        let _port = service_manager.get_port();
         drop(service_manager);
 
         let provider_name_from_model = if model.contains(":") {
@@ -1027,7 +1054,8 @@ pub async fn test_chat_request(
             tracing::warn!("sync_provider_key: could not determine provider name from model {}", model);
         }
 
-        let proxy_url = format!("https://127.0.0.1:{}/v1/chat/completions", port);
+        let base_url = get_service_base_url(&state).await;
+        let proxy_url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
         let client = https_client()?;
         let body = build_test_body(&model, &message, model_type, &provider_type);
 
@@ -1785,4 +1813,140 @@ pub async fn get_skills_detection_history(
     let resp = req.send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     Ok(body)
+}
+
+// ==================== 安装向导和服务连接命令 ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupState {
+    pub setup_complete: bool,
+    pub deploy_mode: String,
+    pub service_url: String,
+    pub connected: bool,
+}
+
+#[tauri::command]
+pub async fn get_setup_state(state: tauri::State<'_, AppState>) -> Result<SetupState, String> {
+    let config = state.config_manager.lock().await.get_config();
+    let service_manager = state.service_manager.lock().await;
+    let status = service_manager.get_service_status().await;
+
+    let deploy_mode = match config.service.deploy_mode {
+        DeployMode::PC => "pc",
+        DeployMode::Server => "server",
+    };
+
+    Ok(SetupState {
+        setup_complete: config.service.setup_complete,
+        deploy_mode: deploy_mode.to_string(),
+        service_url: status.service_url,
+        connected: status.proxy_running,
+    })
+}
+
+#[tauri::command]
+pub async fn check_service_connection(
+    service_url: String,
+) -> Result<ProxyTestResult, String> {
+    let client = https_client_for_url(&service_url)?;
+    let url = format!("{}/api/v1/auth/status", service_url.trim_end_matches('/'));
+    let resp = client.get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) => {
+            if r.status().is_success() {
+                Ok(ProxyTestResult {
+                    success: true,
+                    message: "服务连接成功".to_string(),
+                })
+            } else {
+                Ok(ProxyTestResult {
+                    success: false,
+                    message: format!("服务返回状态码: {}", r.status()),
+                })
+            }
+        }
+        Err(e) => Ok(ProxyTestResult {
+            success: false,
+            message: format!("连接失败: {}", e),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn complete_setup(
+    state: tauri::State<'_, AppState>,
+    deploy_mode: String,
+    remote_url: Option<String>,
+    port: Option<u16>,
+) -> Result<(), String> {
+    let mut config_manager = state.config_manager.lock().await;
+    let mut config = config_manager.get_config();
+
+    config.service.deploy_mode = match deploy_mode.as_str() {
+        "server" => DeployMode::Server,
+        _ => DeployMode::PC,
+    };
+    config.service.remote_service_url = remote_url;
+    if let Some(p) = port {
+        config.gateway.port = p;
+    }
+    config.service.setup_complete = true;
+
+    config_manager.update_config(config).await.map_err(|e| e.to_string())?;
+    drop(config_manager);
+
+    let mut service_manager = state.service_manager.lock().await;
+    service_manager.start_proxy_service().await.map_err(|e| e.to_string())?;
+
+    tracing::info!("✅ 安装向导完成，模式: {}", deploy_mode);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn connect_service(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut service_manager = state.service_manager.lock().await;
+    service_manager.start_proxy_service().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn disconnect_service(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut service_manager = state.service_manager.lock().await;
+    service_manager.stop_proxy_service().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn switch_deploy_mode(
+    state: tauri::State<'_, AppState>,
+    deploy_mode: String,
+    remote_url: Option<String>,
+    port: Option<u16>,
+) -> Result<(), String> {
+    let mut service_manager = state.service_manager.lock().await;
+    let _ = service_manager.stop_proxy_service().await;
+    drop(service_manager);
+
+    let mut config_manager = state.config_manager.lock().await;
+    let mut config = config_manager.get_config();
+
+    config.service.deploy_mode = match deploy_mode.as_str() {
+        "server" => DeployMode::Server,
+        _ => DeployMode::PC,
+    };
+    config.service.remote_service_url = remote_url;
+    if let Some(p) = port {
+        config.gateway.port = p;
+    }
+
+    config_manager.update_config(config).await.map_err(|e| e.to_string())?;
+    drop(config_manager);
+
+    let mut service_manager = state.service_manager.lock().await;
+    service_manager.start_proxy_service().await.map_err(|e| e.to_string())?;
+
+    tracing::info!("✅ 已切换到 {} 模式", deploy_mode);
+    Ok(())
 }
