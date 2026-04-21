@@ -62,19 +62,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const tryAutoLogin = async () => {
     try {
-      const savedPassword = localStorage.getItem("clamai_admin_password");
-      if (savedPassword) {
-        const data = await invoke<string>("get_admin_token", {
-          password: savedPassword,
-        });
-        const result = JSON.parse(data);
-        if (result.success && result.token) {
-          setToken(result.token);
-          return;
-        }
+      const data = await invoke<string>("get_admin_token", { password: "" });
+      const result = JSON.parse(data);
+      if (result.success && result.token) {
+        setToken(result.token);
+        return;
       }
-    } catch (e) {
-      console.error("Auto-login failed:", e);
+    } catch (_e) {
+      // auto-login failed, user must login manually
     }
   };
 
@@ -83,7 +78,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = JSON.parse(data);
     if (result.success && result.token) {
       setToken(result.token);
-      localStorage.setItem("clamai_admin_password", password);
     } else {
       throw new Error("Login failed");
     }
@@ -95,7 +89,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (result.success && result.token) {
       setToken(result.token);
       setInitialized(true);
-      localStorage.setItem("clamai_admin_password", password);
     } else {
       throw new Error("Setup failed");
     }

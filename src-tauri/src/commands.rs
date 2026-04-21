@@ -148,7 +148,7 @@ pub async fn test_provider(
         crate::config::ProviderType::Custom => format!("{}/v1/models", provider.base_url),
     };
 
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let start = std::time::Instant::now();
 
     let mut req = client.get(&test_url)
@@ -241,7 +241,7 @@ pub async fn fetch_provider_models(
         crate::config::ProviderType::Custom => format!("{}/v1/models", provider.base_url),
     };
 
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.get(&models_url)
         .timeout(std::time::Duration::from_secs(30));
 
@@ -376,7 +376,7 @@ pub async fn test_proxy_connectivity(
     proxy_url: Option<String>,
 ) -> Result<ProxyTestResult, String> {
     let (url, auth) = get_proxy_url(&state, "proxy/test").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(15));
     if let Some(ref proxy) = proxy_url {
         req = req.query(&[("url", proxy)]);
@@ -406,7 +406,7 @@ pub async fn get_usage_stats(
     })?;
     tracing::info!("get_usage_stats: url={}, has_auth={}", url, auth.is_some());
 
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {
@@ -475,7 +475,7 @@ pub async fn get_alert_stats(
     period: u32,
 ) -> Result<AlertStats, String> {
     let (url, auth) = get_proxy_url(&state, &format!("stats/alerts?period={}", period)).await.map_err(|e| e.to_string())?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.get(&url)
         .timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {
@@ -509,7 +509,7 @@ pub async fn check_content_safety(
     content: String,
 ) -> Result<ContentSafetyResult, String> {
     let (url, auth) = get_proxy_url(&state, "security/check").await.map_err(|e| e.to_string())?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.post(&url)
         .timeout(std::time::Duration::from_secs(30))
         .header("Content-Type", "application/json");
@@ -589,7 +589,7 @@ pub async fn get_request_logs(
 ) -> Result<Vec<RequestLog>, String> {
     let (url, auth) = get_proxy_url(&state, &format!("stats/logs?limit={}", limit)).await?;
     tracing::debug!("get_request_logs: url={}, has_auth={}, limit={}", url, auth.is_some(), limit);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = &auth {
@@ -655,7 +655,7 @@ async fn get_proxy_port(state: &tauri::State<'_, AppState>) -> u16 {
 async fn get_proxy_url(state: &tauri::State<'_, AppState>, path: &str) -> Result<(String, Option<String>), String> {
     let port = state.service_manager.lock().await.get_port();
     let config = state.config_manager.lock().await.get_config();
-    let url = format!("http://127.0.0.1:{}/api/v1/{}", port, path);
+    let url = format!("https://127.0.0.1:{}/api/v1/{}", port, path);
     let auth = if !config.gateway.api_key.is_empty() {
         Some(config.gateway.api_key)
     } else {
@@ -667,7 +667,7 @@ async fn get_proxy_url(state: &tauri::State<'_, AppState>, path: &str) -> Result
 async fn get_proxy_url_no_prefix(state: &tauri::State<'_, AppState>, path: &str) -> Result<(String, Option<String>), String> {
     let port = state.service_manager.lock().await.get_port();
     let config = state.config_manager.lock().await.get_config();
-    let url = format!("http://127.0.0.1:{}/{}", port, path);
+    let url = format!("https://127.0.0.1:{}/{}", port, path);
     let auth = if !config.gateway.api_key.is_empty() {
         Some(config.gateway.api_key)
     } else {
@@ -676,10 +676,31 @@ async fn get_proxy_url_no_prefix(state: &tauri::State<'_, AppState>, path: &str)
     Ok((url, auth))
 }
 
+fn https_client() -> Result<reqwest::Client, String> {
+    let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cert_path = exe_path.parent().unwrap_or(std::path::Path::new(".")).join("clamai-cert.pem");
+
+    let client = if cert_path.exists() {
+        let cert_pem = std::fs::read(&cert_path).map_err(|e| format!("Read cert failed: {}", e))?;
+        let cert = reqwest::Certificate::from_pem(&cert_pem).map_err(|e| format!("Parse cert failed: {}", e))?;
+        reqwest::Client::builder()
+            .add_root_certificate(cert)
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|e| format!("Build HTTPS client failed: {}", e))?
+    } else {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|e| format!("Build HTTP client failed: {}", e))?
+    };
+    Ok(client)
+}
+
 async fn sync_provider_key_internal(state: &tauri::State<'_, AppState>, provider_name: &str, api_key: &str) -> Result<(), String> {
     let (url, auth) = get_proxy_url(state, &format!("providers/{}/key", provider_name)).await?;
     tracing::debug!("sync_provider_key_internal: url={}, provider={}", url, provider_name);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.put(&url)
         .timeout(std::time::Duration::from_secs(5))
@@ -706,7 +727,7 @@ async fn sync_provider_key_internal(state: &tauri::State<'_, AppState>, provider
 #[allow(dead_code)]
 async fn proxy_request(state: &tauri::State<'_, AppState>, method: &str, path: &str) -> Result<reqwest::Response, String> {
     let (url, auth) = get_proxy_url(state, path).await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let req_builder = match method {
         "GET" => client.get(&url),
@@ -729,7 +750,7 @@ async fn proxy_request(state: &tauri::State<'_, AppState>, method: &str, path: &
 pub async fn list_api_keys(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let (url, auth) = get_proxy_url(&state, "keys").await?;
     tracing::debug!("list_api_keys: url={}, has_auth={}", url, auth.is_some());
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = &auth {
@@ -751,7 +772,7 @@ pub async fn list_api_keys(state: tauri::State<'_, AppState>) -> Result<serde_js
 pub async fn create_api_key(state: tauri::State<'_, AppState>, name: String, allowed_models: Vec<String>) -> Result<serde_json::Value, String> {
     let (url, auth) = get_proxy_url(&state, "keys").await?;
     tracing::debug!("create_api_key: url={}, has_auth={}, name={}, allowed_models={:?}", url, auth.is_some(), name, allowed_models);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.post(&url)
         .timeout(std::time::Duration::from_secs(5))
@@ -780,7 +801,7 @@ pub async fn create_api_key(state: tauri::State<'_, AppState>, name: String, all
 pub async fn update_api_key(state: tauri::State<'_, AppState>, id: String, allowed_models: Vec<String>) -> Result<(), String> {
     let (url, auth) = get_proxy_url(&state, &format!("keys/{}", id)).await?;
     tracing::debug!("update_api_key: url={}, id={}, allowed_models={:?}", url, id, allowed_models);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.put(&url)
         .timeout(std::time::Duration::from_secs(5))
@@ -803,7 +824,7 @@ pub async fn update_api_key(state: tauri::State<'_, AppState>, id: String, allow
 pub async fn delete_api_key(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     let (url, auth) = get_proxy_url(&state, &format!("keys/{}", id)).await?;
     tracing::debug!("delete_api_key: url={}, has_auth={}, id={}", url, auth.is_some(), id);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.delete(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = &auth {
@@ -824,7 +845,7 @@ pub async fn delete_api_key(state: tauri::State<'_, AppState>, id: String) -> Re
 pub async fn get_api_key(state: tauri::State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
     let (url, auth) = get_proxy_url(&state, &format!("keys/{}/reveal", id)).await?;
     tracing::debug!("get_api_key: url={}, has_auth={}, id={}", url, auth.is_some(), id);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = &auth {
@@ -854,7 +875,7 @@ pub async fn get_api_key(state: tauri::State<'_, AppState>, id: String) -> Resul
 pub async fn sync_provider_key(state: tauri::State<'_, AppState>, provider_name: String, api_key: String) -> Result<(), String> {
     let (url, auth) = get_proxy_url(&state, &format!("providers/{}/key", provider_name)).await?;
     tracing::debug!("sync_provider_key: url={}, has_auth={}, provider={}", url, auth.is_some(), provider_name);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
 
     let mut req = client.put(&url)
         .timeout(std::time::Duration::from_secs(5))
@@ -1007,7 +1028,7 @@ pub async fn test_chat_request(
         }
 
         let proxy_url = format!("http://127.0.0.1:{}/v1/chat/completions", port);
-        let client = reqwest::Client::new();
+        let client = https_client()?;
         let body = build_test_body(&model, &message, model_type, &provider_type);
 
         let resp = client.post(&proxy_url)
@@ -1067,7 +1088,7 @@ pub async fn test_chat_request(
         }
     } else {
         let base = base_url.trim_end_matches('/');
-        let client = reqwest::Client::new();
+        let client = https_client()?;
 
         let chat_url = match provider_type.as_str() {
             "openai" | "deepseek" | "siliconflow" | "minimax" | "custom" => {
@@ -1309,7 +1330,7 @@ pub async fn get_security_config(state: tauri::State<'_, AppState>) -> Result<St
         e
     })?;
     tracing::info!("get_security_config: url={}, has_auth={}", url, auth.is_some());
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
@@ -1333,7 +1354,7 @@ pub async fn save_security_config(state: tauri::State<'_, AppState>, payload: St
     tracing::info!("====== save_security_config called, payload len={} ======", payload.len());
     let (url, auth) = get_proxy_url(&state, "security/config").await?;
     tracing::info!("save_security_config: url={}", url);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let config_value: serde_json::Value = serde_json::from_str(&payload).map_err(|e| {
         tracing::error!("save_security_config: JSON parse failed: {}", e);
         e.to_string()
@@ -1356,7 +1377,7 @@ pub async fn get_security_alerts(state: tauri::State<'_, AppState>, limit: Optio
     let l = limit.unwrap_or(50);
     let o = offset.unwrap_or(0);
     let (url, auth) = get_proxy_url(&state, &format!("security/alerts?limit={}&offset={}", l, o)).await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
@@ -1369,7 +1390,7 @@ pub async fn get_security_alerts(state: tauri::State<'_, AppState>, limit: Optio
 #[tauri::command]
 pub async fn resolve_security_alert(state: tauri::State<'_, AppState>, id: u64) -> Result<String, String> {
     let (url, auth) = get_proxy_url(&state, &format!("security/alerts/{}/resolve", id)).await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.put(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
@@ -1384,7 +1405,7 @@ pub async fn resolve_security_alert(state: tauri::State<'_, AppState>, id: u64) 
 #[tauri::command]
 pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/status").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let resp = client.get(&url).timeout(std::time::Duration::from_secs(5)).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     Ok(body)
@@ -1393,7 +1414,7 @@ pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String
 #[tauri::command]
 pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/setup").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password})).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
@@ -1407,7 +1428,7 @@ pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, pa
 #[tauri::command]
 pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/login").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password})).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
@@ -1421,7 +1442,7 @@ pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, pa
 #[tauri::command]
 pub async fn change_admin_password(state: tauri::State<'_, AppState>, old_password: String, new_password: String) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/change-password").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"old_password": old_password, "new_password": new_password})).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     Ok(body)
@@ -1430,7 +1451,7 @@ pub async fn change_admin_password(state: tauri::State<'_, AppState>, old_passwo
 #[tauri::command]
 pub async fn get_admin_token(state: tauri::State<'_, AppState>, password: String) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/token").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"password": password})).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     Ok(body)
@@ -1441,7 +1462,7 @@ pub async fn get_admin_token(state: tauri::State<'_, AppState>, password: String
 #[tauri::command]
 pub async fn get_ratelimit_config(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let (url, auth) = get_proxy_url(&state, "ratelimit/config").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
@@ -1454,7 +1475,7 @@ pub async fn get_ratelimit_config(state: tauri::State<'_, AppState>) -> Result<S
 #[tauri::command]
 pub async fn save_ratelimit_config(state: tauri::State<'_, AppState>, payload: String) -> Result<String, String> {
     let (url, auth) = get_proxy_url(&state, "ratelimit/config").await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let config_value: serde_json::Value = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
     let mut req = client.put(&url).timeout(std::time::Duration::from_secs(5)).json(&config_value);
     if let Some(key) = auth {
@@ -1507,7 +1528,7 @@ pub async fn analyze_user_profile(
 
     let (url, auth) = get_proxy_url_no_prefix(&state, "analysis/v1/chat/completions").await?;
     tracing::info!("analyze_user_profile: url={}", url);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let body = serde_json::json!({
         "analysis_type": "user_profile",
         "model": model,
@@ -1589,7 +1610,7 @@ pub async fn check_skills_content(
 
     let (url, auth) = get_proxy_url_no_prefix(&state, "analysis/v1/chat/completions").await?;
     tracing::info!("check_skills_content: url={}", url);
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut body_map = serde_json::Map::new();
     body_map.insert("analysis_type".to_string(), serde_json::Value::String("skills_detection".to_string()));
     body_map.insert("model".to_string(), serde_json::Value::String(model));
@@ -1666,7 +1687,7 @@ pub async fn get_skills_detection_history(
     let l = limit.unwrap_or(50);
     let o = offset.unwrap_or(0);
     let (url, auth) = get_proxy_url(&state, &format!("skills/history?limit={}&offset={}", l, o)).await?;
-    let client = reqwest::Client::new();
+    let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));

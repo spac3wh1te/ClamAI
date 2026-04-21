@@ -55,6 +55,8 @@ type Config struct {
 	ConfigPath string
 	DeployMode string
 	ProxyURL   string
+	TLSCert    string
+	TLSKey     string
 }
 
 type TokenDetail struct {
@@ -403,8 +405,15 @@ func main() {
 	}
 
 	log.Printf("[MAIN] Starting HTTP server on %s...", addr)
-	if err := http.ListenAndServe(addr, proxy.router); err != nil {
-		log.Fatalf("[MAIN] Server error: %v", err)
+	if config.TLSCert != "" && config.TLSKey != "" {
+		log.Printf("[MAIN] TLS enabled: cert=%s, key=%s", config.TLSCert, config.TLSKey)
+		if err := http.ListenAndServeTLS(addr, config.TLSCert, config.TLSKey, proxy.router); err != nil {
+			log.Fatalf("[MAIN] Server error: %v", err)
+		}
+	} else {
+		if err := http.ListenAndServe(addr, proxy.router); err != nil {
+			log.Fatalf("[MAIN] Server error: %v", err)
+		}
 	}
 }
 
@@ -425,6 +434,8 @@ func parseFlags() *Config {
 	flag.StringVar(&config.ConfigPath, "config", "", "config file path")
 	flag.StringVar(&config.DeployMode, "mode", "pc", "deployment mode: pc or server")
 	flag.StringVar(&config.ProxyURL, "proxy", "", "HTTP/SOCKS5 proxy URL (e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080)")
+	flag.StringVar(&config.TLSCert, "tls-cert", "", "TLS certificate file path")
+	flag.StringVar(&config.TLSKey, "tls-key", "", "TLS private key file path")
 	flag.Parse()
 
 	if config.DeployMode != "server" {
@@ -1689,10 +1700,18 @@ func (p *ProxyServer) convertAnthropicToOpenAI(req AnthropicMessagesRequest) Ope
 
 func (p *ProxyServer) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		allowedOrigin := ""
+		if origin == "" || strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "https://localhost") || strings.HasPrefix(origin, "http://127.0.0.1") || strings.HasPrefix(origin, "https://127.0.0.1") || strings.HasPrefix(origin, "tauri://") {
+			allowedOrigin = origin
+		}
+		if allowedOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key")
 		w.Header().Set("Access-Control-Max-Age", "86400")
+		w.Header().Set("Vary", "Origin")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -1850,8 +1869,19 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DEBUG] authMiddleware: path=%s, config.APIKey set=%v", r.URL.Path, p.config.APIKey != "")
-		if r.URL.Path == "/health" || r.URL.Path == "/oauth/callback" || strings.HasPrefix(r.URL.Path, "/analysis/") {
-			log.Printf("[DEBUG] authMiddleware: allowing health/oauth/analysis path")
+		if r.URL.Path == "/health" || r.URL.Path == "/oauth/callback" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, "/analysis/") {
+			if p.config.APIKey != "" {
+				authHeader := r.Header.Get("Authorization")
+				if authHeader != "Bearer "+p.config.APIKey {
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1908,7 +1938,9 @@ func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		if p.config.APIKey == "" && len(apiKeys) == 0 {
-			validKey = true
+			if p.config.DeployMode == "pc" {
+				validKey = true
+			}
 		}
 
 		if !validKey {
