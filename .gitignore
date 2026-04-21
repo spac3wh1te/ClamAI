@@ -1,0 +1,70 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-electron
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Rust
+src-tauri/target
+src-tauri/Cargo.lock
+
+# Go
+src-tauri/proxy-service/ClamAI-service
+src-tauri/proxy-service/ClamAI-service.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+target/
+debug/
+release/
+
+# User data
+*.db
+*.db-shm
+*.db-wal
+config.json
+key_usage.json
+
+# SSL certificates
+*.pem
+*.crt
+*.key
+
+# Logs
+logs/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store

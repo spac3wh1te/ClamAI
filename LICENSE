@@ -1,0 +1,73 @@
+GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc.
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+TERMS AND CONDITIONS
+
+0. Definitions.
+"This License" refers to version 3 of the GNU General Public License.
+"Copyright" also means copyright-like laws that apply to other kinds of
+works, such as semiconductor masks.
+"The Program" refers to any copyrightable work licensed under this
+License. Each licensee is addressed as "you". "Licensees" and
+"recipients" may be individuals or organizations.
+
+1. Source Code.
+The "source code" for a work means the preferred form of the work for
+making modifications to it. "Object code" means any non-source form of a
+work.
+A "Standard Interface" means an interface that either is an official
+standard defined by a recognized standards body or, in the case of
+interfaces specified for a particular programming language, one that is
+widely used among developers working in that language.
+The "System Libraries" of an executable work include anything, other than
+the work as a whole, that (a) is included in the normal form of
+packaging a Major Component, but which is not part of that Major
+Component, and (b) serves only to enable use of the work with that
+Major Component, or to implement a Standard Interface for which an
+implementation is available to the public in source code form.
+A "Major Component", in this context, means a major essential component
+(kernel, window system, and so on) of the specific operating system
+(if any) on which the executable work runs, or a compiler used to
+produce the work, or an object code interpreter used to run it.
+
+2. Basic Permissions.
+All rights granted under this License are granted for the term of
+copyright on the Program, and are irrevocable provided the stated
+conditions are met. This explicitly affirms library authors' right to
+use this library through a closed-source application.
+When you convey a covered work, you waive any legal power to forbid
+circumvention of technological measures only if such circumvention
+is expressly permitted by applicable law.
+
+3. Connecting to Network.
+You may create, run and distribute executable works that connect to
+the Internet through network communication, provided that you also
+meet the conditions of this License.
+
+4. Larger Works.
+You may create a larger work by combining covered works in a single
+program on a storage medium, and distribute that work as a single
+product, provided that you also meet all of these conditions:
+a) The work must carry prominent notices stating that you modified it,
+   and giving a relevant date.
+b) The work must carry notices that this License and the absence of
+   a warranty; and give all recipients a copy of this License along
+   with the Program.
+
+5. Anti-circumvention.
+Do not place any technological measures that restrict your users'
+ability to circumvent the work, when you distribute it.
+
+6. No Warranty.
+THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
