@@ -581,6 +581,14 @@ func (p *ProxyServer) initProviders() error {
 	if len(p.providers) == 0 {
 		log.Printf("Warning: No providers initialized. Set API keys in environment variables.")
 	}
+
+	for name, provider := range p.providers {
+		go func(n string, pr Provider) {
+			log.Printf("[FetchModels] Fetching models for %s...", n)
+			pr.FetchModels()
+		}(name, provider)
+	}
+
 	return nil
 }
 
@@ -924,6 +932,9 @@ func (p *ProxyServer) SetProviderKey(name, apiKey string) error {
 	defer p.mu.Unlock()
 	p.providers[name] = provider
 	log.Printf("[INFO] SetProviderKey: provider %s registered, total providers=%d", name, len(p.providers))
+
+	go provider.FetchModels()
+
 	return nil
 }
 

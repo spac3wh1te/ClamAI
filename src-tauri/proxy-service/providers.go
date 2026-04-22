@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Provider 接口定义
@@ -20,6 +23,78 @@ type Provider interface {
 	GetAPIKey() string
 	ProxyRequest(w http.ResponseWriter, r *http.Request)
 	TestConnection() error
+	FetchModels()
+}
+
+var fetchMu sync.Mutex
+
+func fetchModelsFromAPI(url, apiKey, authType string) []string {
+	fetchMu.Lock()
+	defer fetchMu.Unlock()
+
+	client := newHTTPClient("")
+	if proxyURL := getProxy(); proxyURL != nil {
+		client = newHTTPClient(proxyURL.String())
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil
+	}
+	if apiKey != "" {
+		if authType == "x-api-key" {
+			req.Header.Set("x-api-key", apiKey)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+	}
+
+	client.Timeout = 15 * time.Second
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[FetchModels] GET %s failed: %v", url, err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[FetchModels] GET %s status %d", url, resp.StatusCode)
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil
+	}
+
+	var models []string
+	for _, m := range result.Data {
+		if m.ID != "" {
+			models = append(models, m.ID)
+		}
+	}
+	log.Printf("[FetchModels] Fetched %d models from %s", len(models), url)
+	return models
+}
+
+func fetchModelsForProvider(baseURL, apiKey, authType string) []string {
+	modelsURL := strings.TrimRight(baseURL, "/")
+	if !strings.Contains(modelsURL, "/models") {
+		if strings.Contains(modelsURL, "/v1") || strings.Contains(modelsURL, "/v3") || strings.Contains(modelsURL, "/v4") {
+			modelsURL += "/models"
+		} else {
+			modelsURL += "/v1/models"
+		}
+	}
+	return fetchModelsFromAPI(modelsURL, apiKey, authType)
 }
 
 // 辅助函数
@@ -200,9 +275,10 @@ func proxyOpenAIRequest(baseURL, apiKey string) func(http.ResponseWriter, *http.
 
 // ==================== OpenAI提供商 ====================
 type OpenAIProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewOpenAIProvider(apiKey string) *OpenAIProvider {
@@ -217,7 +293,15 @@ func (p *OpenAIProvider) GetName() string    { return p.name }
 func (p *OpenAIProvider) GetBaseURL() string { return p.baseURL }
 func (p *OpenAIProvider) GetAPIKey() string  { return p.apiKey }
 func (p *OpenAIProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "o1-preview", "o1-mini", "o3-mini"}
+}
+func (p *OpenAIProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *OpenAIProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/v1/models", p.apiKey, "Bearer")
@@ -228,9 +312,10 @@ func (p *OpenAIProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== Anthropic提供商 ====================
 type AnthropicProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewAnthropicProvider(apiKey string) *AnthropicProvider {
@@ -245,8 +330,12 @@ func (p *AnthropicProvider) GetName() string    { return p.name }
 func (p *AnthropicProvider) GetBaseURL() string { return p.baseURL }
 func (p *AnthropicProvider) GetAPIKey() string  { return p.apiKey }
 func (p *AnthropicProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229", "claude-3-sonnet-20240229"}
 }
+func (p *AnthropicProvider) FetchModels() {}
 func (p *AnthropicProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/v1/messages", p.apiKey, "x-api-key")
 }
@@ -284,9 +373,10 @@ func (p *AnthropicProvider) ProxyRequest(w http.ResponseWriter, r *http.Request)
 
 // ==================== Gemini提供商 ====================
 type GeminiProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewGeminiProvider(apiKey string) *GeminiProvider {
@@ -301,8 +391,12 @@ func (p *GeminiProvider) GetName() string    { return p.name }
 func (p *GeminiProvider) GetBaseURL() string { return p.baseURL }
 func (p *GeminiProvider) GetAPIKey() string  { return p.apiKey }
 func (p *GeminiProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"}
 }
+func (p *GeminiProvider) FetchModels()          {}
 func (p *GeminiProvider) TestConnection() error { return nil }
 func (p *GeminiProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -326,9 +420,10 @@ func (p *GeminiProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== DeepSeek提供商 ====================
 type DeepSeekProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewDeepSeekProvider(apiKey string) *DeepSeekProvider {
@@ -343,7 +438,15 @@ func (p *DeepSeekProvider) GetName() string    { return p.name }
 func (p *DeepSeekProvider) GetBaseURL() string { return p.baseURL }
 func (p *DeepSeekProvider) GetAPIKey() string  { return p.apiKey }
 func (p *DeepSeekProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"deepseek-chat", "deepseek-coder", "deepseek-chat-v3"}
+}
+func (p *DeepSeekProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *DeepSeekProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/v1/models", p.apiKey, "Bearer")
@@ -354,10 +457,11 @@ func (p *DeepSeekProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) 
 
 // ==================== MiniMax提供商 (字节跳动) ====================
 type MiniMaxProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
-	groupID string
+	name          string
+	baseURL       string
+	apiKey        string
+	groupID       string
+	dynamicModels []string
 }
 
 func NewMiniMaxProvider(apiKey, groupID string) *MiniMaxProvider {
@@ -373,7 +477,15 @@ func (p *MiniMaxProvider) GetName() string    { return p.name }
 func (p *MiniMaxProvider) GetBaseURL() string { return p.baseURL }
 func (p *MiniMaxProvider) GetAPIKey() string  { return p.apiKey }
 func (p *MiniMaxProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"MiniMax-Text-01", "abab6.5s-chat", "abab6.5g-chat"}
+}
+func (p *MiniMaxProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *MiniMaxProvider) TestConnection() error { return nil }
 func (p *MiniMaxProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
@@ -413,9 +525,10 @@ func (p *MiniMaxProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== SiliconFlow提供商 (第三方聚合API) ====================
 type SiliconFlowProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewSiliconFlowProvider(apiKey string) *SiliconFlowProvider {
@@ -430,12 +543,20 @@ func (p *SiliconFlowProvider) GetName() string    { return p.name }
 func (p *SiliconFlowProvider) GetBaseURL() string { return p.baseURL }
 func (p *SiliconFlowProvider) GetAPIKey() string  { return p.apiKey }
 func (p *SiliconFlowProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{
 		"Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-14B-Instruct", "Qwen/Qwen2.5-72B-Instruct",
-		"deepseek-ai/DeepSeek-V2.5", "deepseek-ai/DeepSeek-V2",
+		"deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-V2.5", "deepseek-ai/DeepSeek-V2",
 		"THUDM/glm-4-9b-chat", "THUDM/glm-4-plus",
 		"01-ai/Yi-1.5-34B-Chat-16K", "01-ai/Yi-1.5-9B-Chat-16K",
 		"moonshot/v1-8k", "moonshot/v1-32k",
+	}
+}
+func (p *SiliconFlowProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
 	}
 }
 func (p *SiliconFlowProvider) TestConnection() error {
@@ -447,9 +568,10 @@ func (p *SiliconFlowProvider) ProxyRequest(w http.ResponseWriter, r *http.Reques
 
 // ==================== GLM提供商 (智谱AI) ====================
 type GLMProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewGLMProvider(apiKey string) *GLMProvider {
@@ -464,7 +586,15 @@ func (p *GLMProvider) GetName() string    { return p.name }
 func (p *GLMProvider) GetBaseURL() string { return p.baseURL }
 func (p *GLMProvider) GetAPIKey() string  { return p.apiKey }
 func (p *GLMProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"glm-4", "glm-4-plus", "glm-4v", "glm-3-turbo"}
+}
+func (p *GLMProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *GLMProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/models", p.apiKey, "Bearer")
@@ -495,9 +625,10 @@ func (p *GLMProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== Doubao提供商 (字节豆包-火山引擎) ====================
 type DoubaoProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewDoubaoProvider(apiKey string) *DoubaoProvider {
@@ -512,7 +643,15 @@ func (p *DoubaoProvider) GetName() string    { return p.name }
 func (p *DoubaoProvider) GetBaseURL() string { return p.baseURL }
 func (p *DoubaoProvider) GetAPIKey() string  { return p.apiKey }
 func (p *DoubaoProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"doubao-e-32k", "doubao-e-16k", "doubao-lite-32k", "doubao-lite-16k"}
+}
+func (p *DoubaoProvider) FetchModels() {
+	if models := fetchModelsForProvider("https://ark.cn-beijing.volces.com/api/v3", p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *DoubaoProvider) TestConnection() error {
 	return testConnection("https://ark.cn-beijing.volces.com/api/v3/models", p.apiKey, "Bearer")
@@ -553,9 +692,10 @@ func (p *DoubaoProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== Qwen提供商 (阿里云通义) ====================
 type QwenProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewQwenProvider(apiKey string) *QwenProvider {
@@ -570,7 +710,15 @@ func (p *QwenProvider) GetName() string    { return p.name }
 func (p *QwenProvider) GetBaseURL() string { return p.baseURL }
 func (p *QwenProvider) GetAPIKey() string  { return p.apiKey }
 func (p *QwenProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"qwen-plus", "qwen-plus-latest", "qwen-turbo", "qwen-turbo-latest", "qwen-max"}
+}
+func (p *QwenProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *QwenProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/models", p.apiKey, "Bearer")
@@ -581,9 +729,10 @@ func (p *QwenProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== Moonshot提供商 (月之暗面Kimi) ====================
 type MoonshotProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewMoonshotProvider(apiKey string) *MoonshotProvider {
@@ -598,7 +747,15 @@ func (p *MoonshotProvider) GetName() string    { return p.name }
 func (p *MoonshotProvider) GetBaseURL() string { return p.baseURL }
 func (p *MoonshotProvider) GetAPIKey() string  { return p.apiKey }
 func (p *MoonshotProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"}
+}
+func (p *MoonshotProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *MoonshotProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/models", p.apiKey, "Bearer")
@@ -609,9 +766,10 @@ func (p *MoonshotProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) 
 
 // ==================== Yi提供商 (零一万物) ====================
 type YiProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewYiProvider(apiKey string) *YiProvider {
@@ -626,7 +784,15 @@ func (p *YiProvider) GetName() string    { return p.name }
 func (p *YiProvider) GetBaseURL() string { return p.baseURL }
 func (p *YiProvider) GetAPIKey() string  { return p.apiKey }
 func (p *YiProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"yi-large", "yi-medium", "yi-large-rag", "yi-1.5-34b-chat"}
+}
+func (p *YiProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *YiProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/models", p.apiKey, "Bearer")
@@ -637,9 +803,10 @@ func (p *YiProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== OpenRouter提供商 ====================
 type OpenRouterProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
+	name          string
+	baseURL       string
+	apiKey        string
+	dynamicModels []string
 }
 
 func NewOpenRouterProvider(apiKey string) *OpenRouterProvider {
@@ -654,7 +821,15 @@ func (p *OpenRouterProvider) GetName() string    { return p.name }
 func (p *OpenRouterProvider) GetBaseURL() string { return p.baseURL }
 func (p *OpenRouterProvider) GetAPIKey() string  { return p.apiKey }
 func (p *OpenRouterProvider) GetModels() []string {
+	if len(p.dynamicModels) > 0 {
+		return p.dynamicModels
+	}
 	return []string{"openai/gpt-4o", "anthropic/claude-3.5-sonnet", "google/gemini-2.0-flash-exp"}
+}
+func (p *OpenRouterProvider) FetchModels() {
+	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
+		p.dynamicModels = models
+	}
 }
 func (p *OpenRouterProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/models", p.apiKey, "Bearer")
