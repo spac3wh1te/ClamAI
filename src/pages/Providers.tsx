@@ -59,6 +59,17 @@ export default function Providers() {
     mutationFn: async (provider: ProviderConfig) => {
       const result = await invoke("add_provider", { provider });
       try {
+        const activeKey = provider.api_keys.find((k) => k.is_active);
+        if (activeKey && activeKey.key_hash) {
+          await invoke("sync_provider_key", {
+            providerName: provider.name.toLowerCase(),
+            apiKey: activeKey.key_hash,
+          });
+        }
+      } catch (e) {
+        console.warn("同步provider key到代理服务失败:", e);
+      }
+      try {
         await invoke("fetch_provider_models", { providerId: provider.id });
       } catch (e) {
         console.warn("自动拉取模型失败:", e);
@@ -72,8 +83,21 @@ export default function Providers() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (provider: ProviderConfig) =>
-      invoke("update_provider", { provider }),
+    mutationFn: async (provider: ProviderConfig) => {
+      const result = await invoke("update_provider", { provider });
+      try {
+        const activeKey = provider.api_keys.find((k) => k.is_active);
+        if (activeKey && activeKey.key_hash) {
+          await invoke("sync_provider_key", {
+            providerName: provider.name.toLowerCase(),
+            apiKey: activeKey.key_hash,
+          });
+        }
+      } catch (e) {
+        console.warn("同步provider key到代理服务失败:", e);
+      }
+      return result;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
       setEditProvider(null);
