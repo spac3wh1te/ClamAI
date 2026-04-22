@@ -23,7 +23,7 @@ set "BUILD_SERVICE_ONLY=0"
 set "TARGET_LIST="
 
 if "%~1"=="" (
-    set "TARGET_LIST=x86_64-win"
+    set "TARGET_LIST=x86_64-win x86_64-linux arm64-win arm64-linux"
     goto :start_build
 )
 
