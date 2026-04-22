@@ -10,11 +10,22 @@ export default function ConnectBanner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const isPC = deployMode === "pc";
+
   const handleConnect = async () => {
     setLoading(true);
     setError("");
     try {
-      await reconnect(username, password);
+      if (isPC) {
+        await reconnect();
+      } else {
+        if (!username || !password) {
+          setError("请输入用户名和密码");
+          setLoading(false);
+          return;
+        }
+        await reconnect(username, password);
+      }
       setShowDialog(false);
       setUsername("");
       setPassword("");
@@ -33,33 +44,44 @@ export default function ConnectBanner() {
           <span className="font-medium">后端服务未连接</span>
           <span className="text-yellow-500/70">— 数据不可用，请先连接服务</span>
         </div>
-        <button
-          onClick={() => setShowDialog(true)}
-          className="flex items-center gap-1.5 px-3 py-1 bg-yellow-500 text-black rounded-md text-sm font-medium hover:bg-yellow-400 transition-colors"
-        >
-          <Wifi size={14} />
-          连接服务
-        </button>
+        <div className="flex gap-2">
+          {isPC && (
+            <button
+              onClick={handleConnect}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1 bg-yellow-500 text-black rounded-md text-sm font-medium hover:bg-yellow-400 transition-colors disabled:opacity-50"
+            >
+              {loading ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Wifi size={14} />
+              )}
+              {loading ? "连接中..." : "快速连接"}
+            </button>
+          )}
+          {!isPC && (
+            <button
+              onClick={() => setShowDialog(true)}
+              className="flex items-center gap-1.5 px-3 py-1 bg-yellow-500 text-black rounded-md text-sm font-medium hover:bg-yellow-400 transition-colors"
+            >
+              <Wifi size={14} />
+              连接服务
+            </button>
+          )}
+        </div>
       </div>
 
       {showDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-xl p-6 w-full max-w-md shadow-xl">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-semibold">连接后端服务</h2>
+              <h2 className="text-lg font-semibold">连接远程服务</h2>
               <button
                 onClick={() => setShowDialog(false)}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <X size={20} />
               </button>
-            </div>
-
-            <div className="mb-4 p-3 bg-secondary rounded-lg text-sm">
-              <span className="text-muted-foreground">模式: </span>
-              <span className="font-medium">
-                {deployMode === "pc" ? "PC 本地模式" : "服务器模式"}
-              </span>
             </div>
 
             <div className="space-y-4">

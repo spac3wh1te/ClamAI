@@ -14,7 +14,7 @@ interface SetupContextType {
   serviceUrl: string;
   connected: boolean;
   checkSetup: () => Promise<void>;
-  reconnect: (username: string, password: string) => Promise<void>;
+  reconnect: (username?: string, password?: string) => Promise<void>;
 }
 
 interface SetupState {
@@ -45,7 +45,7 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
       setDeployMode(state.deploy_mode);
       setServiceUrl(state.service_url);
 
-      if (state.setup_complete && state.connected && state.service_url) {
+      if (state.setup_complete && state.service_url) {
         try {
           const result = await invoke<ConnectivityResult>(
             "check_service_connection",
@@ -67,17 +67,38 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const reconnect = useCallback(async (username: string, password: string) => {
-    await invoke("connect_service");
-    await new Promise((r) => setTimeout(r, 2500));
-    const data = await invoke<string>("login_admin", { username, password });
-    const result = JSON.parse(data);
-    if (!result.success) {
-      throw new Error("认证失败");
-    }
-    localStorage.setItem("clamai_token", result.token);
-    setConnected(true);
-  }, []);
+  const reconnect = useCallback(
+    async (username?: string, password?: string) => {
+      await invoke("connect_service");
+      await new Promise((r) => setTimeout(r, 3000));
+
+      if (deployMode === "pc") {
+        try {
+          const data = await invoke<string>("get_admin_token", {
+            password: "",
+          });
+          const result = JSON.parse(data);
+          if (result.success && result.token) {
+            localStorage.setItem("clamai_token", result.token);
+            setConnected(true);
+            return;
+          }
+        } catch {}
+      }
+
+      if (!username || !password) {
+        throw new Error("请输入用户名和密码");
+      }
+      const data = await invoke<string>("login_admin", { username, password });
+      const result = JSON.parse(data);
+      if (!result.success) {
+        throw new Error(result.error || "认证失败");
+      }
+      localStorage.setItem("clamai_token", result.token);
+      setConnected(true);
+    },
+    [deployMode],
+  );
 
   useEffect(() => {
     checkSetup();

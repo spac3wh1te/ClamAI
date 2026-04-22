@@ -297,8 +297,22 @@ func (p *ProxyServer) handleGetToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No admin configured", http.StatusNotFound)
 		return
 	}
+	if p.config.DeployMode == "pc" && isLocalhost(r) && req.Password == "" {
+		token, _ := generateToken(username, "admin", defaultTokenExpiry*7)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"token":   token,
+		})
+		return
+	}
 	if !checkPassword(req.Password, hash) {
-		http.Error(w, "Invalid password", http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Invalid password",
+		})
 		return
 	}
 	token, _ := generateToken(username, "admin", defaultTokenExpiry*7)

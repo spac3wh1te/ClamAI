@@ -238,16 +238,21 @@ export default function Settings() {
   };
 
   const handleReconnect = async () => {
-    if (!reconnectUser || !reconnectPwd) {
-      setReconnectError("请输入用户名和密码");
-      return;
-    }
     setReconnectLoading(true);
     setReconnectError("");
     try {
-      await reconnect(reconnectUser, reconnectPwd);
-      setReconnectUser("");
-      setReconnectPwd("");
+      if (currentMode === "pc") {
+        await reconnect();
+      } else {
+        if (!reconnectUser || !reconnectPwd) {
+          setReconnectError("请输入用户名和密码");
+          setReconnectLoading(false);
+          return;
+        }
+        await reconnect(reconnectUser, reconnectPwd);
+        setReconnectUser("");
+        setReconnectPwd("");
+      }
       await checkSetup();
     } catch (e: any) {
       setReconnectError(e?.toString?.() || "连接失败");
@@ -330,68 +335,98 @@ export default function Settings() {
           {!currentConnected && (
             <div className="border border-border rounded-lg p-4 bg-secondary/30 space-y-4">
               <h3 className="text-sm font-medium">连接服务</h3>
-              <p className="text-xs text-muted-foreground">
-                输入用户名和密码连接到后端服务
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    用户名
-                  </label>
-                  <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <input
-                      type="text"
-                      value={reconnectUser}
-                      onChange={(e) => setReconnectUser(e.target.value)}
-                      className="w-full pl-10 pr-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                      placeholder="admin"
-                      autoComplete="off"
-                      data-1p-ignore
-                      data-lpignore="true"
-                    />
+              {currentMode === "pc" ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    点击连接按钮启动本地代理服务
+                  </p>
+                  {reconnectError && (
+                    <div className="p-2 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">
+                      {reconnectError}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleReconnect}
+                    disabled={reconnectLoading}
+                    className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  >
+                    {reconnectLoading && (
+                      <Loader2 size={14} className="animate-spin" />
+                    )}
+                    <Wifi size={14} />
+                    <span>{reconnectLoading ? "启动中..." : "启动并连接"}</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    输入用户名和密码连接到远程服务
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        用户名
+                      </label>
+                      <div className="relative">
+                        <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <input
+                          type="text"
+                          value={reconnectUser}
+                          onChange={(e) => setReconnectUser(e.target.value)}
+                          className="w-full pl-10 pr-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                          placeholder="admin"
+                          autoComplete="off"
+                          data-1p-ignore
+                          data-lpignore="true"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        密码
+                      </label>
+                      <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <input
+                          type="password"
+                          value={reconnectPwd}
+                          onChange={(e) => setReconnectPwd(e.target.value)}
+                          className="w-full pl-10 pr-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                          placeholder="输入密码"
+                          onKeyDown={(e) => {
+                            if (
+                              e.key === "Enter" &&
+                              reconnectUser &&
+                              reconnectPwd &&
+                              !reconnectLoading
+                            ) {
+                              handleReconnect();
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">密码</label>
-                  <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <input
-                      type="password"
-                      value={reconnectPwd}
-                      onChange={(e) => setReconnectPwd(e.target.value)}
-                      className="w-full pl-10 pr-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                      placeholder="输入密码"
-                      onKeyDown={(e) => {
-                        if (
-                          e.key === "Enter" &&
-                          reconnectUser &&
-                          reconnectPwd &&
-                          !reconnectLoading
-                        ) {
-                          handleReconnect();
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-              {reconnectError && (
-                <div className="p-2 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">
-                  {reconnectError}
-                </div>
+                  {reconnectError && (
+                    <div className="p-2 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">
+                      {reconnectError}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleReconnect}
+                    disabled={
+                      !reconnectUser || !reconnectPwd || reconnectLoading
+                    }
+                    className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  >
+                    {reconnectLoading && (
+                      <Loader2 size={14} className="animate-spin" />
+                    )}
+                    <Wifi size={14} />
+                    <span>{reconnectLoading ? "连接中..." : "连接"}</span>
+                  </button>
+                </>
               )}
-              <button
-                onClick={handleReconnect}
-                disabled={!reconnectUser || !reconnectPwd || reconnectLoading}
-                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
-              >
-                {reconnectLoading && (
-                  <Loader2 size={14} className="animate-spin" />
-                )}
-                <Wifi size={14} />
-                <span>{reconnectLoading ? "连接中..." : "连接"}</span>
-              </button>
             </div>
           )}
           {showSwitchPanel && (
