@@ -34,7 +34,6 @@ url = "2.5"
 open = "5.0"
 http = "0.2"
 urlencoding = "2.1"
-rcgen = "0.13"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

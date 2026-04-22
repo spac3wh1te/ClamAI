@@ -90,25 +90,12 @@ impl ServiceManager {
 
         tracing::info!("[ServiceManager] 启动Go代理进程...");
 
-        let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let data_dir = exe_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
-        let (tls_cert, tls_key) = crate::proxy::ProxyService::ensure_self_signed_cert(&data_dir)
-            .map_err(|e| {
-                tracing::warn!("[ServiceManager] TLS cert generation failed (non-fatal): {}", e);
-                e
-            })
-            .ok()
-            .map(|(c, k)| (Some(c), Some(k)))
-            .unwrap_or((None, None));
-
         let start_config = crate::proxy::ProxyStartConfig {
             port: gateway.port,
             host: gateway.host.clone(),
             api_key: gateway.api_key.clone(),
             log_level: gateway.log_level.clone(),
             proxy_url: config.advanced.proxy_url.clone(),
-            tls_cert,
-            tls_key,
         };
         let mut proxy_service = self.proxy_service.lock().await;
         let child = proxy_service.start(&start_config).await?;

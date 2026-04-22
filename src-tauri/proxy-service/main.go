@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -55,6 +56,7 @@ type Config struct {
 	ConfigPath string
 	DeployMode string
 	ProxyURL   string
+	NoSSL      bool
 	TLSCert    string
 	TLSKey     string
 }
@@ -405,9 +407,35 @@ func main() {
 	}
 
 	log.Printf("[MAIN] Starting HTTP server on %s...", addr)
-	if config.TLSCert != "" && config.TLSKey != "" {
-		log.Printf("[MAIN] TLS enabled: cert=%s, key=%s", config.TLSCert, config.TLSKey)
-		if err := http.ListenAndServeTLS(addr, config.TLSCert, config.TLSKey, proxy.router); err != nil {
+
+	var tlsConfig *tls.Config
+	if !config.NoSSL {
+		if config.TLSCert == "" || config.TLSKey == "" {
+			hosts := detectListenHosts(addr)
+			certFile, keyFile, err := ensureSelfSignedTLSCert(getDataDir(), hosts)
+			if err != nil {
+				log.Fatalf("[MAIN] Failed to generate TLS cert: %v", err)
+			}
+			config.TLSCert = certFile
+			config.TLSKey = keyFile
+		}
+		var err error
+		tlsConfig, err = loadTLSCredentials(config.TLSCert, config.TLSKey)
+		if err != nil {
+			log.Fatalf("[MAIN] Failed to load TLS credentials: %v", err)
+		}
+		log.Printf("[MAIN] TLS enabled (auto-generated self-signed): %s", config.TLSCert)
+	} else {
+		log.Printf("[MAIN] TLS disabled (plain HTTP)")
+	}
+
+	if !config.NoSSL && tlsConfig != nil {
+		server := &http.Server{
+			Addr:      addr,
+			Handler:   proxy.router,
+			TLSConfig: tlsConfig,
+		}
+		if err := server.ListenAndServeTLS("", ""); err != nil {
 			log.Fatalf("[MAIN] Server error: %v", err)
 		}
 	} else {
@@ -433,8 +461,9 @@ func parseFlags() *Config {
 	flag.StringVar(&config.LogLevel, "log-level", "info", "log level")
 	flag.StringVar(&config.ConfigPath, "config", "", "config file path")
 	flag.StringVar(&config.DeployMode, "mode", "pc", "deployment mode: pc or server")
-	flag.StringVar(&config.ProxyURL, "proxy", "", "HTTP/SOCKS5 proxy URL (e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080)")
-	flag.StringVar(&config.TLSCert, "tls-cert", "", "TLS certificate file path")
+	flag.StringVar(&config.ProxyURL, "proxy", "", "HTTP/SOCKS5 proxy URL")
+	flag.BoolVar(&config.NoSSL, "no-ssl", false, "disable TLS")
+	flag.StringVar(&config.TLSCert, "tls-cert", "", "TLS cert")
 	flag.StringVar(&config.TLSKey, "tls-key", "", "TLS private key file path")
 	flag.Parse()
 
