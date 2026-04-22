@@ -24,11 +24,6 @@ interface SetupState {
   connected: boolean;
 }
 
-interface ConnectivityResult {
-  success: boolean;
-  message: string;
-}
-
 const SetupContext = createContext<SetupContextType | null>(null);
 
 export function SetupProvider({ children }: { children: React.ReactNode }) {
@@ -44,20 +39,7 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
       setSetupComplete(state.setup_complete);
       setDeployMode(state.deploy_mode);
       setServiceUrl(state.service_url);
-
-      if (state.setup_complete && state.service_url) {
-        try {
-          const result = await invoke<ConnectivityResult>(
-            "check_service_connection",
-            { serviceUrl: state.service_url },
-          );
-          setConnected(result.success);
-        } catch {
-          setConnected(false);
-        }
-      } else {
-        setConnected(false);
-      }
+      setConnected(state.connected);
     } catch (e) {
       console.error("Failed to check setup state:", e);
       setConnected(false);
@@ -69,33 +51,47 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
 
   const reconnect = useCallback(
     async (username?: string, password?: string) => {
-      await invoke("connect_service");
-      await new Promise((r) => setTimeout(r, 3000));
-
       if (deployMode === "pc") {
         try {
           const data = await invoke<string>("get_admin_token", {
             password: "",
           });
           const result = JSON.parse(data);
-          if (result.success && result.token) {
-            localStorage.setItem("clamai_token", result.token);
+          if (result.success && result.access_token) {
             setConnected(true);
             return;
           }
         } catch {}
+        try {
+          await invoke("connect_service");
+          await new Promise((r) => setTimeout(r, 3000));
+          const data = await invoke<string>("get_admin_token", {
+            password: "",
+          });
+          const result = JSON.parse(data);
+          if (result.success) {
+            setConnected(true);
+            return;
+          }
+        } catch (e: any) {
+          throw new Error(e?.toString?.() || "启动服务失败");
+        }
+      } else {
+        if (!username || !password) {
+          throw new Error("请输入用户名和密码");
+        }
+        await invoke("connect_service");
+        await new Promise((r) => setTimeout(r, 3000));
+        const data = await invoke<string>("login_admin", {
+          username,
+          password,
+        });
+        const result = JSON.parse(data);
+        if (!result.success) {
+          throw new Error(result.error || "认证失败");
+        }
+        setConnected(true);
       }
-
-      if (!username || !password) {
-        throw new Error("请输入用户名和密码");
-      }
-      const data = await invoke<string>("login_admin", { username, password });
-      const result = JSON.parse(data);
-      if (!result.success) {
-        throw new Error(result.error || "认证失败");
-      }
-      localStorage.setItem("clamai_token", result.token);
-      setConnected(true);
     },
     [deployMode],
   );

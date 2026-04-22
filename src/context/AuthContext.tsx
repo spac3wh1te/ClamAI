@@ -64,8 +64,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const data = await invoke<string>("get_admin_token", { password: "" });
       const result = JSON.parse(data);
-      if (result.success && result.token) {
-        setToken(result.token);
+      if (result.success && result.access_token) {
+        setToken(result.access_token);
       }
     } catch (_e) {}
   };
@@ -73,8 +73,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const data = await invoke<string>("login_admin", { username, password });
     const result = JSON.parse(data);
-    if (result.success && result.token) {
-      setToken(result.token);
+    if (result.success && result.access_token) {
+      setToken(result.access_token);
     } else {
       throw new Error("Login failed");
     }
@@ -83,8 +83,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setupAdmin = useCallback(async (username: string, password: string) => {
     const data = await invoke<string>("setup_admin", { username, password });
     const result = JSON.parse(data);
-    if (result.success && result.token) {
-      setToken(result.token);
+    if (result.success && result.access_token) {
+      setToken(result.access_token);
       setInitialized(true);
     } else {
       throw new Error("Setup failed");
