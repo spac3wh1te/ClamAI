@@ -1339,25 +1339,19 @@ pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<S
         }
         let remote_url = remote_url.trim_end_matches('/').to_string();
         let _ = ensure_server_token(&state).await;
-        let auth = get_server_access_token(&state).await;
         let client = https_client()?;
-        let url = format!("{}/api/v1/providers", remote_url);
-        let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
-        if let Some(token) = auth {
-            req = req.header("Authorization", format!("Bearer {}", token));
+        let url = format!("{}/v1/models", remote_url);
+        let resp = client.get(&url).timeout(std::time::Duration::from_secs(10)).send().await.map_err(|e| format!("请求远程models失败: {}", e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Ok(vec![]);
         }
-        let resp = req.send().await.map_err(|e| format!("请求远程providers失败: {}", e))?;
         let body: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {}", e))?;
         let mut all_models: Vec<String> = Vec::new();
-        if let Some(providers) = body.get("providers").and_then(|v| v.as_array()) {
-            for p in providers {
-                let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                if let Some(models) = p.get("models").and_then(|v| v.as_array()) {
-                    for m in models {
-                        if let Some(m) = m.as_str() {
-                            all_models.push(format!("{}:{}", name, m));
-                        }
-                    }
+        if let Some(data) = body.get("data").and_then(|v| v.as_array()) {
+            for m in data {
+                if let Some(id) = m.get("id").and_then(|v| v.as_str()) {
+                    all_models.push(id.to_string());
                 }
             }
         }

@@ -1952,7 +1952,7 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DEBUG] authMiddleware: path=%s, config.APIKey set=%v", r.URL.Path, p.config.APIKey != "")
-		if r.URL.Path == "/health" || r.URL.Path == "/oauth/callback" {
+		if r.URL.Path == "/health" || r.URL.Path == "/oauth/callback" || r.URL.Path == "/v1/models" {
 			next.ServeHTTP(w, r)
 			return
 		}
