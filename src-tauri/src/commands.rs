@@ -661,10 +661,15 @@ async fn get_proxy_url(state: &tauri::State<'_, AppState>, path: &str) -> Result
     let base_url = get_service_base_url(state).await;
     let config = state.config_manager.lock().await.get_config();
     let url = format!("{}/api/v1/{}", base_url.trim_end_matches('/'), path);
-    let auth = if !config.gateway.api_key.is_empty() {
-        Some(config.gateway.api_key)
-    } else {
-        None
+    let auth = match config.service.deploy_mode {
+        DeployMode::Server => config.service.remote_api_key.clone(),
+        DeployMode::PC => {
+            if !config.gateway.api_key.is_empty() {
+                Some(config.gateway.api_key)
+            } else {
+                None
+            }
+        }
     };
     Ok((url, auth))
 }
@@ -673,10 +678,15 @@ async fn get_proxy_url_no_prefix(state: &tauri::State<'_, AppState>, path: &str)
     let base_url = get_service_base_url(state).await;
     let config = state.config_manager.lock().await.get_config();
     let url = format!("{}/{}", base_url.trim_end_matches('/'), path);
-    let auth = if !config.gateway.api_key.is_empty() {
-        Some(config.gateway.api_key)
-    } else {
-        None
+    let auth = match config.service.deploy_mode {
+        DeployMode::Server => config.service.remote_api_key.clone(),
+        DeployMode::PC => {
+            if !config.gateway.api_key.is_empty() {
+                Some(config.gateway.api_key)
+            } else {
+                None
+            }
+        }
     };
     Ok((url, auth))
 }
@@ -1882,6 +1892,7 @@ pub async fn complete_setup(
     deploy_mode: String,
     remote_url: Option<String>,
     port: Option<u16>,
+    gateway_key: Option<String>,
 ) -> Result<(), String> {
     let mut config_manager = state.config_manager.lock().await;
     let mut config = config_manager.get_config();
@@ -1891,6 +1902,7 @@ pub async fn complete_setup(
         _ => DeployMode::PC,
     };
     config.service.remote_service_url = remote_url;
+    config.service.remote_api_key = gateway_key;
     if let Some(p) = port {
         config.gateway.port = p;
     }
@@ -1924,6 +1936,7 @@ pub async fn switch_deploy_mode(
     deploy_mode: String,
     remote_url: Option<String>,
     port: Option<u16>,
+    gateway_key: Option<String>,
 ) -> Result<(), String> {
     let mut service_manager = state.service_manager.lock().await;
     let _ = service_manager.stop_proxy_service().await;
@@ -1937,6 +1950,7 @@ pub async fn switch_deploy_mode(
         _ => DeployMode::PC,
     };
     config.service.remote_service_url = remote_url;
+    config.service.remote_api_key = gateway_key;
     if let Some(p) = port {
         config.gateway.port = p;
     }

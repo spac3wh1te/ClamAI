@@ -30,6 +30,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [deployMode, setDeployMode] = useState<"pc" | "server">("pc");
   const [port, setPort] = useState(8080);
   const [remoteUrl, setRemoteUrl] = useState("");
+  const [gatewayKey, setGatewayKey] = useState("");
   const [testResult, setTestResult] = useState<ProxyTestResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -82,6 +83,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         deployMode,
         remoteUrl: url,
         port: deployMode === "pc" ? port : null,
+        gatewayKey: deployMode === "server" ? gatewayKey || null : null,
       });
       onComplete();
     } catch (e: any) {
@@ -228,26 +230,47 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   </div>
                 </div>
               ) : (
-                <div>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    输入远程 ClamAI 服务的完整地址（包括协议和端口）
-                  </p>
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      输入远程 ClamAI 服务的完整地址和网关密钥
+                    </p>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        远程服务地址
+                      </label>
+                      <input
+                        type="text"
+                        value={remoteUrl}
+                        onChange={(e) => {
+                          setRemoteUrl(e.target.value);
+                          setTestResult(null);
+                        }}
+                        className="w-full px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                        placeholder="https://your-server.com:8080"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        支持带端口的地址，例如 https://192.168.1.100:8080
+                      </p>
+                    </div>
+                  </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">
-                      远程服务地址
+                      网关密钥 (Gateway Key)
                     </label>
                     <input
-                      type="text"
-                      value={remoteUrl}
-                      onChange={(e) => {
-                        setRemoteUrl(e.target.value);
-                        setTestResult(null);
-                      }}
+                      type="password"
+                      value={gatewayKey}
+                      onChange={(e) => setGatewayKey(e.target.value)}
                       className="w-full px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                      placeholder="https://your-server.com:8080"
+                      placeholder="服务端 --api-key 参数设置的密钥"
                     />
                     <p className="text-xs text-muted-foreground mt-1">
-                      支持带端口的地址，例如 https://192.168.1.100:8080
+                      即远程服务启动时{" "}
+                      <code className="text-xs bg-secondary px-1 py-0.5 rounded">
+                        --api-key
+                      </code>{" "}
+                      参数的值，用于 API 鉴权
                     </p>
                   </div>
                 </div>
@@ -319,6 +342,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                       : remoteUrl}
                   </span>
                 </div>
+                {deployMode === "server" && gatewayKey && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">网关密钥</span>
+                    <span className="font-medium font-mono text-sm">
+                      {"*".repeat(Math.min(gatewayKey.length, 8))}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">连接状态</span>
                   <span

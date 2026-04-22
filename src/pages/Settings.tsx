@@ -77,6 +77,7 @@ export default function Settings() {
   } = useSetup();
   const [switchMode, setSwitchMode] = useState<"pc" | "server">("pc");
   const [switchRemoteUrl, setSwitchRemoteUrl] = useState("");
+  const [switchGatewayKey, setSwitchGatewayKey] = useState("");
   const [switchPort, setSwitchPort] = useState(8080);
   const [switching, setSwitching] = useState(false);
   const [connectTestResult, setConnectTestResult] =
@@ -214,10 +215,13 @@ export default function Settings() {
     try {
       const remoteUrl =
         switchMode === "server" ? switchRemoteUrl.trim() || null : null;
+      const gatewayKey =
+        switchMode === "server" ? switchGatewayKey.trim() || null : null;
       await invoke("switch_deploy_mode", {
         deployMode: switchMode,
         remoteUrl,
         port: switchMode === "pc" ? switchPort : null,
+        gatewayKey,
       });
       setShowSwitchPanel(false);
       await checkSetup();
@@ -470,17 +474,34 @@ export default function Settings() {
                   />
                 </div>
               ) : (
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    远程服务地址
-                  </label>
-                  <input
-                    type="text"
-                    value={switchRemoteUrl}
-                    onChange={(e) => setSwitchRemoteUrl(e.target.value)}
-                    className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="https://your-server.com:8080"
-                  />
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      远程服务地址
+                    </label>
+                    <input
+                      type="text"
+                      value={switchRemoteUrl}
+                      onChange={(e) => setSwitchRemoteUrl(e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      placeholder="https://your-server.com:8080"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      网关密钥 (Gateway Key)
+                    </label>
+                    <input
+                      type="password"
+                      value={switchGatewayKey}
+                      onChange={(e) => setSwitchGatewayKey(e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      placeholder="服务端 --api-key 设置的密钥"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      远程服务鉴权所需的 Gateway API Key
+                    </p>
+                  </div>
                 </div>
               )}
               <div className="flex items-center gap-3">

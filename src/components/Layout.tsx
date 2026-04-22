@@ -15,6 +15,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { useSetup } from "../context/SetupContext";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -24,6 +25,7 @@ function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const location = useLocation();
   const { logout } = useAuth();
+  const { connected, deployMode } = useSetup();
 
   const navigation = [
     { name: "仪表盘", href: "/", icon: LayoutDashboard },
@@ -39,13 +41,11 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <div className="flex h-screen bg-background">
-      {/* 侧边栏 */}
       <aside
         className={`${
           sidebarOpen ? "w-64" : "w-16"
         } bg-card border-r border-border transition-all duration-300 flex flex-col`}
       >
-        {/* Logo区域 */}
         <div className="flex items-center justify-between h-16 px-4 border-b border-border">
           {sidebarOpen && (
             <div className="flex items-center gap-2">
@@ -61,7 +61,6 @@ function Layout({ children }: LayoutProps) {
           </button>
         </div>
 
-        {/* 导航菜单 */}
         <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
           {navigation.map((item) => {
             const isActive = location.pathname === item.href;
@@ -84,7 +83,6 @@ function Layout({ children }: LayoutProps) {
           })}
         </nav>
 
-        {/* 底部信息 */}
         {sidebarOpen && (
           <div className="p-4 border-t border-border space-y-2">
             <div className="text-sm text-muted-foreground">
@@ -102,23 +100,31 @@ function Layout({ children }: LayoutProps) {
         )}
       </aside>
 
-      {/* 主内容区域 */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* 顶部栏 */}
         <header className="h-16 bg-card border-b border-border flex items-center justify-between px-6">
           <h1 className="text-xl font-semibold">
             {navigation.find((item) => item.href === location.pathname)?.name ||
               "ClamAI"}
           </h1>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-              <span>系统正常</span>
+            <div className="flex items-center gap-2 text-sm">
+              {connected ? (
+                <>
+                  <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                  <span className="text-green-500">
+                    {deployMode === "pc" ? "本地服务正常" : "远程服务正常"}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                  <span className="text-red-500">服务未连接</span>
+                </>
+              )}
             </div>
           </div>
         </header>
 
-        {/* 内容区域 */}
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
     </div>
