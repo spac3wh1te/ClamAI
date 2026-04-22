@@ -205,7 +205,13 @@ impl ConfigManager {
         let config_path = app_config_dir.join("config.json");
 
         let config = if config_path.exists() {
-            Self::load_config(&config_path).await?
+            let mut c = Self::load_config(&config_path).await?;
+            if !c.service.setup_complete && (!c.providers.is_empty() || c.gateway.port > 0) {
+                c.service.setup_complete = true;
+                c.service.deploy_mode = DeployMode::PC;
+                let _ = Self::save_config(&config_path, &c).await;
+            }
+            c
         } else {
             let default_config = Self::default_config();
             Self::save_config(&config_path, &default_config).await?;
