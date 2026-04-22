@@ -23,14 +23,14 @@ set "BUILD_SERVICE_ONLY=0"
 set "TARGET_LIST="
 
 if "%~1"=="" (
-    set "TARGET_LIST=current"
+    set "TARGET_LIST=x86_64-win"
     goto :start_build
 )
 
 :parse_args
 if "%~1"=="" goto :start_build
 if /i "%~1"=="all" (
-    set "TARGET_LIST=x86-win x86-linux arm64-win arm64-linux"
+    set "TARGET_LIST=x86_64-win x86_64-linux arm64-win arm64-linux"
     shift
     goto :parse_args
 )
@@ -48,7 +48,7 @@ goto :parse_args
 echo ============================================
 echo   ClamAI Build ^(%BUILD_CONFIG%^)
 echo ============================================
-echo   Output: outputs\%BUILD_CONFIG%\{x86,arm64}\
+echo   Output: outputs\%BUILD_CONFIG%\{x86_64,arm64}\
 echo.
 
 REM ============================================================
@@ -65,6 +65,7 @@ if "!BUILD_SERVICE_ONLY!"=="0" (
 
     REM ============================================================
     REM  Step 2: Build Rust (Tauri desktop - current platform only)
+    REM  Rust toolchain only supports current platform, output goes to x86_64
     REM ============================================================
     echo [2/3] Building Rust ^(current platform, %BUILD_CONFIG%^)...
 
@@ -118,29 +119,23 @@ exit /b 0
 
 REM ============================================================
 REM  Subroutine: build_target
+REM  Target: x86_64-win | x86_64-linux | arm64-win | arm64-linux
 REM ============================================================
 :build_target
 set "TGT=%~1"
 
-if "%TGT%"=="current" (
+if "%TGT%"=="x86_64-win" (
     set "B_GOOS=windows"
     set "B_GOARCH=amd64"
     set "B_OUT=ClamAI-service.exe"
-    set "B_ARCHDIR=x86"
+    set "B_ARCHDIR=x86_64"
     set "B_COPY_RUST=1"
 )
-if "%TGT%"=="x86-win" (
-    set "B_GOOS=windows"
-    set "B_GOARCH=amd64"
-    set "B_OUT=ClamAI-service.exe"
-    set "B_ARCHDIR=x86"
-    set "B_COPY_RUST=0"
-)
-if "%TGT%"=="x86-linux" (
+if "%TGT%"=="x86_64-linux" (
     set "B_GOOS=linux"
     set "B_GOARCH=amd64"
     set "B_OUT=ClamAI-service"
-    set "B_ARCHDIR=x86"
+    set "B_ARCHDIR=x86_64"
     set "B_COPY_RUST=0"
 )
 if "%TGT%"=="arm64-win" (
