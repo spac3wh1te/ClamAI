@@ -1328,6 +1328,43 @@ fn extract_block_message(resp: &serde_json::Value, status_code: u16) -> String {
 
 #[tauri::command]
 pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    let config = state.config_manager.lock().await.get_config();
+
+    if config.service.deploy_mode == DeployMode::Server {
+        let remote_url = config.service.remote_service_url.clone()
+            .unwrap_or_default();
+        drop(config);
+        if remote_url.is_empty() {
+            return Ok(vec![]);
+        }
+        let remote_url = remote_url.trim_end_matches('/').to_string();
+        let _ = ensure_server_token(&state).await;
+        let auth = get_server_access_token(&state).await;
+        let client = https_client()?;
+        let url = format!("{}/api/v1/providers", remote_url);
+        let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
+        if let Some(token) = auth {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let resp = req.send().await.map_err(|e| format!("请求远程providers失败: {}", e))?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {}", e))?;
+        let mut all_models: Vec<String> = Vec::new();
+        if let Some(providers) = body.get("providers").and_then(|v| v.as_array()) {
+            for p in providers {
+                let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(models) = p.get("models").and_then(|v| v.as_array()) {
+                    for m in models {
+                        if let Some(m) = m.as_str() {
+                            all_models.push(format!("{}:{}", name, m));
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(all_models);
+    }
+    drop(config);
+
     let manager = state.config_manager.lock().await;
     let providers = manager.get_providers();
 
