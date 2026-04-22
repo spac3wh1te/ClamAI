@@ -199,6 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             connect_service,
             disconnect_service,
             switch_deploy_mode,
+            init_remote_server,
         ])
         .run(tauri::generate_context!())?;
 
