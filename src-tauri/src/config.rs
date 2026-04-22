@@ -24,7 +24,6 @@ pub struct ServiceConfig {
     pub deploy_mode: DeployMode,
     pub setup_complete: bool,
     pub remote_service_url: Option<String>,
-    pub remote_api_key: Option<String>,
 }
 
 impl Default for ServiceConfig {
@@ -33,7 +32,6 @@ impl Default for ServiceConfig {
             deploy_mode: DeployMode::PC,
             setup_complete: false,
             remote_service_url: None,
-            remote_api_key: None,
         }
     }
 }

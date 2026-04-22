@@ -195,6 +195,12 @@ func createTables() error {
 			api_key_id TEXT DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_skills_detection_checked_at ON skills_detection_history(checked_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (
+			token TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 
 	for _, stmt := range stmts {

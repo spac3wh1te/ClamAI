@@ -1,6 +1,7 @@
 use crate::AppState;
 use crate::config::ProviderConfig;
 use crate::config::DeployMode;
+use crate::TokenPair;
 use crate::oauth::{OAuthCallback, OAuthState};
 use crate::services::ServiceStatus;
 use serde::{Deserialize, Serialize};
@@ -657,19 +658,75 @@ async fn get_service_base_url(state: &tauri::State<'_, AppState>) -> String {
     state.service_manager.lock().await.get_service_url()
 }
 
+async fn ensure_server_token(state: &tauri::State<'_, AppState>) -> Result<(), String> {
+    let config = state.config_manager.lock().await.get_config();
+    if config.service.deploy_mode != DeployMode::Server {
+        return Ok(());
+    }
+    drop(config);
+
+    let needs_refresh = {
+        let store = state.token_store.lock().await;
+        match &store.tokens {
+            None => true,
+            Some(pair) => chrono::Utc::now() > pair.expires_at - chrono::Duration::minutes(5),
+        }
+    };
+
+    if !needs_refresh {
+        return Ok(());
+    }
+
+    let refresh_token = {
+        let store = state.token_store.lock().await;
+        store.tokens.as_ref()
+            .map(|t| t.refresh_token.clone())
+            .ok_or("No refresh token available, please reconnect")?
+    };
+
+    let base_url = get_service_base_url(state).await;
+    let url = format!("{}/api/v1/auth/refresh", base_url.trim_end_matches('/'));
+    let client = https_client_for_url(&base_url)?;
+
+    let resp = client.post(&url)
+        .json(&serde_json::json!({ "refresh_token": refresh_token }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send().await
+        .map_err(|e| format!("Refresh failed: {}", e))?;
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    if body["success"].as_bool() == Some(true) {
+        let mut store = state.token_store.lock().await;
+        store.tokens = Some(TokenPair {
+            access_token: body["access_token"].as_str().unwrap_or("").to_string(),
+            refresh_token: body["refresh_token"].as_str().unwrap_or("").to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::seconds(body["expires_in"].as_i64().unwrap_or(7200)),
+        });
+        tracing::debug!("Server token refreshed successfully");
+        Ok(())
+    } else {
+        let mut store = state.token_store.lock().await;
+        store.tokens = None;
+        Err("Session expired, please reconnect".to_string())
+    }
+}
+
+async fn get_server_access_token(state: &tauri::State<'_, AppState>) -> Option<String> {
+    let store = state.token_store.lock().await;
+    store.tokens.as_ref().map(|t| t.access_token.clone())
+}
+
 async fn get_proxy_url(state: &tauri::State<'_, AppState>, path: &str) -> Result<(String, Option<String>), String> {
     let base_url = get_service_base_url(state).await;
     let config = state.config_manager.lock().await.get_config();
     let url = format!("{}/api/v1/{}", base_url.trim_end_matches('/'), path);
     let auth = match config.service.deploy_mode {
-        DeployMode::Server => config.service.remote_api_key.clone(),
-        DeployMode::PC => {
-            if !config.gateway.api_key.is_empty() {
-                Some(config.gateway.api_key)
-            } else {
-                None
-            }
+        DeployMode::Server => {
+            let _ = ensure_server_token(state).await;
+            get_server_access_token(state).await
         }
+        DeployMode::PC => None,
     };
     Ok((url, auth))
 }
@@ -679,14 +736,11 @@ async fn get_proxy_url_no_prefix(state: &tauri::State<'_, AppState>, path: &str)
     let config = state.config_manager.lock().await.get_config();
     let url = format!("{}/{}", base_url.trim_end_matches('/'), path);
     let auth = match config.service.deploy_mode {
-        DeployMode::Server => config.service.remote_api_key.clone(),
-        DeployMode::PC => {
-            if !config.gateway.api_key.is_empty() {
-                Some(config.gateway.api_key)
-            } else {
-                None
-            }
+        DeployMode::Server => {
+            let _ = ensure_server_token(state).await;
+            get_server_access_token(state).await
         }
+        DeployMode::PC => None,
     };
     Ok((url, auth))
 }
@@ -1547,6 +1601,18 @@ pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, pa
     let body = resp.text().await.map_err(|e| e.to_string())?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if let (Some(at), Some(rt), Some(ei)) = (
+            parsed.get("access_token").and_then(|v| v.as_str()),
+            parsed.get("refresh_token").and_then(|v| v.as_str()),
+            parsed.get("expires_in").and_then(|v| v.as_i64()),
+        ) {
+            let mut store = state.token_store.lock().await;
+            store.tokens = Some(TokenPair {
+                access_token: at.to_string(),
+                refresh_token: rt.to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(ei),
+            });
+        }
         Ok(body)
     } else {
         Err(parsed.get("error").and_then(|v| v.as_str()).unwrap_or("Setup failed").to_string())
@@ -1561,6 +1627,18 @@ pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, pa
     let body = resp.text().await.map_err(|e| e.to_string())?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if let (Some(at), Some(rt), Some(ei)) = (
+            parsed.get("access_token").and_then(|v| v.as_str()),
+            parsed.get("refresh_token").and_then(|v| v.as_str()),
+            parsed.get("expires_in").and_then(|v| v.as_i64()),
+        ) {
+            let mut store = state.token_store.lock().await;
+            store.tokens = Some(TokenPair {
+                access_token: at.to_string(),
+                refresh_token: rt.to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(ei),
+            });
+        }
         Ok(body)
     } else {
         Err(parsed.get("error").and_then(|v| v.as_str()).unwrap_or("Login failed").to_string())
@@ -1582,7 +1660,24 @@ pub async fn get_admin_token(state: tauri::State<'_, AppState>, password: String
     let client = https_client()?;
     let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"password": password})).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
-    Ok(body)
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if let (Some(at), Some(rt), Some(ei)) = (
+            parsed.get("access_token").and_then(|v| v.as_str()),
+            parsed.get("refresh_token").and_then(|v| v.as_str()),
+            parsed.get("expires_in").and_then(|v| v.as_i64()),
+        ) {
+            let mut store = state.token_store.lock().await;
+            store.tokens = Some(TokenPair {
+                access_token: at.to_string(),
+                refresh_token: rt.to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(ei),
+            });
+        }
+        Ok(body)
+    } else {
+        Ok(body)
+    }
 }
 
 // ==================== 限流配置命令 ====================
@@ -1892,7 +1987,6 @@ pub async fn complete_setup(
     deploy_mode: String,
     remote_url: Option<String>,
     port: Option<u16>,
-    gateway_key: Option<String>,
 ) -> Result<(), String> {
     let mut config_manager = state.config_manager.lock().await;
     let mut config = config_manager.get_config();
@@ -1902,7 +1996,6 @@ pub async fn complete_setup(
         _ => DeployMode::PC,
     };
     config.service.remote_service_url = remote_url;
-    config.service.remote_api_key = gateway_key;
     if let Some(p) = port {
         config.gateway.port = p;
     }
@@ -1936,11 +2029,15 @@ pub async fn switch_deploy_mode(
     deploy_mode: String,
     remote_url: Option<String>,
     port: Option<u16>,
-    gateway_key: Option<String>,
 ) -> Result<(), String> {
     let mut service_manager = state.service_manager.lock().await;
     let _ = service_manager.stop_proxy_service().await;
     drop(service_manager);
+
+    {
+        let mut store = state.token_store.lock().await;
+        store.tokens = None;
+    }
 
     let mut config_manager = state.config_manager.lock().await;
     let mut config = config_manager.get_config();
@@ -1950,7 +2047,6 @@ pub async fn switch_deploy_mode(
         _ => DeployMode::PC,
     };
     config.service.remote_service_url = remote_url;
-    config.service.remote_api_key = gateway_key;
     if let Some(p) = port {
         config.gateway.port = p;
     }

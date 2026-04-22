@@ -19,10 +19,23 @@ use tracing::info;
 use tracing_subscriber;
 use tracing_subscriber::prelude::*;
 
+#[derive(Debug, Clone, Default)]
+pub struct TokenPair {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Default)]
+pub struct TokenStore {
+    pub tokens: Option<TokenPair>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub config_manager: Arc<Mutex<ConfigManager>>,
     pub service_manager: Arc<Mutex<ServiceManager>>,
+    pub token_store: Arc<Mutex<TokenStore>>,
 }
 
 #[tokio::main]
@@ -65,6 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = AppState {
         config_manager,
         service_manager,
+        token_store: Arc::new(Mutex::new(TokenStore::default())),
     };
 
     // 根据部署模式决定是否自动启动服务

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,7 +17,8 @@ import (
 )
 
 const jwtSecretEnvKey = "CLAMAI_JWT_SECRET"
-const defaultTokenExpiry = 24 * time.Hour
+const accessTokenExpiry = 2 * time.Hour
+const refreshTokenExpiry = 30 * 24 * time.Hour
 
 var jwtSecret []byte
 
@@ -105,11 +108,68 @@ func verifyAdmin(username, password string) bool {
 	return checkPassword(password, hash)
 }
 
+func getAdminUsername() string {
+	var username string
+	db.QueryRow("SELECT username FROM admin_users WHERE role = 'admin' LIMIT 1").Scan(&username)
+	return username
+}
+
+// ==================== Refresh Token ====================
+
+func generateRefreshTokenString() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("rt-%d%s", time.Now().UnixNano(), generateAPIKey())
+	}
+	return "rt-" + hex.EncodeToString(b)
+}
+
+func storeRefreshToken(username, token string) error {
+	expiresAt := time.Now().Add(refreshTokenExpiry).Format("2006-01-02 15:04:05")
+	_, err := db.Exec(`INSERT OR REPLACE INTO refresh_tokens (token, username, expires_at) VALUES (?, ?, ?)`,
+		token, username, expiresAt)
+	return err
+}
+
+func consumeRefreshToken(token string) (string, error) {
+	var username string
+	var expiresAt string
+	err := db.QueryRow(`SELECT username, expires_at FROM refresh_tokens WHERE token = ?`, token).Scan(&username, &expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("invalid refresh token")
+	}
+
+	exp, err := time.Parse("2006-01-02 15:04:05", expiresAt)
+	if err != nil || time.Now().After(exp) {
+		db.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
+		return "", fmt.Errorf("refresh token expired")
+	}
+
+	db.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
+	return username, nil
+}
+
+func issueTokenPair(username string) map[string]interface{} {
+	accessToken, _ := generateToken(username, "admin", accessTokenExpiry)
+	refreshToken := generateRefreshTokenString()
+	storeRefreshToken(username, refreshToken)
+
+	return map[string]interface{}{
+		"success":       true,
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_in":    int(accessTokenExpiry.Seconds()),
+	}
+}
+
+// ==================== Middleware ====================
+
 var noAuthPaths = map[string]bool{
-	"/api/v1/auth/status": true,
-	"/api/v1/auth/setup":  true,
-	"/api/v1/auth/login":  true,
-	"/api/v1/auth/token":  true,
+	"/api/v1/auth/status":  true,
+	"/api/v1/auth/setup":   true,
+	"/api/v1/auth/login":   true,
+	"/api/v1/auth/token":   true,
+	"/api/v1/auth/refresh": true,
 }
 
 func isLocalhost(r *http.Request) bool {
@@ -138,19 +198,19 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		if strings.HasPrefix(r.URL.Path, "/api/v1/") {
-			if p.config.APIKey != "" {
-				authHeader := r.Header.Get("Authorization")
-				expectedAuth := "Bearer " + p.config.APIKey
-				if authHeader == expectedAuth {
+			tokenStr := extractBearerToken(r)
+			if tokenStr != "" {
+				claims, err := validateToken(tokenStr)
+				if err == nil && claims != nil {
 					next.ServeHTTP(w, r)
 					return
 				}
 			}
 
-			tokenStr := extractBearerToken(r)
-			if tokenStr != "" {
-				claims, err := validateToken(tokenStr)
-				if err == nil && claims != nil {
+			if p.config.APIKey != "" {
+				authHeader := r.Header.Get("Authorization")
+				expectedAuth := "Bearer " + p.config.APIKey
+				if authHeader == expectedAuth {
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -180,6 +240,7 @@ func (p *ProxyServer) setupAuthRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/auth/login", p.handleAuthLogin).Methods("POST")
 	router.HandleFunc("/api/v1/auth/change-password", p.handleChangePassword).Methods("POST")
 	router.HandleFunc("/api/v1/auth/token", p.handleGetToken).Methods("POST")
+	router.HandleFunc("/api/v1/auth/refresh", p.handleRefreshToken).Methods("POST")
 }
 
 func (p *ProxyServer) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -212,12 +273,8 @@ func (p *ProxyServer) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create admin", http.StatusInternalServerError)
 		return
 	}
-	token, _ := generateToken(req.Username, "admin", defaultTokenExpiry)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"token":   token,
-	})
+	json.NewEncoder(w).Encode(issueTokenPair(req.Username))
 }
 
 func (p *ProxyServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -233,16 +290,35 @@ func (p *ProxyServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": "Invalid credentials",
+			"success": false,
+			"error":   "Invalid credentials",
 		})
 		return
 	}
-	token, _ := generateToken(req.Username, "admin", defaultTokenExpiry)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"token":   token,
-	})
+	json.NewEncoder(w).Encode(issueTokenPair(req.Username))
+}
+
+func (p *ProxyServer) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	username, err := consumeRefreshToken(req.RefreshToken)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(issueTokenPair(username))
 }
 
 func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -274,12 +350,8 @@ func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 	hash, _ := hashPassword(req.NewPassword)
 	db.Exec("UPDATE admin_users SET password_hash = ? WHERE username = ?", hash, claims.Username)
-	token, _ := generateToken(claims.Username, "admin", defaultTokenExpiry)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"token":   token,
-	})
+	json.NewEncoder(w).Encode(issueTokenPair(claims.Username))
 }
 
 func (p *ProxyServer) handleGetToken(w http.ResponseWriter, r *http.Request) {
@@ -290,23 +362,19 @@ func (p *ProxyServer) handleGetToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	var username string
-	var hash string
-	err := db.QueryRow("SELECT username, password_hash FROM admin_users WHERE role = 'admin' LIMIT 1").Scan(&username, &hash)
-	if err != nil {
+	username := getAdminUsername()
+	if username == "" {
 		http.Error(w, "No admin configured", http.StatusNotFound)
 		return
 	}
 	if p.config.DeployMode == "pc" && isLocalhost(r) && req.Password == "" {
-		token, _ := generateToken(username, "admin", defaultTokenExpiry*7)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"token":   token,
-		})
+		json.NewEncoder(w).Encode(issueTokenPair(username))
 		return
 	}
-	if !checkPassword(req.Password, hash) {
+	var hash string
+	err := db.QueryRow("SELECT password_hash FROM admin_users WHERE role = 'admin' LIMIT 1").Scan(&hash)
+	if err != nil || !checkPassword(req.Password, hash) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -315,10 +383,6 @@ func (p *ProxyServer) handleGetToken(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	token, _ := generateToken(username, "admin", defaultTokenExpiry*7)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"token":   token,
-	})
+	json.NewEncoder(w).Encode(issueTokenPair(username))
 }
