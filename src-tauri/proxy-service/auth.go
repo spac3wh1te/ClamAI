@@ -54,6 +54,22 @@ func checkPassword(password, hash string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
+func isValidJWT(tokenStr string) bool {
+	if jwtSecret == nil || len(jwtSecret) == 0 {
+		return false
+	}
+	token, err := jwt.ParseWithClaims(tokenStr, &AdminClaims{}, func(t *jwt.Token) (interface{}, error) {
+		return jwtSecret, nil
+	})
+	if err != nil {
+		return false
+	}
+	if claims, ok := token.Claims.(*AdminClaims); ok && token.Valid {
+		return claims.Role == "admin"
+	}
+	return false
+}
+
 func generateToken(username, role string, expiry time.Duration) (string, error) {
 	claims := AdminClaims{
 		Username: username,

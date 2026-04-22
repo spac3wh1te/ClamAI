@@ -1338,12 +1338,18 @@ pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<S
             return Ok(vec![]);
         }
         let remote_url = remote_url.trim_end_matches('/').to_string();
-        let _ = ensure_server_token(&state).await;
+        ensure_server_token(&state).await.map_err(|e| format!("刷新token失败: {}", e))?;
+        let auth = get_server_access_token(&state).await;
         let client = https_client()?;
         let url = format!("{}/v1/models", remote_url);
-        let resp = client.get(&url).timeout(std::time::Duration::from_secs(10)).send().await.map_err(|e| format!("请求远程models失败: {}", e))?;
+        let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
+        if let Some(token) = auth {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let resp = req.send().await.map_err(|e| format!("请求远程models失败: {}", e))?;
         let status = resp.status();
         if !status.is_success() {
+            tracing::warn!("[get_proxy_models] /v1/models returned {}", status);
             return Ok(vec![]);
         }
         let body: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {}", e))?;

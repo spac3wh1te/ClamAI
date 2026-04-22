@@ -1952,7 +1952,7 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DEBUG] authMiddleware: path=%s, config.APIKey set=%v", r.URL.Path, p.config.APIKey != "")
-		if r.URL.Path == "/health" || r.URL.Path == "/oauth/callback" || r.URL.Path == "/v1/models" {
+		if r.URL.Path == "/health" || r.URL.Path == "/oauth/callback" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1989,6 +1989,14 @@ func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 		authHeader := r.Header.Get("Authorization")
 		apiKeyHeader := r.Header.Get("x-api-key")
 		log.Printf("[DEBUG] authMiddleware: proxy path, authHeader=%s, apiKeyHeader=%s", authHeader, apiKeyHeader)
+
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+			if isValidJWT(tokenStr) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
 
 		validKey := false
 		if p.config.APIKey != "" {
