@@ -14,6 +14,7 @@ interface SetupContextType {
   serviceUrl: string;
   connected: boolean;
   checkSetup: () => Promise<void>;
+  reconnect: (username: string, password: string) => Promise<void>;
 }
 
 interface SetupState {
@@ -21,6 +22,11 @@ interface SetupState {
   deploy_mode: string;
   service_url: string;
   connected: boolean;
+}
+
+interface ConnectivityResult {
+  success: boolean;
+  message: string;
 }
 
 const SetupContext = createContext<SetupContextType | null>(null);
@@ -38,13 +44,39 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
       setSetupComplete(state.setup_complete);
       setDeployMode(state.deploy_mode);
       setServiceUrl(state.service_url);
-      setConnected(state.connected);
+
+      if (state.setup_complete && state.connected && state.service_url) {
+        try {
+          const result = await invoke<ConnectivityResult>(
+            "check_service_connection",
+            { serviceUrl: state.service_url },
+          );
+          setConnected(result.success);
+        } catch {
+          setConnected(false);
+        }
+      } else {
+        setConnected(false);
+      }
     } catch (e) {
       console.error("Failed to check setup state:", e);
+      setConnected(false);
       setSetupComplete(false);
     } finally {
       setSetupChecked(true);
     }
+  }, []);
+
+  const reconnect = useCallback(async (username: string, password: string) => {
+    await invoke("connect_service");
+    await new Promise((r) => setTimeout(r, 2500));
+    const data = await invoke<string>("login_admin", { username, password });
+    const result = JSON.parse(data);
+    if (!result.success) {
+      throw new Error("认证失败");
+    }
+    localStorage.setItem("clamai_token", result.token);
+    setConnected(true);
   }, []);
 
   useEffect(() => {
@@ -60,6 +92,7 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
         serviceUrl,
         connected,
         checkSetup,
+        reconnect,
       }}
     >
       {children}

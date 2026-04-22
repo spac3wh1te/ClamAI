@@ -32,7 +32,7 @@ export default function StatusBar() {
     return `${minutes}m`;
   };
 
-  const isRunning = status?.proxy_running ?? connected;
+  const isRunning = connected;
   const mode = status?.deploy_mode ?? deployMode;
 
   return (

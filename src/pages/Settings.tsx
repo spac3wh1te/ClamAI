@@ -60,11 +60,7 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [hasChanges, setHasChanges] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const {
-    changePassword,
-    serviceReachable: authReachable,
-    connectWithAuth,
-  } = useAuth();
+  const { changePassword } = useAuth();
   const { setTheme, setLocale, setTimezone } = useApp();
   const [oldPwd, setOldPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
@@ -77,6 +73,7 @@ export default function Settings() {
     checkSetup,
     deployMode: currentMode,
     connected: currentConnected,
+    reconnect,
   } = useSetup();
   const [switchMode, setSwitchMode] = useState<"pc" | "server">("pc");
   const [switchRemoteUrl, setSwitchRemoteUrl] = useState("");
@@ -248,7 +245,7 @@ export default function Settings() {
     setReconnectLoading(true);
     setReconnectError("");
     try {
-      await connectWithAuth(reconnectUser, reconnectPwd);
+      await reconnect(reconnectUser, reconnectPwd);
       setReconnectUser("");
       setReconnectPwd("");
       await checkSetup();

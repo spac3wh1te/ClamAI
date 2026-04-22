@@ -1,39 +1,20 @@
 import React, { useState } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
-import {
-  Wifi,
-  WifiOff,
-  Loader2,
-  CheckCircle,
-  XCircle,
-  User,
-  Lock,
-  X,
-} from "lucide-react";
-import { useAuth } from "../context/AuthContext";
+import { Wifi, WifiOff, Loader2, User, Lock, X } from "lucide-react";
 import { useSetup } from "../context/SetupContext";
 
-interface ProxyTestResult {
-  success: boolean;
-  message: string;
-}
-
 export default function ConnectBanner() {
-  const { serviceReachable, setServiceReachable, connectWithAuth } = useAuth();
-  const { deployMode, connected } = useSetup();
+  const { deployMode, reconnect } = useSetup();
   const [showDialog, setShowDialog] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  if (serviceReachable && connected) return null;
-
   const handleConnect = async () => {
     setLoading(true);
     setError("");
     try {
-      await connectWithAuth(username, password);
+      await reconnect(username, password);
       setShowDialog(false);
       setUsername("");
       setPassword("");

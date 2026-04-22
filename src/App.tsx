@@ -46,8 +46,7 @@ const mainRoutes = (
 );
 
 function AppContent() {
-  const { isAuthenticated, isInitialized, initialized, serviceReachable } =
-    useAuth();
+  const { isAuthenticated, isInitialized, initialized } = useAuth();
   const { setupComplete, setupChecked, connected, checkSetup } = useSetup();
 
   if (!isInitialized || !setupChecked) {
@@ -62,17 +61,14 @@ function AppContent() {
     return <SetupWizard onComplete={checkSetup} />;
   }
 
-  const canReachService = serviceReachable && connected;
-
-  if (canReachService && (!initialized || !isAuthenticated)) {
+  if (connected && (!initialized || !isAuthenticated)) {
     return <Login />;
   }
 
-  // Disconnected OR fully authenticated → show main UI
   return (
     <ApiKeySecretsProvider>
       <div className="min-h-screen bg-background text-foreground">
-        {!canReachService && <ConnectBanner />}
+        {!connected && <ConnectBanner />}
         <Layout>{mainRoutes}</Layout>
         <StatusBar />
       </div>

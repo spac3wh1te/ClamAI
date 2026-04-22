@@ -13,13 +13,10 @@ interface AuthContextType {
   isInitialized: boolean;
   initialized: boolean;
   mode: string;
-  serviceReachable: boolean;
   login: (username: string, password: string) => Promise<void>;
   setup: (username: string, password: string) => Promise<void>;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
-  connectWithAuth: (username: string, password: string) => Promise<void>;
-  setServiceReachable: (v: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -31,7 +28,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isInitialized, setIsInitialized] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [mode, setMode] = useState("pc");
-  const [serviceReachable, setServiceReachable] = useState(true);
 
   useEffect(() => {
     checkStatus();
@@ -52,7 +48,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setInitialized(status.initialized);
       setMode(status.mode);
       setIsInitialized(true);
-      setServiceReachable(true);
 
       if (status.mode === "pc" && status.initialized) {
         if (!token) {
@@ -62,7 +57,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.error("Failed to check auth status:", e);
       setIsInitialized(true);
-      setServiceReachable(false);
     }
   };
 
@@ -72,7 +66,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = JSON.parse(data);
       if (result.success && result.token) {
         setToken(result.token);
-        return;
       }
     } catch (_e) {}
   };
@@ -82,7 +75,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = JSON.parse(data);
     if (result.success && result.token) {
       setToken(result.token);
-      setServiceReachable(true);
     } else {
       throw new Error("Login failed");
     }
@@ -94,27 +86,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (result.success && result.token) {
       setToken(result.token);
       setInitialized(true);
-      setServiceReachable(true);
     } else {
       throw new Error("Setup failed");
     }
   }, []);
-
-  const connectWithAuth = useCallback(
-    async (username: string, password: string) => {
-      await invoke("connect_service");
-      await new Promise((r) => setTimeout(r, 2000));
-      const data = await invoke<string>("login_admin", { username, password });
-      const result = JSON.parse(data);
-      if (result.success && result.token) {
-        setToken(result.token);
-        setServiceReachable(true);
-      } else {
-        throw new Error("认证失败");
-      }
-    },
-    [],
-  );
 
   const logout = useCallback(() => {
     setToken(null);
@@ -136,13 +111,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isInitialized,
         initialized,
         mode,
-        serviceReachable,
         login,
         setup: setupAdmin,
         logout,
         changePassword,
-        connectWithAuth,
-        setServiceReachable,
       }}
     >
       {children}
