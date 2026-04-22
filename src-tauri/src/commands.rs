@@ -1587,7 +1587,14 @@ pub async fn get_security_token_stats(state: tauri::State<'_, AppState>, period:
 
 #[tauri::command]
 pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let (url, _auth) = get_proxy_url(&state, "auth/status").await?;
+    let config = state.config_manager.lock().await.get_config();
+    let base_url = match config.service.deploy_mode {
+        DeployMode::PC => format!("https://127.0.0.1:{}", config.gateway.port),
+        DeployMode::Server => config.service.remote_service_url.clone()
+            .unwrap_or_default().trim_end_matches('/').to_string(),
+    };
+    let url = format!("{}/api/v1/auth/status", base_url);
+    drop(config);
     let client = https_client()?;
     let resp = client.get(&url).timeout(std::time::Duration::from_secs(5)).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
@@ -1596,7 +1603,13 @@ pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String
 
 #[tauri::command]
 pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
-    let (url, _auth) = get_proxy_url(&state, "auth/setup").await?;
+    let config = state.config_manager.lock().await.get_config();
+    let base_url = match config.service.deploy_mode {
+        DeployMode::PC => format!("https://127.0.0.1:{}", config.gateway.port),
+        DeployMode::Server => config.service.remote_service_url.clone()
+            .unwrap_or_default().trim_end_matches('/').to_string(),
+    };
+    let url = format!("{}/api/v1/auth/setup", base_url);
     let client = https_client()?;
     let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password})).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
@@ -1622,7 +1635,13 @@ pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, pa
 
 #[tauri::command]
 pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
-    let (url, _auth) = get_proxy_url(&state, "auth/login").await?;
+    let config = state.config_manager.lock().await.get_config();
+    let base_url = match config.service.deploy_mode {
+        DeployMode::PC => format!("https://127.0.0.1:{}", config.gateway.port),
+        DeployMode::Server => config.service.remote_service_url.clone()
+            .unwrap_or_default().trim_end_matches('/').to_string(),
+    };
+    let url = format!("{}/api/v1/auth/login", base_url);
     let client = https_client()?;
     let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password})).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
