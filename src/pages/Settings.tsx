@@ -16,6 +16,7 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { useApp } from "../context/AppContext";
 import { useSetup } from "../context/SetupContext";
+import { User, Lock } from "lucide-react";
 
 interface AppConfig {
   gateway: {
@@ -59,7 +60,11 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [hasChanges, setHasChanges] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const { changePassword } = useAuth();
+  const {
+    changePassword,
+    serviceReachable: authReachable,
+    connectWithAuth,
+  } = useAuth();
   const { setTheme, setLocale, setTimezone } = useApp();
   const [oldPwd, setOldPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
@@ -81,6 +86,10 @@ export default function Settings() {
     useState<ProxyTestResult | null>(null);
   const [connectTesting, setConnectTesting] = useState(false);
   const [showSwitchPanel, setShowSwitchPanel] = useState(false);
+  const [reconnectUser, setReconnectUser] = useState("");
+  const [reconnectPwd, setReconnectPwd] = useState("");
+  const [reconnectLoading, setReconnectLoading] = useState(false);
+  const [reconnectError, setReconnectError] = useState("");
 
   const { data: currentConfig, isLoading } = useQuery<AppConfig>({
     queryKey: ["config"],
@@ -232,11 +241,21 @@ export default function Settings() {
   };
 
   const handleReconnect = async () => {
+    if (!reconnectUser || !reconnectPwd) {
+      setReconnectError("请输入用户名和密码");
+      return;
+    }
+    setReconnectLoading(true);
+    setReconnectError("");
     try {
-      await invoke("connect_service");
+      await connectWithAuth(reconnectUser, reconnectPwd);
+      setReconnectUser("");
+      setReconnectPwd("");
       await checkSetup();
     } catch (e: any) {
-      alert("连接失败: " + (e?.toString() || "未知错误"));
+      setReconnectError(e?.toString?.() || "连接失败");
+    } finally {
+      setReconnectLoading(false);
     }
   };
 
@@ -301,15 +320,7 @@ export default function Settings() {
                   <WifiOff size={14} />
                   <span>断开</span>
                 </button>
-              ) : (
-                <button
-                  onClick={handleReconnect}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-500/10 text-green-500 rounded-lg hover:bg-green-500/20 transition-colors"
-                >
-                  <Wifi size={14} />
-                  <span>重连</span>
-                </button>
-              )}
+              ) : null}
               <button
                 onClick={() => setShowSwitchPanel(!showSwitchPanel)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors"
@@ -319,6 +330,73 @@ export default function Settings() {
               </button>
             </div>
           </div>
+          {!currentConnected && (
+            <div className="border border-border rounded-lg p-4 bg-secondary/30 space-y-4">
+              <h3 className="text-sm font-medium">连接服务</h3>
+              <p className="text-xs text-muted-foreground">
+                输入用户名和密码连接到后端服务
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    用户名
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={reconnectUser}
+                      onChange={(e) => setReconnectUser(e.target.value)}
+                      className="w-full pl-10 pr-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      placeholder="admin"
+                      autoComplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">密码</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <input
+                      type="password"
+                      value={reconnectPwd}
+                      onChange={(e) => setReconnectPwd(e.target.value)}
+                      className="w-full pl-10 pr-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      placeholder="输入密码"
+                      onKeyDown={(e) => {
+                        if (
+                          e.key === "Enter" &&
+                          reconnectUser &&
+                          reconnectPwd &&
+                          !reconnectLoading
+                        ) {
+                          handleReconnect();
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+              {reconnectError && (
+                <div className="p-2 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">
+                  {reconnectError}
+                </div>
+              )}
+              <button
+                onClick={handleReconnect}
+                disabled={!reconnectUser || !reconnectPwd || reconnectLoading}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {reconnectLoading && (
+                  <Loader2 size={14} className="animate-spin" />
+                )}
+                <Wifi size={14} />
+                <span>{reconnectLoading ? "连接中..." : "连接"}</span>
+              </button>
+            </div>
+          )}
           {showSwitchPanel && (
             <div className="border border-border rounded-lg p-4 bg-secondary/30 space-y-4">
               <div className="grid grid-cols-2 gap-3">

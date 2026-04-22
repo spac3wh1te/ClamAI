@@ -15,6 +15,7 @@ import SetupWizard from "./pages/SetupWizard";
 
 import Layout from "./components/Layout";
 import StatusBar from "./components/StatusBar";
+import ConnectBanner from "./components/ConnectBanner";
 import { ApiKeySecretsProvider } from "./context/ApiKeySecretsContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AppProvider } from "./context/AppContext";
@@ -25,13 +26,29 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 1000 * 60 * 5,
       gcTime: 1000 * 60 * 30,
+      retry: 1,
     },
   },
 });
 
+const mainRoutes = (
+  <Routes>
+    <Route path="/" element={<Dashboard />} />
+    <Route path="/providers" element={<Providers />} />
+    <Route path="/models" element={<Models />} />
+    <Route path="/api-keys" element={<ApiKeys />} />
+    <Route path="/settings" element={<Settings />} />
+    <Route path="/logs" element={<Logs />} />
+    <Route path="/security" element={<Security />} />
+    <Route path="/security-square" element={<SecuritySquare />} />
+    <Route path="/rate-limit" element={<RateLimit />} />
+  </Routes>
+);
+
 function AppContent() {
-  const { isAuthenticated, isInitialized, initialized } = useAuth();
-  const { setupComplete, setupChecked, checkSetup } = useSetup();
+  const { isAuthenticated, isInitialized, initialized, serviceReachable } =
+    useAuth();
+  const { setupComplete, setupChecked, connected, checkSetup } = useSetup();
 
   if (!isInitialized || !setupChecked) {
     return (
@@ -45,26 +62,18 @@ function AppContent() {
     return <SetupWizard onComplete={checkSetup} />;
   }
 
-  if (!initialized || !isAuthenticated) {
+  const canReachService = serviceReachable && connected;
+
+  if (canReachService && (!initialized || !isAuthenticated)) {
     return <Login />;
   }
 
+  // Disconnected OR fully authenticated → show main UI
   return (
     <ApiKeySecretsProvider>
       <div className="min-h-screen bg-background text-foreground">
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/providers" element={<Providers />} />
-            <Route path="/models" element={<Models />} />
-            <Route path="/api-keys" element={<ApiKeys />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/security" element={<Security />} />
-            <Route path="/security-square" element={<SecuritySquare />} />
-            <Route path="/rate-limit" element={<RateLimit />} />
-          </Routes>
-        </Layout>
+        {!canReachService && <ConnectBanner />}
+        <Layout>{mainRoutes}</Layout>
         <StatusBar />
       </div>
     </ApiKeySecretsProvider>
