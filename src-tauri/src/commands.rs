@@ -370,6 +370,7 @@ pub async fn restart_proxy_service(state: tauri::State<'_, AppState>) -> Result<
 pub struct ProxyTestResult {
     pub success: bool,
     pub message: String,
+    pub initialized: Option<bool>,
 }
 
 #[tauri::command]
@@ -766,7 +767,7 @@ fn https_client() -> Result<reqwest::Client, String> {
     Ok(client)
 }
 
-fn https_client_for_url(remote_url: &str) -> Result<reqwest::Client, String> {
+pub(crate) fn https_client_for_url(remote_url: &str) -> Result<reqwest::Client, String> {
     let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let local_cert_path = exe_path.parent().unwrap_or(std::path::Path::new(".")).join("clamai-cert.pem");
 
@@ -1963,20 +1964,32 @@ pub async fn check_service_connection(
     match resp {
         Ok(r) => {
             if r.status().is_success() {
+                let body = r.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+                let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("解析JSON失败: {}", e))?;
+                let initialized = parsed.get("initialized").and_then(|v| v.as_bool());
                 Ok(ProxyTestResult {
                     success: true,
                     message: "服务连接成功".to_string(),
+                    initialized,
+                })
+            } else if r.status() == 401 || r.status() == 403 {
+                Ok(ProxyTestResult {
+                    success: false,
+                    message: "服务需要认证".to_string(),
+                    initialized: Some(false),
                 })
             } else {
                 Ok(ProxyTestResult {
                     success: false,
                     message: format!("服务返回状态码: {}", r.status()),
+                    initialized: None,
                 })
             }
         }
         Err(e) => Ok(ProxyTestResult {
             success: false,
             message: format!("连接失败: {}", e),
+            initialized: None,
         }),
     }
 }
@@ -2015,6 +2028,54 @@ pub async fn complete_setup(
 pub async fn connect_service(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut service_manager = state.service_manager.lock().await;
     service_manager.start_proxy_service().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn init_remote_server(
+    state: tauri::State<'_, AppState>,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    let config = state.config_manager.lock().await.get_config();
+    let remote_url = config.service.remote_service_url
+        .as_ref()
+        .ok_or_else(|| "未配置远程服务地址".to_string())?
+        .trim_end_matches('/');
+
+    let client = https_client_for_url(remote_url)?;
+    let url = format!("{}/api/v1/auth/setup", remote_url);
+    let body = serde_json::json!({"username": username, "password": password});
+    let resp = client.post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(format!("远程服务初始化失败 ({}): {}", status, msg));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {}", e))?;
+    let access_token = body.get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "响应中缺少access_token".to_string())?;
+    let refresh_token = body.get("refresh_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "响应中缺少refresh_token".to_string())?;
+
+    let mut store = state.token_store.lock().await;
+    store.tokens = Some(crate::TokenPair {
+        access_token: access_token.to_string(),
+        refresh_token: refresh_token.to_string(),
+        expires_at: chrono::Utc::now() + chrono::Duration::seconds(
+            body.get("expires_in").and_then(|v| v.as_i64()).unwrap_or(7200)
+        ),
+    });
+    tracing::info!("[init_remote_server] 远程服务器初始化成功");
+    Ok(())
 }
 
 #[tauri::command]

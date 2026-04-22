@@ -17,6 +17,7 @@ import {
 interface ProxyTestResult {
   success: boolean;
   message: string;
+  initialized?: boolean;
 }
 
 interface SetupWizardProps {
@@ -34,6 +35,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [testing, setTesting] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [error, setError] = useState("");
+  const [remoteUsername, setRemoteUsername] = useState("");
+  const [remotePassword, setRemotePassword] = useState("");
+  const [remoteConfirmPassword, setRemoteConfirmPassword] = useState("");
+  const [remoteInitError, setRemoteInitError] = useState("");
 
   const testConnection = async (url: string) => {
     setTesting(true);
@@ -250,6 +255,93 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                       支持带端口的地址，例如 https://192.168.1.100:8080
                     </p>
                   </div>
+
+                  {testResult?.initialized === false && (
+                    <div className="mt-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                      <p className="text-sm font-medium mb-3">
+                        首次使用，需要初始化远程服务器管理员
+                      </p>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            用户名
+                          </label>
+                          <input
+                            type="text"
+                            value={remoteUsername}
+                            onChange={(e) => setRemoteUsername(e.target.value)}
+                            className="w-full px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="admin"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            密码
+                          </label>
+                          <input
+                            type="password"
+                            value={remotePassword}
+                            onChange={(e) => setRemotePassword(e.target.value)}
+                            className="w-full px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="至少6个字符"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            确认密码
+                          </label>
+                          <input
+                            type="password"
+                            value={remoteConfirmPassword}
+                            onChange={(e) =>
+                              setRemoteConfirmPassword(e.target.value)
+                            }
+                            className="w-full px-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="再次输入密码"
+                          />
+                        </div>
+                        {remoteInitError && (
+                          <div className="text-sm text-red-500">
+                            {remoteInitError}
+                          </div>
+                        )}
+                        <button
+                          onClick={async () => {
+                            setRemoteInitError("");
+                            if (remotePassword.length < 6) {
+                              setRemoteInitError("密码至少6个字符");
+                              return;
+                            }
+                            if (remotePassword !== remoteConfirmPassword) {
+                              setRemoteInitError("两次密码不一致");
+                              return;
+                            }
+                            try {
+                              await invoke("init_remote_server", {
+                                username: remoteUsername,
+                                password: remotePassword,
+                              });
+                              const result = await invoke<ProxyTestResult>(
+                                "check_service_connection",
+                                {
+                                  serviceUrl: remoteUrl,
+                                },
+                              );
+                              setTestResult(result);
+                            } catch (e: any) {
+                              setRemoteInitError(
+                                e?.toString?.() || "初始化失败",
+                              );
+                            }
+                          }}
+                          disabled={!remoteUsername || !remotePassword}
+                          className="w-full py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors text-sm"
+                        >
+                          初始化远程服务器
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
