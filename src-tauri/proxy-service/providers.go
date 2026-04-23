@@ -221,11 +221,29 @@ func normalizeResponse(body []byte) []byte {
 	return result
 }
 
-func doProxy(w http.ResponseWriter, proxyReq *http.Request) {
-	client := newHTTPClient("")
-	if proxyURL := getProxy(); proxyURL != nil {
-		client = newHTTPClient(proxyURL.String())
+var (
+	sharedDirectClient *http.Client
+	sharedProxyClient  *http.Client
+	clientOnce         sync.Once
+)
+
+func getSharedClient() *http.Client {
+	clientOnce.Do(func() {
+		sharedDirectClient = newHTTPClient("")
+		if proxyURL := getProxy(); proxyURL != nil {
+			sharedProxyClient = newHTTPClient(proxyURL.String())
+		} else {
+			sharedProxyClient = sharedDirectClient
+		}
+	})
+	if getProxy() != nil {
+		return sharedProxyClient
 	}
+	return sharedDirectClient
+}
+
+func doProxy(w http.ResponseWriter, proxyReq *http.Request) {
+	client := getSharedClient()
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		http.Error(w, "Failed to send request: "+err.Error(), http.StatusBadGateway)
@@ -455,7 +473,7 @@ func (p *DeepSeekProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) 
 	proxyOpenAIRequest(p.baseURL, p.apiKey)(w, r)
 }
 
-// ==================== MiniMax提供商 (字节跳动) ====================
+// ==================== MiniMax提供商 ====================
 type MiniMaxProvider struct {
 	name          string
 	baseURL       string

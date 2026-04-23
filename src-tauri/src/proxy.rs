@@ -77,8 +77,6 @@ impl ProxyService {
             })?;
 
         tracing::info!("[ProxyService] spawn成功，获取到child id");
-        tracing::info!("[ProxyService] 等待2秒让代理服务完全启动...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         tracing::info!("[ProxyService] 启动流程完成");
 
         Ok(child)

@@ -134,6 +134,38 @@ impl ServiceManager {
         *process_guard = Some(child);
         tracing::info!("[ServiceManager] 进程句柄已保存");
 
+        let service_url = format!("https://127.0.0.1:{}", gateway.port);
+        let health_url = format!("{}/health", service_url);
+        tracing::info!("[ServiceManager] 等待代理服务健康检查: {}", health_url);
+
+        let client = crate::commands::https_client_for_url(&service_url)
+            .map_err(|e| ClamAIError::ProxyService(format!("创建HTTP客户端失败: {}", e)))?;
+
+        let mut healthy = false;
+        for attempt in 1..=30 {
+            match timeout(Duration::from_secs(2), client.get(&health_url).send()).await {
+                Ok(Ok(resp)) if resp.status().is_success() => {
+                    tracing::info!("[ServiceManager] 健康检查通过 (attempt {})", attempt);
+                    healthy = true;
+                    break;
+                }
+                Ok(Ok(resp)) => {
+                    tracing::debug!("[ServiceManager] 健康检查返回状态: {} (attempt {})", resp.status(), attempt);
+                }
+                Ok(Err(e)) => {
+                    tracing::debug!("[ServiceManager] 健康检查连接失败: {} (attempt {})", e, attempt);
+                }
+                Err(_) => {
+                    tracing::debug!("[ServiceManager] 健康检查超时 (attempt {})", attempt);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        if !healthy {
+            tracing::warn!("[ServiceManager] 代理服务健康检查未通过，但进程已启动，继续执行");
+        }
+
         let mut stats = self.stats.lock().await;
         stats.start_time = Some(chrono::Utc::now());
 

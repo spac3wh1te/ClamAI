@@ -223,6 +223,11 @@ func dbGetAlerts(limit, offset int, resolved *int) ([]map[string]interface{}, in
 
 func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Analysis") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		secConfigMu.Lock()
 		cfg := secConfig
 		secConfigMu.Unlock()
@@ -252,6 +257,12 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 		apiKey := extractAPIKeyFromRequest(r)
 		clientIP := getClientIP(r)
 		reqModel := getStr(reqMap, "model")
+		reqProvider := ""
+		if reqModel != "" {
+			if idx := strings.Index(reqModel, ":"); idx > 0 {
+				reqProvider = reqModel[:idx]
+			}
+		}
 		inputContent := ""
 		if reqMap != nil {
 			inputContent = extractContentFromRequest(reqMap)
@@ -271,7 +282,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 					}
 					dbInsertAlert(alert)
 					if cfg.Input.Mode == "block" {
-						dbInsertBlockedLog(reqModel, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), fmt.Sprintf("input keyword blocked: %s", kw))
+						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), fmt.Sprintf("input keyword blocked: %s", kw))
 						sendBlockResponse(w, cfg.BlockMessage)
 						return
 					}
@@ -296,7 +307,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 								}
 								dbInsertAlert(alert)
 							}
-							dbInsertBlockedLog(reqModel, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), "input semantic blocked")
+							dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), "input semantic blocked")
 							autoAddBlockedSample(truncate(inputContent, 500), "input_semantic")
 							sendBlockResponse(w, cfg.BlockMessage)
 							return
@@ -321,7 +332,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 							APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "block",
 						}
 						dbInsertAlert(alert)
-						dbInsertBlockedLog(reqModel, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), "input vector blocked")
+						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), "input vector blocked")
 						autoAddBlockedSample(truncate(inputContent, 500), "input_vector")
 						sendBlockResponse(w, cfg.BlockMessage)
 						return

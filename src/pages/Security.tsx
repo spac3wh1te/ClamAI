@@ -94,6 +94,11 @@ export default function Security() {
     staleTime: 0,
   });
 
+  const { data: proxyModels } = useQuery({
+    queryKey: ["proxy-models"],
+    queryFn: () => invoke<string[]>("get_proxy_models"),
+  });
+
   const { data: alertsData } = useQuery({
     queryKey: ["security-alerts"],
     queryFn: async () => {
@@ -516,17 +521,22 @@ export default function Security() {
             </div>
             <div>
               <label className="text-sm font-medium">研判模型</label>
-              <input
-                type="text"
+              <select
                 value={cfg.semantic_model}
                 onChange={(e) =>
                   updateDraft({ semantic_model: e.target.value })
                 }
-                placeholder="例如: siliconflow:deepseek-ai/DeepSeek-V3"
                 className="w-full mt-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
+              >
+                <option value="">选择研判模型...</option>
+                {(proxyModels || []).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
               <p className="text-xs text-muted-foreground mt-1">
-                使用已配置的提供商中的模型，格式: provider:model-name
+                使用已配置的提供商中的模型
               </p>
             </div>
             <div>

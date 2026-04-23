@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
@@ -35,7 +35,7 @@ interface ProviderConfig {
   base_url: string;
   enabled: boolean;
   disabled_models?: string[];
-  api_keys: Array<{ id: string; key_hash: string; is_active: boolean }>;
+  api_keys: Array<{ id: string; key_value: string; is_active: boolean }>;
   models: string[];
 }
 
@@ -121,7 +121,7 @@ export default function ApiKeys() {
     queryKey: ["proxy-models"],
     queryFn: () => invoke<string[]>("get_proxy_models"),
     enabled: testMode === "proxy",
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: keysData, isLoading } = useQuery({
@@ -140,12 +140,18 @@ export default function ApiKeys() {
 
   const keys = keysData?.keys || [];
 
+  const editingKeyIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (editingKeyId) {
+    if (editingKeyId && editingKeyId !== editingKeyIdRef.current) {
       const key = keys.find((k) => k.id === editingKeyId);
       if (key) {
-        setEditingAllowedModels(key.allowed_models || []);
+        setEditingAllowedModels([...(key.allowed_models || [])]);
+        editingKeyIdRef.current = editingKeyId;
       }
+    }
+    if (!editingKeyId) {
+      editingKeyIdRef.current = null;
     }
   }, [editingKeyId, keys]);
 
@@ -192,8 +198,8 @@ export default function ApiKeys() {
       id: string;
       allowedModels: string[];
     }) => invoke("update_api_key", { id, allowedModels }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] });
       setEditingKeyId(null);
       setEditingAllowedModels([]);
     },
@@ -216,7 +222,7 @@ export default function ApiKeys() {
         const provider = providers?.find((p) => p.id === testProviderId);
         if (!provider) throw new Error("请选择提供商");
         const apiKey =
-          provider.api_keys.find((k) => k.is_active)?.key_hash || "";
+          provider.api_keys.find((k) => k.is_active)?.key_value || "";
         if (!apiKey) throw new Error("该提供商没有配置API Key");
         if (!testModel) throw new Error("请选择模型");
 
@@ -322,13 +328,28 @@ export default function ApiKeys() {
     if (allowedModelsForKey.length === 0) return true;
     return allowedModelsForKey.includes(model);
   });
+  console.log(
+    "[DIAG-MODELS] proxyModels raw:",
+    proxyModels?.length,
+    proxyModels?.slice(0, 5),
+  );
+  console.log(
+    "[DIAG-MODELS] testProxyKey:",
+    testProxyKey,
+    "selectedApiKey:",
+    selectedApiKey?.id,
+    "allowedModelsForKey:",
+    allowedModelsForKey,
+  );
+  console.log(
+    "[DIAG-MODELS] proxyModelsList after filter:",
+    proxyModelsList.length,
+    proxyModelsList.slice(0, 5),
+  );
 
   const editingModelsList = (() => {
-    const key = keys.find((k) => k.id === editingKeyId);
-    const allowed = key?.allowed_models || [];
-    const allFromConfig = allAvailableModels;
-    const allowedSet = new Set(allowed);
-    return allFromConfig.map((model) => ({
+    const allowedSet = new Set(editingAllowedModels);
+    return allAvailableModels.map((model) => ({
       id: model.id,
       name: model.name,
       provider: model.provider,
@@ -338,22 +359,20 @@ export default function ApiKeys() {
 
   const isModelDisabled = (modelName: string, providerId?: string) => {
     let actualModel = modelName;
+    let providerType: string | undefined;
     if (!providerId) {
-      if (testMode === "proxy" && modelName.includes(":")) {
+      if (modelName.includes(":")) {
         const parts = modelName.split(":");
         if (parts.length === 2) {
-          providerId = parts[0];
+          providerType = parts[0];
           actualModel = parts[1];
-        }
-      } else if (testMode === "direct" && modelName.includes("/")) {
-        const parts = modelName.split("/");
-        if (parts.length >= 2) {
-          actualModel = parts[parts.length - 1];
         }
       }
     }
     const provider = providers?.find(
-      (p) => p.id === (providerId || testProviderId),
+      (p) =>
+        p.id === (providerId || testProviderId) ||
+        p.provider_type === providerType,
     );
     if (!provider) return false;
     return provider.disabled_models?.includes(actualModel) || false;

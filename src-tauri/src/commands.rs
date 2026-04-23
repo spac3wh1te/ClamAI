@@ -24,6 +24,11 @@ pub async fn save_config(
 
 #[tauri::command]
 pub async fn reset_config(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut service_manager = state.service_manager.lock().await;
+        let _ = service_manager.stop_proxy_service().await;
+    }
+
     let default_config = crate::config::AppConfig {
         version: "1.0.0".to_string(),
         providers: std::collections::HashMap::new(),
@@ -122,7 +127,7 @@ pub async fn test_provider(
 
     let api_key = provider.api_keys.iter()
         .find(|k| k.is_active)
-        .map(|k| k.key_hash.clone())
+        .map(|k| k.key_value.clone())
         .unwrap_or_default();
 
     if api_key.is_empty() {
@@ -167,7 +172,7 @@ pub async fn test_provider(
         }
     }
 
-    match req.send().await {
+    match send_and_log("GET", &test_url, req).await {
         Ok(resp) => {
             let latency = start.elapsed().as_millis() as u64;
             let status = resp.status();
@@ -220,7 +225,7 @@ pub async fn fetch_provider_models(
 
     let api_key = provider.api_keys.iter()
         .find(|k| k.is_active)
-        .map(|k| k.key_hash.clone())
+        .map(|k| k.key_value.clone())
         .unwrap_or_default();
 
     if api_key.is_empty() {
@@ -258,7 +263,7 @@ pub async fn fetch_provider_models(
         }
     }
 
-    let resp = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    let resp = send_and_log("GET", &models_url, req).await.map_err(|e| format!("请求失败: {}", e))?;
     let status = resp.status();
 
     if !status.is_success() {
@@ -387,7 +392,7 @@ pub async fn test_proxy_connectivity(
     if let Some(key) = &auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    let resp = send_and_log("GET", &url, req).await.map_err(|e| format!("请求失败: {}", e))?;
     let result: ProxyTestResult = resp.json().await.map_err(|e| format!("解析响应失败: {}", e))?;
     Ok(result)
 }
@@ -416,9 +421,9 @@ pub async fn get_usage_stats(
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| {
+    let resp = send_and_log("GET", &url, req).await.map_err(|e| {
         tracing::error!("get_usage_stats: HTTP request failed: {}", e);
-        e.to_string()
+        e
     })?;
 
     let status = resp.status();
@@ -484,7 +489,7 @@ pub async fn get_alert_stats(
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = send_and_log("GET", &url, req).await?;
     if resp.status().is_success() {
         let stats: AlertStats = resp.json().await.map_err(|e| e.to_string())?;
         Ok(stats)
@@ -520,7 +525,7 @@ pub async fn check_content_safety(
         req = req.header("Authorization", format!("Bearer {}", key));
     }
     let body = serde_json::json!({ "content": content });
-    let resp = req.json(&body).send().await.map_err(|e| e.to_string())?;
+    let resp = send_and_log("POST", &url, req.json(&body)).await?;
     if resp.status().is_success() {
         let result: ContentSafetyResult = resp.json().await.map_err(|e| e.to_string())?;
         Ok(result)
@@ -599,7 +604,7 @@ pub async fn get_request_logs(
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = send_and_log("GET", &url, req).await?;
     tracing::debug!("get_request_logs: status={}", resp.status());
 
     if resp.status().is_success() {
@@ -607,9 +612,9 @@ pub async fn get_request_logs(
         struct LogsResponse {
             logs: Vec<RequestLog>,
         }
-        let logs_resp: LogsResponse = resp.json().await.map_err(|e| format!("解析失败: {}", e))?;
-        tracing::debug!("get_request_logs: success, got {} logs", logs_resp.logs.len());
-        Ok(logs_resp.logs)
+        let body: LogsResponse = resp.json().await.map_err(|e| format!("解析失败: {}", e))?;
+        tracing::debug!("get_request_logs: success, got {} logs", body.logs.len());
+        Ok(body.logs)
     } else {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
@@ -639,13 +644,54 @@ pub struct RequestLog {
 
 #[tauri::command]
 pub async fn export_logs(
-    _state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, AppState>,
     format: String,
     _start_date: String,
     _end_date: String,
 ) -> Result<String, String> {
-    // 导出日志到文件
-    Ok(format!("导出成功: {}", format))
+    let (url, auth) = get_proxy_url(&state, &format!("stats/logs?limit=10000")).await?;
+    let client = https_client()?;
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(30));
+    if let Some(key) = &auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (status, body_text) = send_and_log_full("GET", &url, req).await?;
+    if status < 200 || status >= 300 {
+        return Err(format!("获取日志失败: HTTP {}", status));
+    }
+    let body: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| format!("解析失败: {}", e))?;
+    let logs = body.get("logs").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    let output = match format.as_str() {
+        "json" => {
+            serde_json::to_string_pretty(&logs).unwrap_or_default()
+        }
+        _ => {
+            let mut csv = String::from("timestamp,provider,model,input_tokens,output_tokens,latency_ms,success,error_message,client_ip\n");
+            for log in &logs {
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{}\n",
+                    log.get("timestamp").and_then(|v| v.as_str()).unwrap_or(""),
+                    log.get("provider").and_then(|v| v.as_str()).unwrap_or(""),
+                    log.get("model").and_then(|v| v.as_str()).unwrap_or(""),
+                    log.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                    log.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                    log.get("latency_ms").and_then(|v| v.as_i64()).unwrap_or(0),
+                    log.get("success").and_then(|v| v.as_bool()).unwrap_or(false),
+                    log.get("error_message").and_then(|v| v.as_str()).unwrap_or("").replace(',', " "),
+                    log.get("client_ip").and_then(|v| v.as_str()).unwrap_or(""),
+                ));
+            }
+            csv
+        }
+    };
+
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe_path.parent().ok_or("无法获取程序目录")?;
+    let filename = format!("logs_export_{}.{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"), format);
+    let file_path = dir.join(&filename);
+    std::fs::write(&file_path, &output).map_err(|e| format!("写入文件失败: {}", e))?;
+    Ok(file_path.to_string_lossy().to_string())
 }
 
 // ==================== API Key管理命令 ====================
@@ -689,10 +735,10 @@ async fn ensure_server_token(state: &tauri::State<'_, AppState>) -> Result<(), S
     let url = format!("{}/api/v1/auth/refresh", base_url.trim_end_matches('/'));
     let client = https_client_for_url(&base_url)?;
 
-    let resp = client.post(&url)
+    let resp = send_and_log("POST", &url, client.post(&url)
         .json(&serde_json::json!({ "refresh_token": refresh_token }))
-        .timeout(std::time::Duration::from_secs(10))
-        .send().await
+        .timeout(std::time::Duration::from_secs(10)))
+        .await
         .map_err(|e| format!("Refresh failed: {}", e))?;
 
     let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
@@ -724,7 +770,7 @@ async fn get_proxy_url(state: &tauri::State<'_, AppState>, path: &str) -> Result
     let url = format!("{}/api/v1/{}", base_url.trim_end_matches('/'), path);
     let auth = match config.service.deploy_mode {
         DeployMode::Server => {
-            let _ = ensure_server_token(state).await;
+            ensure_server_token(state).await.map_err(|e| format!("AUTH_EXPIRED: {}", e))?;
             get_server_access_token(state).await
         }
         DeployMode::PC => None,
@@ -738,12 +784,40 @@ async fn get_proxy_url_no_prefix(state: &tauri::State<'_, AppState>, path: &str)
     let url = format!("{}/{}", base_url.trim_end_matches('/'), path);
     let auth = match config.service.deploy_mode {
         DeployMode::Server => {
-            let _ = ensure_server_token(state).await;
+            ensure_server_token(state).await.map_err(|e| format!("AUTH_EXPIRED: {}", e))?;
             get_server_access_token(state).await
         }
         DeployMode::PC => None,
     };
     Ok((url, auth))
+}
+
+fn log_http_response(method: &str, url: &str, status: u16, body: &str) {
+    let truncated = if body.len() > 50000 { &body[..50000] } else { body };
+    tracing::info!("[HTTP] <-- {} {} {} body={}", method, url, status, truncated);
+}
+
+async fn send_and_log(method: &str, url: &str, req: reqwest::RequestBuilder) -> Result<reqwest::Response, String> {
+    tracing::info!("[HTTP] --> {} {}", method, url);
+    let resp = req.send().await.map_err(|e| {
+        tracing::warn!("[HTTP] <-- {} {} ERROR: {}", method, url, e);
+        e.to_string()
+    })?;
+    let status = resp.status().as_u16();
+    tracing::info!("[HTTP] <-- {} {} {}", method, url, status);
+    Ok(resp)
+}
+
+async fn send_and_log_full(method: &str, url: &str, req: reqwest::RequestBuilder) -> Result<(u16, String), String> {
+    tracing::info!("[HTTP] --> {} {}", method, url);
+    let resp = req.send().await.map_err(|e| {
+        tracing::warn!("[HTTP] <-- {} {} ERROR: {}", method, url, e);
+        e.to_string()
+    })?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    log_http_response(method, url, status, &body);
+    Ok((status, body))
 }
 
 fn https_client() -> Result<reqwest::Client, String> {
@@ -802,17 +876,13 @@ async fn sync_provider_key_internal(state: &tauri::State<'_, AppState>, provider
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    tracing::debug!("sync_provider_key_internal: status={}", resp.status());
-
-    if resp.status().is_success() {
+    let (status, body_text) = send_and_log_full("PUT", &url, req).await?;
+    if status >= 200 && status < 300 {
         tracing::info!("sync_provider_key_internal: successfully synced provider {}", provider_name);
         Ok(())
     } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        tracing::warn!("sync_provider_key_internal: failed status={}, body={}", status, body);
-        Err(format!("同步提供商密钥失败: HTTP {} - {}", status, body))
+        tracing::warn!("sync_provider_key_internal: failed status={}, body={}", status, body_text);
+        Err(format!("同步提供商密钥失败: HTTP {} - {}", status, body_text))
     }
 }
 
@@ -835,7 +905,7 @@ async fn proxy_request(state: &tauri::State<'_, AppState>, method: &str, path: &
         req_builder
     };
 
-    req_builder.send().await.map_err(|e| e.to_string())
+    send_and_log(method, &url, req_builder).await
 }
 
 #[tauri::command]
@@ -849,7 +919,7 @@ pub async fn list_api_keys(state: tauri::State<'_, AppState>) -> Result<serde_js
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = send_and_log("GET", &url, req).await?;
     tracing::debug!("list_api_keys: status={}", resp.status());
 
     if resp.status().is_success() {
@@ -874,18 +944,14 @@ pub async fn create_api_key(state: tauri::State<'_, AppState>, name: String, all
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    tracing::debug!("create_api_key: status={}", resp.status());
-
-    if resp.status().is_success() {
-        let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let (status, body_text) = send_and_log_full("POST", &url, req).await?;
+    if status >= 200 && status < 300 {
+        let data: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| e.to_string())?;
         tracing::debug!("create_api_key: success, id={}", data.get("id").map(|v| v.to_string()).unwrap_or_default());
         Ok(data)
     } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        tracing::warn!("create_api_key: failed status={}, body={}", status, body);
-        Err(format!("创建失败: HTTP {} - {}", status, body))
+        tracing::warn!("create_api_key: failed status={}, body={}", status, body_text);
+        Err(format!("创建失败: HTTP {} - {}", status, body_text))
     }
 }
 
@@ -903,11 +969,9 @@ pub async fn update_api_key(state: tauri::State<'_, AppState>, id: String, allow
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("更新失败: HTTP {} - {}", status, body));
+    let (status, body_text) = send_and_log_full("PUT", &url, req).await?;
+    if status < 200 || status >= 300 {
+        return Err(format!("更新失败: HTTP {} - {}", status, body_text));
     }
     Ok(())
 }
@@ -923,13 +987,11 @@ pub async fn delete_api_key(state: tauri::State<'_, AppState>, id: String) -> Re
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    tracing::debug!("delete_api_key: status={}", resp.status());
-
-    if resp.status().is_success() {
+    let (status, _body_text) = send_and_log_full("DELETE", &url, req).await?;
+    if status >= 200 && status < 300 {
         Ok(())
     } else {
-        Err(format!("删除失败: HTTP {}", resp.status()))
+        Err(format!("删除失败: HTTP {}", status))
     }
 }
 
@@ -944,22 +1006,12 @@ pub async fn get_api_key(state: tauri::State<'_, AppState>, id: String) -> Resul
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    tracing::debug!("get_api_key: status={}", resp.status());
-
-    if resp.status().is_success() {
-        let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        let masked_key = data.get("key").map(|v| {
-            let s = v.as_str().unwrap_or("");
-            if s.len() > 8 { format!("{}...{}", &s[..4], &s[s.len()-4..]) } else { s.to_string() }
-        }).unwrap_or_default();
-        tracing::debug!("get_api_key: success, masked_key={}", masked_key);
+    let (status, body_text) = send_and_log_full("GET", &url, req).await?;
+    if status >= 200 && status < 300 {
+        let data: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| e.to_string())?;
         Ok(data)
     } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        tracing::warn!("get_api_key: failed status={}, body={}", status, body);
-        Err(format!("获取密钥失败: HTTP {} - {}", status, body))
+        Err(format!("获取密钥失败: HTTP {} - {}", status, body_text))
     }
 }
 
@@ -977,17 +1029,14 @@ pub async fn sync_provider_key(state: tauri::State<'_, AppState>, provider_name:
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    tracing::debug!("sync_provider_key: status={}", resp.status());
+    let (status, body_text) = send_and_log_full("PUT", &url, req).await?;
 
-    if resp.status().is_success() {
+    if status >= 200 && status < 300 {
         tracing::info!("sync_provider_key: successfully synced provider {} to proxy", provider_name);
         Ok(())
     } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        tracing::warn!("sync_provider_key: failed status={}, body={}", status, body);
-        Err(format!("同步提供商密钥失败: HTTP {} - {}", status, body))
+        tracing::warn!("sync_provider_key: failed status={}, body={}", status, body_text);
+        Err(format!("同步提供商密钥失败: HTTP {} - {}", status, body_text))
     }
 }
 
@@ -1093,7 +1142,7 @@ pub async fn test_chat_request(
                 tracing::debug!("sync_provider_key: comparing {} with {}", provider_type_str, pname);
                 if provider_type_str == *pname {
                     if let Some(k) = provider.api_keys.iter().find(|k| k.is_active) {
-                        api_key_to_sync = Some(k.key_hash.clone());
+                        api_key_to_sync = Some(k.key_value.clone());
                         tracing::debug!("sync_provider_key: found matching provider {} (id={}) with active key", provider.name, provider.id);
                         break;
                     }
@@ -1124,12 +1173,12 @@ pub async fn test_chat_request(
         let client = https_client()?;
         let body = build_test_body(&model, &message, model_type, &provider_type);
 
-        let resp = client.post(&proxy_url)
-            .timeout(std::time::Duration::from_secs(30))
+        let resp = send_and_log("POST", &proxy_url, client.post(&proxy_url)
+            .timeout(std::time::Duration::from_secs(120))
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send().await;
+            .json(&body))
+            .await;
 
         let latency_ms = start.elapsed().as_millis() as u64;
         match resp {
@@ -1192,13 +1241,13 @@ pub async fn test_chat_request(
             }
             "anthropic" => {
                 let body = build_test_body(&model, &message, model_type, &provider_type);
-                let resp = client.post(format!("{}/v1/messages", base))
-                    .timeout(std::time::Duration::from_secs(30))
+                let resp = send_and_log("POST", &format!("{}/v1/messages", base), client.post(format!("{}/v1/messages", base))
+                    .timeout(std::time::Duration::from_secs(120))
                     .header("x-api-key", &api_key)
                     .header("anthropic-version", "2023-06-01")
                     .header("Content-Type", "application/json")
-                    .json(&body)
-                    .send().await;
+                    .json(&body))
+                    .await;
 
                 let latency_ms = start.elapsed().as_millis() as u64;
                 match resp {
@@ -1243,12 +1292,12 @@ pub async fn test_chat_request(
         };
 
         let body = build_test_body(&model, &message, model_type, &provider_type);
-        let resp = client.post(&chat_url)
-            .timeout(std::time::Duration::from_secs(30))
+        let resp = send_and_log("POST", &chat_url, client.post(&chat_url)
+            .timeout(std::time::Duration::from_secs(120))
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send().await;
+            .json(&body))
+            .await;
 
         let latency_ms = start.elapsed().as_millis() as u64;
         match resp {
@@ -1329,12 +1378,16 @@ fn extract_block_message(resp: &serde_json::Value, status_code: u16) -> String {
 #[tauri::command]
 pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
     let config = state.config_manager.lock().await.get_config();
+    tracing::info!("[DIAG-MODELS] deploy_mode={:?}, providers_count={}", config.service.deploy_mode, config.providers.len());
 
     if config.service.deploy_mode == DeployMode::Server {
         let remote_url = config.service.remote_service_url.clone()
             .unwrap_or_default();
+        let provider_configs = config.providers.clone();
         drop(config);
+        tracing::info!("[DIAG-MODELS] Server mode, remote_url={}", remote_url);
         if remote_url.is_empty() {
+            tracing::warn!("[DIAG-MODELS] remote_url is empty, returning []");
             return Ok(vec![]);
         }
         let remote_url = remote_url.trim_end_matches('/').to_string();
@@ -1346,20 +1399,59 @@ pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<S
         if let Some(token) = auth {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
-        let resp = req.send().await.map_err(|e| format!("请求远程models失败: {}", e))?;
+        let resp = send_and_log("GET", &url, req).await.map_err(|e| {
+            tracing::error!("[DIAG-MODELS] HTTP request to {} failed: {}", url, e);
+            format!("请求远程models失败: {}", e)
+        })?;
         let status = resp.status();
         if !status.is_success() {
-            tracing::warn!("[get_proxy_models] /v1/models returned {}", status);
+            tracing::warn!("[DIAG-MODELS] /v1/models returned {}, returning []", status);
             return Ok(vec![]);
         }
         let body: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {}", e))?;
+        let raw_count = body.get("data").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        tracing::info!("[DIAG-MODELS] Go /v1/models returned {} raw models from data array", raw_count);
+
         let mut all_models: Vec<String> = Vec::new();
+        let mut disabled_count = 0;
         if let Some(data) = body.get("data").and_then(|v| v.as_array()) {
             for m in data {
                 if let Some(id) = m.get("id").and_then(|v| v.as_str()) {
-                    all_models.push(id.to_string());
+                    let parts: Vec<&str> = id.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        let provider_type = parts[0];
+                        let model_name = parts[1];
+                        let mut is_disabled = false;
+                        for (_, pc) in &provider_configs {
+                            if format!("{:?}", pc.provider_type).to_lowercase() == provider_type {
+                                if !pc.enabled {
+                                    is_disabled = true;
+                                    break;
+                                }
+                                if let Some(ref disabled) = pc.disabled_models {
+                                    if disabled.contains(&model_name.to_string()) {
+                                        is_disabled = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if !is_disabled {
+                            all_models.push(id.to_string());
+                        } else {
+                            disabled_count += 1;
+                        }
+                    } else {
+                        all_models.push(id.to_string());
+                    }
                 }
             }
+        }
+        tracing::info!("[DIAG-MODELS] After filter: {} models kept, {} disabled by provider config", all_models.len(), disabled_count);
+        if all_models.len() <= 5 {
+            tracing::info!("[DIAG-MODELS] Final list: {:?}", all_models);
+        } else {
+            tracing::info!("[DIAG-MODELS] First 5: {:?}", &all_models[..5]);
         }
         return Ok(all_models);
     }
@@ -1367,14 +1459,17 @@ pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<S
 
     let manager = state.config_manager.lock().await;
     let providers = manager.get_providers();
+    tracing::info!("[DIAG-MODELS] PC mode, {} providers from config", providers.len());
 
     let mut all_models: Vec<String> = Vec::new();
     for provider in providers {
         if !provider.enabled {
+            tracing::info!("[DIAG-MODELS] SKIP disabled provider {:?}", provider.provider_type);
             continue;
         }
         let provider_name = format!("{:?}", provider.provider_type).to_lowercase();
         let disabled = provider.disabled_models.as_deref().unwrap_or(&[]);
+        tracing::info!("[DIAG-MODELS] Provider {} has {} models, {} disabled", provider_name, provider.models.len(), disabled.len());
         for model in &provider.models {
             if disabled.contains(model) {
                 continue;
@@ -1385,6 +1480,7 @@ pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<S
             }
         }
     }
+    tracing::info!("[DIAG-MODELS] PC mode final: {} models", all_models.len());
     Ok(all_models)
 }
 
@@ -1465,18 +1561,10 @@ pub async fn get_security_config(state: tauri::State<'_, AppState>) -> Result<St
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| {
-        tracing::error!("get_security_config: HTTP request failed: {}", e);
-        e.to_string()
-    })?;
-    let status = resp.status();
-    tracing::info!("get_security_config: HTTP status={}", status);
-    let body = resp.text().await.map_err(|e| {
-        tracing::error!("get_security_config: read body failed: {}", e);
-        e.to_string()
-    })?;
-    tracing::info!("get_security_config: body={}", &body[..body.len().min(500)]);
-    Ok(body)
+    let (status, body_text) = send_and_log_full("GET", &url, req).await?;
+    tracing::info!("get_security_config: status={}", status);
+    tracing::info!("get_security_config: body={}", &body_text[..body_text.len().min(500)]);
+    Ok(body_text)
 }
 
 #[tauri::command]
@@ -1493,9 +1581,9 @@ pub async fn save_security_config(state: tauri::State<'_, AppState>, payload: St
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| {
+    let resp = send_and_log("PUT", &url, req).await.map_err(|e| {
         tracing::error!("save_security_config: HTTP failed: {}", e);
-        e.to_string()
+        e
     })?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
     tracing::info!("save_security_config: response={}", &body[..body.len().min(200)]);
@@ -1512,8 +1600,7 @@ pub async fn get_security_alerts(state: tauri::State<'_, AppState>, limit: Optio
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
     Ok(body)
 }
 
@@ -1525,8 +1612,7 @@ pub async fn resolve_security_alert(state: tauri::State<'_, AppState>, id: u64) 
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("PUT", &url, req).await?;
     Ok(body)
 }
 
@@ -1542,8 +1628,7 @@ pub async fn get_vector_samples(state: tauri::State<'_, AppState>, limit: Option
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
     Ok(body)
 }
 
@@ -1561,8 +1646,7 @@ pub async fn add_vector_sample(state: tauri::State<'_, AppState>, content: Strin
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("POST", &url, req).await?;
     Ok(body)
 }
 
@@ -1574,8 +1658,7 @@ pub async fn delete_vector_sample(state: tauri::State<'_, AppState>, id: u64) ->
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("DELETE", &url, req).await?;
     Ok(body)
 }
 
@@ -1587,8 +1670,7 @@ pub async fn get_vector_config(state: tauri::State<'_, AppState>) -> Result<Stri
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
     Ok(body)
 }
 
@@ -1603,8 +1685,7 @@ pub async fn get_caller_top10(state: tauri::State<'_, AppState>, period: Option<
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
     Ok(body)
 }
 
@@ -1617,8 +1698,7 @@ pub async fn get_security_token_stats(state: tauri::State<'_, AppState>, period:
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
     Ok(body)
 }
 
@@ -1633,8 +1713,7 @@ pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String
     let url = format!("{}/api/v1/auth/status", base_url);
     drop(config);
     let client = https_client()?;
-    let resp = client.get(&url).timeout(std::time::Duration::from_secs(5)).send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, client.get(&url).timeout(std::time::Duration::from_secs(5))).await?;
     Ok(body)
 }
 
@@ -1648,8 +1727,7 @@ pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, pa
     };
     let url = format!("{}/api/v1/auth/setup", base_url);
     let client = https_client()?;
-    let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password})).send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password}))).await?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         if let (Some(at), Some(rt), Some(ei)) = (
@@ -1680,8 +1758,7 @@ pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, pa
     };
     let url = format!("{}/api/v1/auth/login", base_url);
     let client = https_client()?;
-    let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password})).send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password}))).await?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         if let (Some(at), Some(rt), Some(ei)) = (
@@ -1706,8 +1783,7 @@ pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, pa
 pub async fn change_admin_password(state: tauri::State<'_, AppState>, old_password: String, new_password: String) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/change-password").await?;
     let client = https_client()?;
-    let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"old_password": old_password, "new_password": new_password})).send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"old_password": old_password, "new_password": new_password}))).await?;
     Ok(body)
 }
 
@@ -1715,8 +1791,7 @@ pub async fn change_admin_password(state: tauri::State<'_, AppState>, old_passwo
 pub async fn get_admin_token(state: tauri::State<'_, AppState>, password: String) -> Result<String, String> {
     let (url, _auth) = get_proxy_url(&state, "auth/token").await?;
     let client = https_client()?;
-    let resp = client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"password": password})).send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"password": password}))).await?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         if let (Some(at), Some(rt), Some(ei)) = (
@@ -1747,8 +1822,7 @@ pub async fn get_ratelimit_config(state: tauri::State<'_, AppState>) -> Result<S
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
     Ok(body)
 }
 
@@ -1761,8 +1835,7 @@ pub async fn save_ratelimit_config(state: tauri::State<'_, AppState>, payload: S
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("PUT", &url, req).await?;
     Ok(body)
 }
 
@@ -1794,7 +1867,7 @@ pub async fn analyze_user_profile(
             let provider_type_str = format!("{:?}", provider.provider_type).to_lowercase();
             if provider_type_str == provider_name {
                 if let Some(k) = provider.api_keys.iter().find(|k| k.is_active) {
-                    let key_to_sync = k.key_hash.clone();
+                    let key_to_sync = k.key_value.clone();
                     drop(manager);
                     tracing::info!("analyze_user_profile: syncing provider {} key", provider_name);
                     if let Err(e) = sync_provider_key_internal(&state, &provider_name, &key_to_sync).await {
@@ -1822,9 +1895,9 @@ pub async fn analyze_user_profile(
         req = req.header("Authorization", format!("Bearer {}", key));
     }
     tracing::info!("analyze_user_profile: sending request to Go proxy");
-    let resp = req.json(&body).send().await.map_err(|e| {
+    let resp = send_and_log("POST", &url, req.json(&body)).await.map_err(|e| {
         tracing::error!("analyze_user_profile: request failed: {}", e);
-        e.to_string()
+        e
     })?;
     let status = resp.status();
     tracing::info!("analyze_user_profile: got status={}", status);
@@ -1876,7 +1949,7 @@ pub async fn check_skills_content(
             let provider_type_str = format!("{:?}", provider.provider_type).to_lowercase();
             if provider_type_str == provider_name {
                 if let Some(k) = provider.api_keys.iter().find(|k| k.is_active) {
-                    let key_to_sync = k.key_hash.clone();
+                    let key_to_sync = k.key_value.clone();
                     drop(manager);
                     tracing::info!("check_skills_content: syncing provider {} key", provider_name);
                     if let Err(e) = sync_provider_key_internal(&state, &provider_name, &key_to_sync).await {
@@ -1907,9 +1980,9 @@ pub async fn check_skills_content(
         req = req.header("Authorization", format!("Bearer {}", key));
     }
     tracing::info!("check_skills_content: sending request to Go proxy");
-    let resp = req.json(&body).send().await.map_err(|e| {
+    let resp = send_and_log("POST", &url, req.json(&body)).await.map_err(|e| {
         tracing::error!("check_skills_content: request failed: {}", e);
-        e.to_string()
+        e
     })?;
     let status = resp.status();
     tracing::info!("check_skills_content: got status={}", status);
@@ -1972,8 +2045,7 @@ pub async fn get_skills_detection_history(
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
     Ok(body)
 }
 
@@ -2012,9 +2084,8 @@ pub async fn check_service_connection(
 ) -> Result<ProxyTestResult, String> {
     let client = https_client_for_url(&service_url)?;
     let url = format!("{}/api/v1/auth/status", service_url.trim_end_matches('/'));
-    let resp = client.get(&url)
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
+    let resp = send_and_log("GET", &url, client.get(&url)
+        .timeout(std::time::Duration::from_secs(5)))
         .await;
 
     match resp {
@@ -2083,7 +2154,54 @@ pub async fn complete_setup(
 #[tauri::command]
 pub async fn connect_service(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut service_manager = state.service_manager.lock().await;
-    service_manager.start_proxy_service().await.map_err(|e| e.to_string())
+    service_manager.start_proxy_service().await.map_err(|e| e.to_string())?;
+    drop(service_manager);
+
+    sync_all_providers_to_service_inner(&state).await;
+    Ok(())
+}
+
+pub(crate) async fn sync_all_providers_to_service_inner(state: &tauri::State<'_, AppState>) {
+    let base_url = state.service_manager.lock().await.get_service_url();
+    let providers = state.config_manager.lock().await.get_providers();
+    let client = match https_client_for_url(&base_url) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("sync_all_providers: 创建HTTP客户端失败: {}", e);
+            return;
+        }
+    };
+
+    let _ = ensure_server_token(state).await;
+    let auth = get_server_access_token(state).await;
+
+    for provider in providers {
+        if !provider.enabled {
+            continue;
+        }
+        if let Some(api_key) = provider.api_keys.iter().find(|k| k.is_active) {
+            let provider_name = format!("{:?}", provider.provider_type).to_lowercase();
+            let api_key_value = api_key.key_value.clone();
+            let url = format!("{}/api/v1/providers/{}/key", base_url.trim_end_matches('/'), provider_name);
+            let mut req = client.put(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .json(&serde_json::json!({ "api_key": api_key_value }));
+            if let Some(ref token) = auth {
+                req = req.header("Authorization", format!("Bearer {}", token));
+            }
+            match send_and_log("PUT", &url, req).await {
+                Ok(resp) if resp.status().is_success() => {
+                    tracing::info!("同步提供商 {} 密钥成功", provider_name);
+                }
+                Ok(resp) => {
+                    tracing::warn!("同步提供商 {} 密钥失败: HTTP {}", provider_name, resp.status());
+                }
+                Err(e) => {
+                    tracing::warn!("同步提供商 {} 密钥失败: {}", provider_name, e);
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -2101,10 +2219,9 @@ pub async fn init_remote_server(
     let client = https_client_for_url(remote_url)?;
     let url = format!("{}/api/v1/auth/setup", remote_url);
     let body = serde_json::json!({"username": username, "password": password});
-    let resp = client.post(&url)
+    let resp = send_and_log("POST", &url, client.post(&url)
         .json(&body)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
+        .timeout(std::time::Duration::from_secs(10)))
         .await
         .map_err(|e| format!("请求失败: {}", e))?;
 

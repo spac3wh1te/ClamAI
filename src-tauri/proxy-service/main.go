@@ -35,7 +35,7 @@ func initLogging() *os.File {
 	dir := filepath.Dir(exePath)
 	logFile := filepath.Join(dir, "clam-service.log")
 
-	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		log.Fatalf("Failed to open log file: %v", err)
 	}
@@ -303,12 +303,14 @@ func (w *capturingResponseWriter) Flush() {
 }
 
 type ProxyServer struct {
-	config    *Config
-	router    *mux.Router
-	providers map[string]Provider
-	stats     *RequestStats
-	logBuffer *LogBuffer
-	mu        sync.RWMutex
+	config     *Config
+	router     *mux.Router
+	providers  map[string]Provider
+	stats      *RequestStats
+	logBuffer  *LogBuffer
+	mu         sync.RWMutex
+	listenAddr string
+	useTLS     bool
 }
 
 type OpenAIChatRequest struct {
@@ -407,6 +409,10 @@ func main() {
 	}
 
 	log.Printf("[MAIN] Starting HTTP server on %s...", addr)
+
+	proxy.listenAddr = "127.0.0.1:" + config.Port
+	proxy.useTLS = !config.NoSSL
+	log.Printf("[MAIN] Internal callback: %s (TLS=%v)", proxy.listenAddr, proxy.useTLS)
 
 	var tlsConfig *tls.Config
 	if !config.NoSSL {
@@ -633,6 +639,7 @@ func (p *ProxyServer) setupRoutes() {
 	p.setupFrontendRoutes()
 
 	p.router.Use(p.corsMiddleware)
+	p.router.Use(p.apiLoggingMiddleware)
 	p.router.Use(p.rateLimitMiddleware)
 	p.router.Use(p.adminAuthMiddleware)
 	p.router.Use(p.securityMiddleware)
@@ -641,10 +648,17 @@ func (p *ProxyServer) setupRoutes() {
 }
 
 func (p *ProxyServer) periodicSave() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		dbSaveStats(p.stats)
+	saveTicker := time.NewTicker(10 * time.Second)
+	cleanTicker := time.NewTicker(1 * time.Hour)
+	defer saveTicker.Stop()
+	defer cleanTicker.Stop()
+	for {
+		select {
+		case <-saveTicker.C:
+			dbSaveStats(p.stats)
+		case <-cleanTicker.C:
+			dbCleanupLogs()
+		}
 	}
 }
 
@@ -818,15 +832,22 @@ func (p *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 
 func (p *ProxyServer) handleListModels(w http.ResponseWriter, r *http.Request) {
 	var models []ModelInfo
+	providerCount := len(p.providers)
 	for providerName, provider := range p.providers {
-		for _, modelName := range provider.GetModels() {
+		modelList := provider.GetModels()
+		log.Printf("[DIAG-MODELS] Go provider=%s, models_count=%d, models=%v", providerName, len(modelList), modelList)
+		for _, modelName := range modelList {
 			models = append(models, ModelInfo{
-				ID:      fmt.Sprintf("%s/%s", providerName, modelName),
+				ID:      fmt.Sprintf("%s:%s", providerName, modelName),
 				Object:  "model",
 				Created: time.Now().Unix(),
 				OwnedBy: providerName,
 			})
 		}
+	}
+	log.Printf("[DIAG-MODELS] Go /v1/models total: %d models from %d providers", len(models), providerCount)
+	if len(models) == 0 {
+		log.Printf("[DIAG-MODELS] WARNING: no models! p.providers map is empty or all providers have empty model lists")
 	}
 
 	response := ModelList{Object: "list", Data: models}
@@ -933,7 +954,8 @@ func (p *ProxyServer) SetProviderKey(name, apiKey string) error {
 	p.providers[name] = provider
 	log.Printf("[INFO] SetProviderKey: provider %s registered, total providers=%d", name, len(p.providers))
 
-	go provider.FetchModels()
+	provider.FetchModels()
+	log.Printf("[INFO] SetProviderKey: FetchModels done for %s, models=%d", name, len(provider.GetModels()))
 
 	return nil
 }
@@ -1366,29 +1388,26 @@ func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	provider, modelName := p.resolveProvider(req.Model)
-	if provider == nil {
-		log.Printf("[WARN] handleAnalysisChat: provider not in registry, trying known provider fallback for model=%s", req.Model)
-	}
-
-	var baseURL string
-	var resolvedModelName string
-	if provider != nil {
-		baseURL = provider.GetBaseURL()
-		resolvedModelName = modelName
-		log.Printf("[INFO] handleAnalysisChat: resolved to provider=%s, modelName=%s, baseURL=%s",
-			provider.GetName(), modelName, baseURL)
-	} else {
-		baseURL = knownProviderBaseURL(req.Model)
-		if baseURL == "" {
-			log.Printf("[WARN] handleAnalysisChat: no provider found for model=%s", req.Model)
-			http.Error(w, "Unknown provider for model: "+req.Model, http.StatusNotFound)
-			return
+	modelForGateway := req.Model
+	if !strings.Contains(modelForGateway, ":") {
+		provider, _ := p.resolveProvider(modelForGateway)
+		if provider != nil {
+			modelForGateway = provider.GetName() + ":" + modelForGateway
+		} else {
+			for pname, prov := range p.providers {
+				for _, m := range prov.GetModels() {
+					if m == modelForGateway {
+						modelForGateway = pname + ":" + m
+						break
+					}
+				}
+				if strings.Contains(modelForGateway, ":") {
+					break
+				}
+			}
 		}
-		parts := strings.SplitN(req.Model, ":", 2)
-		resolvedModelName = parts[1]
-		log.Printf("[INFO] handleAnalysisChat: using known provider fallback baseURL=%s, modelName=%s", baseURL, resolvedModelName)
 	}
+	log.Printf("[INFO] handleAnalysisChat: type=%s, model=%s, modelForGateway=%s", req.AnalysisType, req.Model, modelForGateway)
 
 	if req.AnalysisType == "user_profile" {
 		apiKeysMu.Lock()
@@ -1400,32 +1419,60 @@ func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		if provider == nil {
-			log.Printf("[WARN] handleAnalysisChat: no provider registered for model=%s, cannot perform analysis", req.Model)
-			http.Error(w, "No provider registered for model: "+req.Model+". Please configure provider API key in settings first.", http.StatusBadRequest)
-			return
-		}
-
-		log.Printf("[INFO] handleAnalysisChat: using gateway key id=%s, provider=%s, model=%s",
-			req.APIKeyID, provider.GetName(), resolvedModelName)
-		p.handleUserProfileAnalysis(w, r, resolvedModelName, baseURL, provider.GetAPIKey(), req.TimeRange, gatewayKey.Key)
+		log.Printf("[INFO] handleAnalysisChat: using gateway key id=%s, model=%s",
+			req.APIKeyID, modelForGateway)
+		p.handleUserProfileAnalysis(w, r, modelForGateway, req.TimeRange, gatewayKey.Key)
 		return
 	}
 
 	if req.AnalysisType == "skills_detection" {
-		if provider == nil {
-			log.Printf("[WARN] handleAnalysisChat: skills_detection requires provider to be registered")
-			http.Error(w, "Skills detection requires provider to be registered in gateway settings", http.StatusBadRequest)
-			return
-		}
-		p.handleSkillsDetection(w, r, resolvedModelName, baseURL, provider.GetAPIKey(), req.SourceType, req.Content, req.APIKeyID)
+		p.handleSkillsDetection(w, r, modelForGateway, req.SourceType, req.Content, req.APIKeyID)
 		return
 	}
 
 	http.Error(w, "Unknown analysis_type", http.StatusBadRequest)
 }
 
-func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.Request, modelName string, baseURL string, providerKey string, timeRange string, gatewayKeyStr string) {
+func (p *ProxyServer) internalChatCompletion(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, []byte, error) {
+	reqBody := map[string]interface{}{
+		"model":       model,
+		"messages":    messages,
+		"temperature": temperature,
+		"max_tokens":  maxTokens,
+	}
+	body, _ := json.Marshal(reqBody)
+
+	scheme := "http"
+	var client *http.Client
+	if p.useTLS {
+		scheme = "https"
+		client = &http.Client{
+			Timeout: 120 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+	} else {
+		client = &http.Client{Timeout: 120 * time.Second}
+	}
+
+	url := fmt.Sprintf("%s://%s/v1/chat/completions", scheme, p.listenAddr)
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Internal-Analysis", "true")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return 0, nil, fmt.Errorf("internal call to %s failed: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, respBody, nil
+}
+
+func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.Request, modelName string, timeRange string, gatewayKeyStr string) {
+	start := time.Now()
 	if gatewayKeyStr == "" {
 		http.Error(w, "gateway API key is required for user profile analysis", http.StatusBadRequest)
 		return
@@ -1445,7 +1492,7 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 		days = 7
 	}
 
-	logs, total := dbGetLogsByAPIKey(gatewayKeyStr, 500)
+	logs, total := dbGetLogsByAPIKey(maskAPIKeyForLog(gatewayKeyStr), 500)
 	log.Printf("[INFO] handleUserProfileAnalysis: gateway_key=%s***, logs_found=%d, total=%d", gatewayKeyStr[:min(8, len(gatewayKeyStr))], len(logs), total)
 
 	var conversationSummary strings.Builder
@@ -1484,40 +1531,59 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 		"  \"recommendations\": [\"建议1\", \"建议2\"]\n" +
 		"}"
 
-	analysisReq := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]interface{}{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": conversationSummary.String()},
-		},
-		"temperature": 0.3,
-		"max_tokens":  1500,
+	messages := []map[string]interface{}{
+		{"role": "system", "content": systemPrompt},
+		{"role": "user", "content": conversationSummary.String()},
 	}
 
-	body, _ := json.Marshal(analysisReq)
-	log.Printf("[INFO] handleUserProfileAnalysis: calling upstream at %s/v1/chat/completions with model=%s, provider_key=%s***, prompt_chars=%d",
-		baseURL, modelName, maskAPIKey(providerKey), len(conversationSummary.String()))
-	client := &http.Client{Timeout: 60 * time.Second}
-	httpReq, _ := http.NewRequest("POST", baseURL+"/v1/chat/completions", bytes.NewReader(body))
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+providerKey)
-
-	resp, err := client.Do(httpReq)
+	log.Printf("[INFO] handleUserProfileAnalysis: calling gateway internally, model=%s, prompt_chars=%d", modelName, len(conversationSummary.String()))
+	statusCode, respBody, err := p.internalChatCompletion(modelName, messages, 0.3, 1500)
 	if err != nil {
-		log.Printf("[ERROR] handleUserProfileAnalysis: upstream call failed: %v", err)
+		log.Printf("[ERROR] handleUserProfileAnalysis: internal call failed: %v", err)
 		http.Error(w, "Failed to call analysis model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
+	log.Printf("[INFO] handleUserProfileAnalysis: gateway responded status=%d, body_len=%d", statusCode, len(respBody))
 
-	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("[INFO] handleUserProfileAnalysis: upstream responded status=%d, body_len=%d", resp.StatusCode, len(respBody))
+	provider, resolvedName := p.resolveProvider(modelName)
+	providerName := ""
+	if provider != nil {
+		providerName = provider.GetName()
+	} else {
+		providerName = modelName
+		if idx := strings.Index(providerName, ":"); idx > 0 {
+			providerName = providerName[:idx]
+		}
+	}
+
+	inputTokens, outputTokens := extractTokensFromBody(respBody)
+	now := time.Now()
+	entry := &RequestLog{
+		Timestamp:       now,
+		Provider:        providerName,
+		Model:           resolvedName,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		LatencyMs:       time.Since(start).Milliseconds(),
+		Success:         statusCode >= 200 && statusCode < 300,
+		ClientIP:        getClientIP(r),
+		APIKeyUsed:      "analysis",
+		StatusCode:      statusCode,
+		Path:            "/analysis/v1/chat/completions",
+		Method:          "POST",
+		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"user_profile","model":"%s"}`, modelName), 10000),
+		ResponseContent: truncateStr(string(respBody), 10000),
+	}
+	p.logBuffer.Add(entry)
+	dbInsertLog(entry)
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(statusCode)
 	w.Write(respBody)
 }
 
-func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Request, modelName string, baseURL string, providerKey string, sourceType, content, apiKeyID string) {
+func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Request, modelName, sourceType, content, apiKeyID string) {
+	start := time.Now()
 	if content == "" {
 		http.Error(w, "content is required for skills detection", http.StatusBadRequest)
 		return
@@ -1557,34 +1623,19 @@ func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Reque
 		"  \"recommendation\": \"处理建议\"\n" +
 		"}"
 
-	analysisReq := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]interface{}{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": analysisContent},
-		},
-		"temperature": 0.2,
-		"max_tokens":  2000,
+	messages := []map[string]interface{}{
+		{"role": "system", "content": systemPrompt},
+		{"role": "user", "content": analysisContent},
 	}
 
-	body, _ := json.Marshal(analysisReq)
-	log.Printf("[INFO] handleSkillsDetection: calling upstream at %s/v1/chat/completions with model=%s, content_chars=%d",
-		baseURL, modelName, len(content))
-	client := &http.Client{Timeout: 60 * time.Second}
-	httpReq, _ := http.NewRequest("POST", baseURL+"/v1/chat/completions", bytes.NewReader(body))
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+providerKey)
-
-	resp, err := client.Do(httpReq)
+	log.Printf("[INFO] handleSkillsDetection: calling gateway internally, model=%s, content_chars=%d", modelName, len(content))
+	statusCode, respBody, err := p.internalChatCompletion(modelName, messages, 0.2, 2000)
 	if err != nil {
-		log.Printf("[ERROR] handleSkillsDetection: upstream call failed: %v", err)
+		log.Printf("[ERROR] handleSkillsDetection: internal call failed: %v", err)
 		http.Error(w, "Failed to call analysis model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("[INFO] handleSkillsDetection: upstream responded status=%d, body_len=%d", resp.StatusCode, len(respBody))
+	log.Printf("[INFO] handleSkillsDetection: gateway responded status=%d, body_len=%d", statusCode, len(respBody))
 
 	var analysisResult map[string]interface{}
 	if json.Unmarshal(respBody, &analysisResult) == nil {
@@ -1614,8 +1665,39 @@ func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	provider, resolvedName := p.resolveProvider(modelName)
+	providerName := ""
+	if provider != nil {
+		providerName = provider.GetName()
+	} else {
+		providerName = modelName
+		if idx := strings.Index(providerName, ":"); idx > 0 {
+			providerName = providerName[:idx]
+		}
+	}
+
+	inputTokens, outputTokens := extractTokensFromBody(respBody)
+	entry := &RequestLog{
+		Timestamp:       time.Now(),
+		Provider:        providerName,
+		Model:           resolvedName,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		LatencyMs:       time.Since(start).Milliseconds(),
+		Success:         statusCode >= 200 && statusCode < 300,
+		ClientIP:        getClientIP(r),
+		APIKeyUsed:      "analysis",
+		StatusCode:      statusCode,
+		Path:            "/analysis/v1/chat/completions",
+		Method:          "POST",
+		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"skills_detection","model":"%s"}`, modelName), 10000),
+		ResponseContent: truncateStr(string(respBody), 10000),
+	}
+	p.logBuffer.Add(entry)
+	dbInsertLog(entry)
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(statusCode)
 	w.Write(respBody)
 }
 
@@ -1758,11 +1840,7 @@ func (p *ProxyServer) resolveProvider(model string) (Provider, string) {
 		}
 		log.Printf("[DEBUG] resolveProvider: provider %s not found in registry", providerName)
 	}
-	if provider, exists := p.GetProvider("openai"); exists {
-		log.Printf("[DEBUG] resolveProvider: falling back to openai")
-		return provider, model
-	}
-	log.Printf("[DEBUG] resolveProvider: no provider found, returning nil")
+	log.Printf("[DEBUG] resolveProvider: no provider found for model %s", model)
 	return nil, ""
 }
 
@@ -1779,6 +1857,42 @@ func (p *ProxyServer) convertAnthropicToOpenAI(req AnthropicMessagesRequest) Ope
 		}
 	}
 	return openAIReq
+}
+
+func (p *ProxyServer) apiLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if !strings.HasPrefix(path, "/api/v1/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		start := time.Now()
+
+		var bodyBytes []byte
+		if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
+			bodyBytes, _ = io.ReadAll(r.Body)
+			r.Body.Close()
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
+
+		log.Printf("[API] --> %s %s from %s", r.Method, path, getClientIP(r))
+		if len(bodyBytes) > 0 {
+			log.Printf("[API] --> Request Body: %s", string(bodyBytes))
+		}
+		log.Printf("[API] --> Headers: %v", r.Header)
+
+		cw := &capturingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(cw, r)
+
+		latency := time.Since(start)
+		log.Printf("[API] <-- %s %s %d %dms", r.Method, path, cw.statusCode, latency.Milliseconds())
+		respBody := cw.body.String()
+		if len(respBody) > 50000 {
+			respBody = respBody[:50000]
+		}
+		log.Printf("[API] <-- Response Body: %s", respBody)
+	})
 }
 
 func (p *ProxyServer) corsMiddleware(next http.Handler) http.Handler {
@@ -1805,9 +1919,14 @@ func (p *ProxyServer) corsMiddleware(next http.Handler) http.Handler {
 
 func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Analysis") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		path := r.URL.Path
 
-		if !strings.HasPrefix(path, "/v1/") {
+		if !strings.HasPrefix(path, "/v1/") || r.Method == "GET" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1821,7 +1940,7 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 		model := extractModelFromBody(bodyBytes)
 		provider := ""
 		if model != "" {
-			if prov, exists := p.GetProvider(model); exists {
+			if prov, _ := p.resolveProvider(model); prov != nil {
 				provider = prov.GetName()
 			} else if strings.Contains(model, ":") {
 				parts := strings.SplitN(model, ":", 2)
@@ -1839,7 +1958,11 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 			if info, exists := apiKeys[apiKeyUsed]; exists && info.Active && len(info.AllowedModels) > 0 {
 				allowed := false
 				for _, m := range info.AllowedModels {
-					if m == model || m == provider+":" || m == "*" {
+					if m == model || m == "*" {
+						allowed = true
+						break
+					}
+					if m == provider+":" || m == provider+":*" {
 						allowed = true
 						break
 					}
@@ -1946,11 +2069,23 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 		log.Printf("%s %s %d %dms in=%d out=%d provider=%s model=%s ip=%s",
 			r.Method, r.URL.Path, cw.statusCode, latencyMs,
 			inputTokens, outputTokens, provider, model, getClientIP(r))
+		log.Printf("[REQUEST BODY] %s %s\n%s", r.Method, r.URL.Path, string(bodyBytes))
+		log.Printf("[REQUEST HEADERS] %s %s\n%v", r.Method, r.URL.Path, r.Header)
+		respBody := cw.body.String()
+		if len(respBody) > 50000 {
+			respBody = respBody[:50000]
+		}
+		log.Printf("[RESPONSE BODY] %s %s %d\n%s", r.Method, r.URL.Path, cw.statusCode, respBody)
 	})
 }
 
 func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Analysis") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		log.Printf("[DEBUG] authMiddleware: path=%s, config.APIKey set=%v", r.URL.Path, p.config.APIKey != "")
 		if r.URL.Path == "/health" || r.URL.Path == "/oauth/callback" {
 			next.ServeHTTP(w, r)
@@ -2098,6 +2233,9 @@ func extractModelFromBody(body []byte) string {
 		return ""
 	}
 	model, _ := req["model"].(string)
+	if len(model) < 2 {
+		return ""
+	}
 	return model
 }
 
@@ -2131,7 +2269,11 @@ func extractTokensFromBody(body []byte) (inputTokens, outputTokens int) {
 func extractAPIKeyFromRequest(r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
-		return strings.TrimPrefix(authHeader, "Bearer ")
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if strings.HasPrefix(token, "eyJ") && strings.Count(token, ".") == 2 {
+			return ""
+		}
+		return token
 	}
 	apiKeyHeader := r.Header.Get("x-api-key")
 	if apiKeyHeader != "" {

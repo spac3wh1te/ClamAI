@@ -46,7 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let log_file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&log_path)?;
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -88,6 +89,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut service_manager = app_state.service_manager.lock().await;
             if let Err(e) = service_manager.start_proxy_service().await {
                 tracing::warn!("自动启动本地服务失败（非致命）: {}", e);
+            } else {
+                drop(service_manager);
+                let providers = app_state.config_manager.lock().await.get_providers();
+                let port = app_state.config_manager.lock().await.get_config().gateway.port;
+                let base_url = format!("https://127.0.0.1:{}", port);
+                let client = crate::commands::https_client_for_url(&base_url);
+                if let Ok(client) = client {
+                    for provider in providers {
+                        if !provider.enabled {
+                            continue;
+                        }
+                        if let Some(api_key) = provider.api_keys.iter().find(|k| k.is_active) {
+                            let provider_name = format!("{:?}", provider.provider_type).to_lowercase();
+                            let api_key_value = api_key.key_value.clone();
+                            let url = format!("{}/api/v1/providers/{}/key", base_url, provider_name);
+                            let client = client.clone();
+                            tokio::spawn(async move {
+                                match client.put(&url)
+                                    .timeout(std::time::Duration::from_secs(5))
+                                    .json(&serde_json::json!({ "api_key": api_key_value }))
+                                    .send().await
+                                {
+                                    Ok(resp) if resp.status().is_success() => {
+                                        tracing::info!("自动同步提供商 {} 密钥成功", provider_name);
+                                    }
+                                    Ok(resp) => {
+                                        tracing::warn!("自动同步提供商 {} 密钥失败: HTTP {}", provider_name, resp.status());
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("自动同步提供商 {} 密钥失败: {}", provider_name, e);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
             }
         } else {
             info!("等待安装向导或手动连接服务...");

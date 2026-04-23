@@ -17,6 +17,7 @@ interface AuthContextType {
   setup: (username: string, password: string) => Promise<void>;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
+  handleAuthExpired: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -80,6 +81,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const handleAuthExpired = useCallback(() => {
+    setToken(null);
+    localStorage.removeItem("clamai_token");
+  }, []);
+
   const setupAdmin = useCallback(async (username: string, password: string) => {
     const data = await invoke<string>("setup_admin", { username, password });
     const result = JSON.parse(data);
@@ -115,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setup: setupAdmin,
         logout,
         changePassword,
+        handleAuthExpired,
       }}
     >
       {children}

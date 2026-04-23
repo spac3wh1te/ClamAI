@@ -16,12 +16,12 @@ interface ProviderConfig {
   id: string;
   name: string;
   provider_type: string;
-  auth_type: "apikey" | "oauth";
+  auth_type: "apikey";
   enabled: boolean;
   base_url: string;
   api_keys: Array<{
     id: string;
-    key_hash: string;
+    key_value: string;
     name: string;
     is_active: boolean;
     created_at: string;
@@ -60,10 +60,10 @@ export default function Providers() {
       const result = await invoke("add_provider", { provider });
       try {
         const activeKey = provider.api_keys.find((k) => k.is_active);
-        if (activeKey && activeKey.key_hash) {
+        if (activeKey && activeKey.key_value) {
           await invoke("sync_provider_key", {
-            providerName: provider.name.toLowerCase(),
-            apiKey: activeKey.key_hash,
+            providerName: provider.provider_type,
+            apiKey: activeKey.key_value,
           });
         }
       } catch (e) {
@@ -87,10 +87,10 @@ export default function Providers() {
       const result = await invoke("update_provider", { provider });
       try {
         const activeKey = provider.api_keys.find((k) => k.is_active);
-        if (activeKey && activeKey.key_hash) {
+        if (activeKey && activeKey.key_value) {
           await invoke("sync_provider_key", {
-            providerName: provider.name.toLowerCase(),
-            apiKey: activeKey.key_hash,
+            providerName: provider.provider_type,
+            apiKey: activeKey.key_value,
           });
         }
       } catch (e) {
@@ -100,6 +100,7 @@ export default function Providers() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
+      queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
       setEditProvider(null);
     },
   });
@@ -108,6 +109,7 @@ export default function Providers() {
     mutationFn: (id: string) => invoke("remove_provider", { id }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
+      queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
     },
   });
 
@@ -126,7 +128,7 @@ export default function Providers() {
       anthropic: "Anthropic",
       gemini: "Google Gemini",
       deepseek: "DeepSeek",
-      minimax: "MiniMax (字节)",
+      minimax: "MiniMax",
       siliconflow: "SiliconFlow",
       glm: "智谱GLM",
       doubao: "字节豆包",
@@ -335,7 +337,7 @@ function AddProviderDialog({
   const [formData, setFormData] = useState({
     name: "",
     provider_type: "openai",
-    auth_type: "apikey" as "apikey" | "oauth",
+    auth_type: "apikey" as const,
     base_url: "https://api.openai.com",
     api_key: "",
     priority: 0,
@@ -386,12 +388,6 @@ function AddProviderDialog({
       models: ["deepseek-chat", "deepseek-coder", "deepseek-chat-v3"],
     },
     {
-      value: "minimax",
-      label: "MiniMax (字节)",
-      baseUrl: "https://api.minimax.chat",
-      models: ["MiniMax-Text-01", "abab6.5s-chat", "abab6.5g-chat"],
-    },
-    {
       value: "siliconflow",
       label: "SiliconFlow",
       baseUrl: "https://api.siliconflow.cn",
@@ -412,29 +408,6 @@ function AddProviderDialog({
       label: "智谱GLM",
       baseUrl: "https://open.bigmodel.cn/api/paas/v4",
       models: ["glm-4", "glm-4-plus", "glm-4v", "glm-3-turbo"],
-    },
-    {
-      value: "doubao",
-      label: "字节豆包",
-      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-      models: [
-        "doubao-e-32k",
-        "doubao-e-16k",
-        "doubao-lite-32k",
-        "doubao-lite-16k",
-      ],
-    },
-    {
-      value: "qwen",
-      label: "阿里通义Qwen",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      models: [
-        "qwen-plus",
-        "qwen-plus-latest",
-        "qwen-turbo",
-        "qwen-turbo-latest",
-        "qwen-max",
-      ],
     },
     {
       value: "moonshot",
@@ -476,7 +449,7 @@ function AddProviderDialog({
           ? [
               {
                 id: Date.now().toString(),
-                key_hash: formData.api_key,
+                key_value: formData.api_key,
                 name: "默认密钥",
                 is_active: true,
                 created_at: now,
@@ -487,16 +460,7 @@ function AddProviderDialog({
           : [],
       models: [],
       disabled_models: [],
-      oauth_config:
-        formData.auth_type === "oauth"
-          ? {
-              provider_type: formData.provider_type,
-              client_id: "",
-              redirect_uri: "http://localhost:8080/oauth/callback",
-              scopes: [],
-              tokens: null,
-            }
-          : null,
+      oauth_config: null,
       rate_limits: null,
       priority: formData.priority,
       created_at: now,
@@ -550,37 +514,6 @@ function AddProviderDialog({
                 </option>
               ))}
             </select>
-          </div>
-
-          {/* 认证方式 */}
-          <div>
-            <label className="block text-sm font-medium mb-1">认证方式</label>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setFormData({ ...formData, auth_type: "apikey" })
-                }
-                className={`flex-1 px-3 py-2 rounded-lg border transition-colors ${
-                  formData.auth_type === "apikey"
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-background border-border hover:bg-secondary"
-                }`}
-              >
-                API Key
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, auth_type: "oauth" })}
-                className={`flex-1 px-3 py-2 rounded-lg border transition-colors ${
-                  formData.auth_type === "oauth"
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-background border-border hover:bg-secondary"
-                }`}
-              >
-                OAuth
-              </button>
-            </div>
           </div>
 
           {/* 基础URL */}
@@ -669,7 +602,7 @@ function EditProviderDialog({
     name: provider.name,
     base_url: provider.base_url,
     auth_type: provider.auth_type || "apikey",
-    api_key: provider.api_keys.find((k) => k.is_active)?.key_hash || "",
+    api_key: provider.api_keys.find((k) => k.is_active)?.key_value || "",
     priority: provider.priority,
     enabled: provider.enabled,
   });
@@ -688,11 +621,11 @@ function EditProviderDialog({
       api_keys:
         formData.auth_type === "apikey" &&
         formData.api_key !==
-          (provider.api_keys.find((k) => k.is_active)?.key_hash || "")
+          (provider.api_keys.find((k) => k.is_active)?.key_value || "")
           ? [
               {
                 id: provider.api_keys[0]?.id || Date.now().toString(),
-                key_hash: formData.api_key,
+                key_value: formData.api_key,
                 name: "默认密钥",
                 is_active: true,
                 created_at:
@@ -704,8 +637,7 @@ function EditProviderDialog({
           : formData.auth_type === "apikey"
             ? provider.api_keys
             : [],
-      oauth_config:
-        formData.auth_type === "oauth" ? provider.oauth_config : null,
+      oauth_config: null,
     };
 
     onSave(updated);
@@ -743,52 +675,19 @@ function EditProviderDialog({
             />
           </div>
 
-          {/* 认证方式 */}
-          <div>
-            <label className="block text-sm font-medium mb-1">认证方式</label>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setFormData({ ...formData, auth_type: "apikey" })
-                }
-                className={`flex-1 px-3 py-2 rounded-lg border transition-colors ${
-                  formData.auth_type === "apikey"
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-background border-border hover:bg-secondary"
-                }`}
-              >
-                API Key
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, auth_type: "oauth" })}
-                className={`flex-1 px-3 py-2 rounded-lg border transition-colors ${
-                  formData.auth_type === "oauth"
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-background border-border hover:bg-secondary"
-                }`}
-              >
-                OAuth
-              </button>
-            </div>
-          </div>
-
           {/* API密钥 */}
-          {formData.auth_type === "apikey" && (
-            <div>
-              <label className="block text-sm font-medium mb-1">API密钥</label>
-              <input
-                type="password"
-                value={formData.api_key}
-                onChange={(e) =>
-                  setFormData({ ...formData, api_key: e.target.value })
-                }
-                className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="留空保持不变"
-              />
-            </div>
-          )}
+          <div>
+            <label className="block text-sm font-medium mb-1">API密钥</label>
+            <input
+              type="password"
+              value={formData.api_key}
+              onChange={(e) =>
+                setFormData({ ...formData, api_key: e.target.value })
+              }
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder="留空保持不变"
+            />
+          </div>
 
           <div className="flex items-center justify-between">
             <label className="text-sm font-medium">启用状态</label>

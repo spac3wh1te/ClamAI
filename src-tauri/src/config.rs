@@ -70,11 +70,12 @@ pub struct ProviderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyInfo {
     pub id: String,
-    pub key_hash: String, // 加密存储的API密钥哈希
+    #[serde(alias = "key_hash")]
+    pub key_value: String,
     pub name: String,
     pub is_active: bool,
     #[serde(default)]
-    pub allowed_models: Vec<String>, // 允许调用的模型列表，空=所有模型
+    pub allowed_models: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub last_used: Option<DateTime<Utc>>,
     pub usage_count: i64,

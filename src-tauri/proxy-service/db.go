@@ -515,6 +515,19 @@ func truncateStr(s string, maxLen int) string {
 	return string(runes[:maxLen])
 }
 
+const maxLogRows = 50000
+
+func dbCleanupLogs() {
+	result, err := db.Exec(`DELETE FROM request_logs WHERE id NOT IN (SELECT id FROM request_logs ORDER BY id DESC LIMIT ?)`, maxLogRows)
+	if err != nil {
+		log.Printf("[ERROR] dbCleanupLogs: %v", err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n > 0 {
+		log.Printf("[INFO] dbCleanupLogs: purged %d old log entries", n)
+	}
+}
+
 func dbLoadLogs(lb *LogBuffer) {
 	rows, err := db.Query("SELECT timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method FROM request_logs ORDER BY id ASC")
 	if err != nil {

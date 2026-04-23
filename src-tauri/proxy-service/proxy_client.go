@@ -74,7 +74,7 @@ func newHTTPClient(proxyURL string) *http.Client {
 
 	return &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   120 * time.Second,
 	}
 }
 
@@ -92,7 +92,7 @@ func newHTTPSClient(proxyURL string, skipVerify bool) *http.Client {
 
 	return &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   120 * time.Second,
 	}
 }
 
@@ -100,13 +100,8 @@ func fetchWithProxy(client *http.Client, req *http.Request) (*http.Response, err
 	resp, err := client.Do(req)
 	if err != nil {
 		if proxyURL := getProxy(); proxyURL != nil {
-			log.Printf("[WARN] request failed, trying direct: %v", err)
-			directClient := &http.Client{
-				Transport: &http.Transport{
-					IdleConnTimeout: 60 * time.Second,
-				},
-				Timeout: 30 * time.Second,
-			}
+			log.Printf("[WARN] request failed with proxy, trying direct: %v", err)
+			directClient := getSharedClient()
 			resp, err = directClient.Do(req)
 		}
 	}
