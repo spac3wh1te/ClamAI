@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -558,6 +559,7 @@ func NewProxyServer(config *Config) (*ProxyServer, error) {
 	setProxyServer(proxy)
 	proxy.setupRoutes()
 	go proxy.periodicSave()
+	proxy.startPeriodicTaskScheduler()
 	return proxy, nil
 }
 
@@ -657,6 +659,14 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/security/check", p.handleContentCheck).Methods("POST")
 	api.HandleFunc("/skills/history", p.handleSkillsHistory).Methods("GET")
 	api.HandleFunc("/profile/history", p.handleProfileAnalysisHistory).Methods("GET")
+	api.HandleFunc("/analysis/tasks", p.handleCreateAnalysisTask).Methods("POST")
+	api.HandleFunc("/analysis/tasks", p.handleListAnalysisTasks).Methods("GET")
+	api.HandleFunc("/analysis/tasks/{id}", p.handleDeleteAnalysisTask).Methods("DELETE")
+	api.HandleFunc("/analysis/tasks/{id}/start", p.handleStartAnalysisTask).Methods("POST")
+	api.HandleFunc("/analysis/tasks/{id}/stop", p.handleStopAnalysisTask).Methods("POST")
+	api.HandleFunc("/analysis/tasks/{id}", p.handleUpdateAnalysisTask).Methods("PUT")
+	api.HandleFunc("/agent/scan-logs", p.handleAgentLogScan).Methods("POST")
+	api.HandleFunc("/agent/env-check", p.handleAgentEnvCheck).Methods("POST")
 
 	p.router.HandleFunc("/analysis/v1/chat/completions", p.handleAnalysisChat).Methods("POST")
 
@@ -1983,6 +1993,548 @@ func (p *ProxyServer) handleProfileAnalysisHistory(w http.ResponseWriter, r *htt
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"records": records,
 		"total":   total,
+	})
+}
+
+var taskCounter int64
+
+func nextTaskNo() string {
+	n := atomic.AddInt64(&taskCounter, 1)
+	return fmt.Sprintf("T%04d", n)
+}
+
+func (p *ProxyServer) handleCreateAnalysisTask(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name            string `json:"name"`
+		APIKeyID        string `json:"api_key_id"`
+		Model           string `json:"model"`
+		TimeRange       string `json:"time_range"`
+		ScheduleType    string `json:"schedule_type"`
+		IntervalMinutes int    `json:"interval_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.APIKeyID == "" || req.Model == "" {
+		http.Error(w, "name, api_key_id, model are required", http.StatusBadRequest)
+		return
+	}
+	if req.ScheduleType == "" {
+		req.ScheduleType = "once"
+	}
+	if req.TimeRange == "" {
+		req.TimeRange = "7d"
+	}
+	if req.IntervalMinutes == 0 {
+		req.IntervalMinutes = 60
+	}
+
+	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
+	taskNo := nextTaskNo()
+	if err := dbCreateAnalysisTask(id, taskNo, req.Name, req.APIKeyID, req.Model, req.TimeRange, req.ScheduleType, req.IntervalMinutes); err != nil {
+		http.Error(w, "Failed to create task: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "task_no": taskNo})
+}
+
+func (p *ProxyServer) handleListAnalysisTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := dbGetAnalysisTasks()
+	if err != nil {
+		http.Error(w, "Failed to list tasks: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tasks == nil {
+		tasks = []map[string]interface{}{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"tasks": tasks})
+}
+
+func (p *ProxyServer) handleDeleteAnalysisTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	if err := dbDeleteAnalysisTask(id); err != nil {
+		http.Error(w, "Failed to delete task: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (p *ProxyServer) handleUpdateAnalysisTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	var req struct {
+		Name            string `json:"name"`
+		APIKeyID        string `json:"api_key_id"`
+		Model           string `json:"model"`
+		TimeRange       string `json:"time_range"`
+		ScheduleType    string `json:"schedule_type"`
+		IntervalMinutes int    `json:"interval_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := dbUpdateAnalysisTask(id, req.Name, req.APIKeyID, req.Model, req.TimeRange, req.ScheduleType, req.IntervalMinutes); err != nil {
+		http.Error(w, "Failed to update task: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (p *ProxyServer) handleStartAnalysisTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	tasks, _ := dbGetAnalysisTasks()
+	var task map[string]interface{}
+	for _, t := range tasks {
+		if t["id"] == id {
+			task = t
+			break
+		}
+	}
+	if task == nil {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+
+	dbUpdateAnalysisTaskStatus(id, "running")
+
+	if task["schedule_type"] == "once" {
+		go p.executeAnalysisTask(id, task)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": "running"})
+}
+
+func (p *ProxyServer) handleStopAnalysisTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	dbUpdateAnalysisTaskStatus(id, "idle")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": "idle"})
+}
+
+func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interface{}) {
+	apiKeyID, _ := task["api_key_id"].(string)
+	model, _ := task["model"].(string)
+
+	apiKeysMu.Lock()
+	gatewayKey, exists := apiKeysByID[apiKeyID]
+	apiKeysMu.Unlock()
+	if !exists {
+		dbUpdateAnalysisTaskResult(taskID, "error", "API Key not found", "", 0)
+		tasks, _ := dbGetAnalysisTasks()
+		for _, t := range tasks {
+			if t["id"] == taskID && t["schedule_type"] == "once" {
+				dbUpdateAnalysisTaskStatus(taskID, "idle")
+			}
+		}
+		return
+	}
+
+	modelForGateway := model
+	if !strings.Contains(modelForGateway, ":") {
+		provider, _ := p.resolveProvider(modelForGateway)
+		if provider != nil {
+			modelForGateway = provider.GetName() + ":" + modelForGateway
+		}
+	}
+
+	logs, total := dbGetLogsByAPIKey(maskAPIKeyForLog(gatewayKey.Key), 500)
+
+	var conversationSummary strings.Builder
+	conversationSummary.WriteString(fmt.Sprintf("以下是通过该API Key的调用记录（共%d条），请分析调用者行为模式：\n\n", len(logs)))
+	for i, l := range logs {
+		timestamp := l.Timestamp.Format("2006-01-02 15:04:05")
+		conversationSummary.WriteString(fmt.Sprintf("[%d] 时间=%s, 模型=%s, 提供者=%s, 输入Token=%d, 输出Token=%d, 延迟=%dms, 成功=%v, IP=%s\n",
+			i+1, timestamp, l.Model, l.Provider, l.InputTokens, l.OutputTokens, l.LatencyMs, l.Success, l.ClientIP))
+	}
+
+	systemPrompt := "你是一个专业的AI网关安全分析师。你必须只返回纯JSON：{\"risk_level\":\"低|中|高|极高\",\"summary\":\"一句话总结\",\"details\":{...},\"recommendations\":[...]}"
+
+	messages := []map[string]interface{}{
+		{"role": "system", "content": systemPrompt},
+		{"role": "user", "content": conversationSummary.String()},
+	}
+
+	statusCode, respBody, err := p.internalChatCompletion(modelForGateway, messages, 0.3, 1500)
+	if err != nil {
+		dbUpdateAnalysisTaskResult(taskID, "error", "Analysis failed: "+err.Error(), "", 0)
+		tasks, _ := dbGetAnalysisTasks()
+		for _, t := range tasks {
+			if t["id"] == taskID && t["schedule_type"] == "once" {
+				dbUpdateAnalysisTaskStatus(taskID, "idle")
+			}
+		}
+		return
+	}
+
+	riskLevel := "unknown"
+	summary := ""
+	detail := ""
+	if statusCode >= 200 && statusCode < 300 {
+		var resp map[string]interface{}
+		if json.Unmarshal(respBody, &resp) == nil {
+			if choices, ok := resp["choices"].([]interface{}); ok && len(choices) > 0 {
+				if choice, ok := choices[0].(map[string]interface{}); ok {
+					if msg, ok := choice["message"].(map[string]interface{}); ok {
+						if contentStr, ok := msg["content"].(string); ok {
+							detail = contentStr
+							parsed := extractJSON(contentStr)
+							if parsed != nil {
+								if rl, ok := parsed["risk_level"].(string); ok {
+									riskLevel = rl
+								}
+								if s, ok := parsed["summary"].(string); ok {
+									summary = s
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	dbUpdateAnalysisTaskResult(taskID, riskLevel, summary, detail, total)
+
+	tasks, _ := dbGetAnalysisTasks()
+	for _, t := range tasks {
+		if t["id"] == taskID && t["schedule_type"] == "once" {
+			dbUpdateAnalysisTaskStatus(taskID, "idle")
+		}
+	}
+}
+
+func (p *ProxyServer) startPeriodicTaskScheduler() {
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		for range ticker.C {
+			tasks, err := dbGetDuePeriodicTasks()
+			if err != nil || len(tasks) == 0 {
+				continue
+			}
+			for _, task := range tasks {
+				id, _ := task["id"].(string)
+				interval, _ := task["interval_minutes"].(int)
+				go p.executeAnalysisTask(id, task)
+				dbSetTaskNextRun(id, interval)
+			}
+		}
+	}()
+}
+
+func (p *ProxyServer) handleAgentLogScan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path  string `json:"path"`
+		Model string `json:"model"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	homeDir, _ := os.UserHomeDir()
+	scanPaths := []string{}
+	if req.Path != "" {
+		scanPaths = []string{req.Path}
+	} else {
+		scanPaths = []string{
+			filepath.Join(homeDir, ".claude"),
+			filepath.Join(homeDir, ".cursor"),
+			filepath.Join(homeDir, ".windsurf"),
+			filepath.Join(homeDir, ".cline"),
+			filepath.Join(homeDir, ".aider"),
+			filepath.Join(homeDir, ".codex"),
+		}
+	}
+
+	type AgentMessage struct {
+		Role      string `json:"role"`
+		Content   string `json:"content"`
+		Timestamp string `json:"timestamp,omitempty"`
+		Model     string `json:"model,omitempty"`
+	}
+	type AgentSession struct {
+		AgentName    string         `json:"agent_name"`
+		SessionPath  string         `json:"session_path"`
+		Messages     []AgentMessage `json:"messages"`
+		RiskFlags    []string       `json:"risk_flags"`
+		MessageCount int            `json:"message_count"`
+	}
+
+	var sessions []AgentSession
+	for _, sp := range scanPaths {
+		if _, err := os.Stat(sp); os.IsNotExist(err) {
+			continue
+		}
+		agentName := filepath.Base(sp)
+		filepath.Walk(sp, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			name := strings.ToLower(info.Name())
+			if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, ".md") {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || len(data) > 5<<20 {
+				return nil
+			}
+
+			var msgs []AgentMessage
+			content := string(data)
+
+			var jsonData interface{}
+			if json.Unmarshal(data, &jsonData) == nil {
+				if arr, ok := jsonData.([]interface{}); ok {
+					for _, item := range arr {
+						if m, ok := item.(map[string]interface{}); ok {
+							role, _ := m["role"].(string)
+							content, _ := m["content"].(string)
+							if role == "" && m["type"] != nil {
+								typ, _ := m["type"].(string)
+								if typ == "human" {
+									role = "user"
+								} else if typ == "assistant" {
+									role = "assistant"
+								}
+								if msg, ok := m["message"].(map[string]interface{}); ok {
+									if c, ok := msg["content"].(string); ok {
+										content = c
+									}
+								}
+							}
+							if role != "" && content != "" {
+								msg := AgentMessage{Role: role, Content: content}
+								if ts, ok := m["timestamp"].(string); ok {
+									msg.Timestamp = ts
+								}
+								if mdl, ok := m["model"].(string); ok {
+									msg.Model = mdl
+								}
+								msgs = append(msgs, msg)
+							}
+						}
+					}
+				} else if m, ok := jsonData.(map[string]interface{}); ok {
+					if chatMsgs, ok := m["messages"].([]interface{}); ok {
+						for _, item := range chatMsgs {
+							if cm, ok := item.(map[string]interface{}); ok {
+								role, _ := cm["role"].(string)
+								c, _ := cm["content"].(string)
+								if role != "" {
+									msgs = append(msgs, AgentMessage{Role: role, Content: c})
+								}
+							}
+						}
+					}
+				}
+			} else if strings.Contains(content, "Human:") || strings.Contains(content, "Assistant:") {
+				lines := strings.Split(content, "\n")
+				var curRole string
+				var curContent strings.Builder
+				for _, line := range lines {
+					trimmed := strings.TrimSpace(line)
+					if strings.HasPrefix(trimmed, "Human:") || strings.HasPrefix(trimmed, "User:") {
+						if curRole != "" {
+							msgs = append(msgs, AgentMessage{Role: curRole, Content: curContent.String()})
+						}
+						curRole = "user"
+						curContent.Reset()
+						curContent.WriteString(strings.TrimPrefix(trimmed, "Human:"))
+						curContent.WriteString(strings.TrimPrefix(trimmed, "User:"))
+					} else if strings.HasPrefix(trimmed, "Assistant:") {
+						if curRole != "" {
+							msgs = append(msgs, AgentMessage{Role: curRole, Content: curContent.String()})
+						}
+						curRole = "assistant"
+						curContent.Reset()
+						curContent.WriteString(strings.TrimPrefix(trimmed, "Assistant:"))
+					} else if curRole != "" {
+						curContent.WriteString("\n" + line)
+					}
+				}
+				if curRole != "" {
+					msgs = append(msgs, AgentMessage{Role: curRole, Content: curContent.String()})
+				}
+			}
+
+			if len(msgs) > 0 {
+				var flags []string
+				allContent := ""
+				for _, m := range msgs {
+					allContent += m.Content + "\n"
+				}
+				lower := strings.ToLower(allContent)
+				sensitivePatterns := []struct {
+					pattern string
+					flag    string
+				}{
+					{"sk-", "疑似API密钥暴露"},
+					{"api_key", "包含API密钥字段"},
+					{"password", "包含密码字段"},
+					{"secret", "包含敏感信息"},
+					{"rm -rf", "危险命令: rm -rf"},
+					{"sudo rm", "危险命令: sudo rm"},
+					{"drop table", "SQL注入风险"},
+					{"eval(", "代码注入风险"},
+					{"exec(", "代码注入风险"},
+				}
+				for _, sp := range sensitivePatterns {
+					if strings.Contains(lower, sp.pattern) {
+						flags = append(flags, sp.flag)
+					}
+				}
+
+				sessions = append(sessions, AgentSession{
+					AgentName:    agentName,
+					SessionPath:  path,
+					Messages:     msgs,
+					RiskFlags:    flags,
+					MessageCount: len(msgs),
+				})
+			}
+			return nil
+		})
+	}
+
+	if sessions == nil {
+		sessions = []AgentSession{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"agents_found": len(scanPaths),
+		"sessions":     sessions,
+		"scan_path":    strings.Join(scanPaths, ", "),
+		"scan_time":    time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (p *ProxyServer) handleAgentEnvCheck(w http.ResponseWriter, r *http.Request) {
+	type CheckItem struct {
+		Category string `json:"category"`
+		Name     string `json:"name"`
+		Status   string `json:"status"`
+		Detail   string `json:"detail"`
+	}
+
+	var checks []CheckItem
+
+	executable, _ := os.Executable()
+	execDir := filepath.Dir(executable)
+	homeDir, _ := os.UserHomeDir()
+
+	configDir := filepath.Join(homeDir, ".clamai")
+	if info, err := os.Stat(configDir); err == nil && info.IsDir() {
+		configPerms := info.Mode().Perm()
+		if configPerms&0077 == 0 {
+			checks = append(checks, CheckItem{"files", "配置目录权限", "pass", fmt.Sprintf("%s 权限安全 (%o)", configDir, configPerms)})
+		} else {
+			checks = append(checks, CheckItem{"files", "配置目录权限", "warn", fmt.Sprintf("%s 权限过于开放 (%o)，建议设为 700", configDir, configPerms)})
+		}
+	} else {
+		checks = append(checks, CheckItem{"files", "配置目录权限", "info", "配置目录不存在"})
+	}
+
+	dbPath := filepath.Join(configDir, "clamai.db")
+	if info, err := os.Stat(dbPath); err == nil {
+		dbPerms := info.Mode().Perm()
+		if dbPerms&0066 == 0 {
+			checks = append(checks, CheckItem{"files", "数据库文件权限", "pass", fmt.Sprintf("clamai.db 权限安全 (%o)", dbPerms)})
+		} else {
+			checks = append(checks, CheckItem{"files", "数据库文件权限", "warn", fmt.Sprintf("clamai.db 权限过于开放 (%o)，建议设为 600", dbPerms)})
+		}
+	}
+
+	if info, err := os.Stat(execDir); err == nil {
+		execPerms := info.Mode().Perm()
+		if execPerms&0022 == 0 {
+			checks = append(checks, CheckItem{"files", "程序目录权限", "pass", fmt.Sprintf("%s 权限安全 (%o)", execDir, execPerms)})
+		} else {
+			checks = append(checks, CheckItem{"files", "程序目录权限", "warn", fmt.Sprintf("%s 权限过于开放 (%o)", execDir, execPerms)})
+		}
+	}
+
+	if p.useTLS {
+		checks = append(checks, CheckItem{"network", "TLS加密", "pass", "已启用TLS加密通信"})
+	} else {
+		checks = append(checks, CheckItem{"network", "TLS加密", "info", "本地模式未启用TLS（本地使用无需TLS）"})
+	}
+
+	if p.config.APIKey != "" {
+		checks = append(checks, CheckItem{"security", "网关认证", "pass", "已配置网关API密钥认证"})
+	} else {
+		checks = append(checks, CheckItem{"security", "网关认证", "warn", "未配置网关API密钥，任何人可访问"})
+	}
+
+	hasActiveKeys := false
+	apiKeysMu.Lock()
+	for _, k := range apiKeys {
+		if k.Active {
+			hasActiveKeys = true
+			break
+		}
+	}
+	apiKeysMu.Unlock()
+	if hasActiveKeys {
+		checks = append(checks, CheckItem{"security", "API密钥管理", "pass", "已启用API密钥认证"})
+	} else {
+		checks = append(checks, CheckItem{"security", "API密钥管理", "info", "未配置API密钥"})
+	}
+
+	checks = append(checks, CheckItem{"system", "Go代理服务", "pass", fmt.Sprintf("运行中，监听 %s:%d", p.config.Host, p.config.Port)})
+
+	providerCount := len(p.providers)
+	activeProviders := 0
+	for _, prov := range p.providers {
+		if prov.GetAPIKey() != "" {
+			activeProviders++
+		}
+	}
+	if activeProviders > 0 {
+		checks = append(checks, CheckItem{"services", "Provider配置", "pass", fmt.Sprintf("%d 个Provider已配置密钥（共%d个）", activeProviders, providerCount)})
+	} else {
+		checks = append(checks, CheckItem{"services", "Provider配置", "warn", "未配置任何Provider密钥"})
+	}
+
+	if p.config.ProxyURL != "" {
+		checks = append(checks, CheckItem{"network", "代理配置", "pass", "已配置网络代理: " + p.config.ProxyURL})
+	}
+
+	secConfigMu.Lock()
+	sc := secConfig
+	secConfigMu.Unlock()
+	if sc.Enabled {
+		checks = append(checks, CheckItem{"security", "内容安全防护", "pass", "已启用内容安全检测"})
+	} else {
+		checks = append(checks, CheckItem{"security", "内容安全防护", "info", "未启用内容安全检测"})
+	}
+
+	passCount := 0
+	for _, c := range checks {
+		if c.Status == "pass" {
+			passCount++
+		}
+	}
+	total := len(checks)
+	score := 0
+	if total > 0 {
+		score = passCount * 100 / total
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"checks":    checks,
+		"score":     score,
+		"scan_time": time.Now().UTC().Format(time.RFC3339),
 	})
 }
 

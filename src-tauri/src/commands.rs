@@ -2135,6 +2135,159 @@ pub async fn get_profile_analysis_history(
     Ok(body)
 }
 
+// ==================== 分析任务管理命令 ====================
+
+#[tauri::command]
+pub async fn create_analysis_task(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    api_key_id: String,
+    model: String,
+    time_range: Option<String>,
+    schedule_type: Option<String>,
+    interval_minutes: Option<u32>,
+) -> Result<String, String> {
+    let (url, auth) = get_proxy_url_no_prefix(&state, "api/v1/analysis/tasks").await?;
+    let client = https_client()?;
+    let body = serde_json::json!({
+        "name": name,
+        "api_key_id": api_key_id,
+        "model": model,
+        "time_range": time_range.unwrap_or_else(|| "7d".to_string()),
+        "schedule_type": schedule_type.unwrap_or_else(|| "once".to_string()),
+        "interval_minutes": interval_minutes.unwrap_or(60),
+    });
+    let mut req = client.post(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .header("Content-Type", "application/json")
+        .json(&body);
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn list_analysis_tasks(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "analysis/tasks").await?;
+    let client = https_client()?;
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn delete_analysis_task(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}", task_id)).await?;
+    let client = https_client()?;
+    let mut req = client.delete(&url).timeout(std::time::Duration::from_secs(10));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, body) = send_and_log_full("DELETE", &url, req).await?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn update_analysis_task(
+    state: tauri::State<'_, AppState>,
+    task_id: String,
+    name: String,
+    api_key_id: String,
+    model: String,
+    time_range: Option<String>,
+    schedule_type: Option<String>,
+    interval_minutes: Option<u32>,
+) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}", task_id)).await?;
+    let client = https_client()?;
+    let body = serde_json::json!({
+        "name": name,
+        "api_key_id": api_key_id,
+        "model": model,
+        "time_range": time_range.unwrap_or_else(|| "7d".to_string()),
+        "schedule_type": schedule_type.unwrap_or_else(|| "once".to_string()),
+        "interval_minutes": interval_minutes.unwrap_or(60),
+    });
+    let mut req = client.put(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .header("Content-Type", "application/json")
+        .json(&body);
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("PUT", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn start_analysis_task(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}/start", task_id)).await?;
+    let client = https_client()?;
+    let mut req = client.post(&url).timeout(std::time::Duration::from_secs(10));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, body) = send_and_log_full("POST", &url, req).await?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn stop_analysis_task(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}/stop", task_id)).await?;
+    let client = https_client()?;
+    let mut req = client.post(&url).timeout(std::time::Duration::from_secs(10));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, body) = send_and_log_full("POST", &url, req).await?;
+    Ok(body)
+}
+
+// ==================== 智能体安全命令 ====================
+
+#[tauri::command]
+pub async fn scan_agent_logs(
+    state: tauri::State<'_, AppState>,
+    scan_path: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "agent/scan-logs").await?;
+    let client = https_client()?;
+    let body = serde_json::json!({
+        "path": scan_path.unwrap_or_default(),
+        "model": model.unwrap_or_default(),
+    });
+    let mut req = client.post(&url)
+        .timeout(std::time::Duration::from_secs(120))
+        .header("Content-Type", "application/json")
+        .json(&body);
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn check_agent_env(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "agent/env-check").await?;
+    let client = https_client()?;
+    let mut req = client.post(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .header("Content-Type", "application/json")
+        .body("{}");
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    Ok(resp_body)
+}
+
 // ==================== 安装向导和服务连接命令 ====================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

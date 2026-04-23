@@ -207,6 +207,25 @@ func createTables() error {
 			logs_analyzed INTEGER DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_profile_analysis_analyzed_at ON profile_analysis_history(analyzed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS analysis_tasks (
+			id TEXT PRIMARY KEY,
+			task_no TEXT NOT NULL,
+			name TEXT NOT NULL,
+			api_key_id TEXT DEFAULT '',
+			model TEXT DEFAULT '',
+			time_range TEXT DEFAULT '7d',
+			schedule_type TEXT DEFAULT 'once',
+			interval_minutes INTEGER DEFAULT 60,
+			status TEXT DEFAULT 'idle',
+			last_run_at DATETIME,
+			next_run_at DATETIME,
+			created_at DATETIME NOT NULL,
+			result_summary TEXT DEFAULT '',
+			result_risk_level TEXT DEFAULT '',
+			result_detail TEXT DEFAULT '',
+			result_logs_analyzed INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status ON analysis_tasks(status)`,
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
@@ -904,4 +923,123 @@ func dbGetSecurityTokenStats(periodMinutes int) *SecurityTokenStats {
 		stats.ByType[analysisType] += tok
 	}
 	return stats
+}
+
+func dbCreateAnalysisTask(id, taskNo, name, apiKeyID, model, timeRange, scheduleType string, intervalMinutes int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	status := "idle"
+	nextRun := ""
+	if scheduleType == "periodic" {
+		nextRun = time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
+		status = "running"
+	}
+	_, err := db.Exec(`INSERT INTO analysis_tasks (id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, next_run_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, taskNo, name, apiKeyID, model, timeRange, scheduleType, intervalMinutes, status, nextRun, now)
+	return err
+}
+
+func dbGetAnalysisTasks() ([]map[string]interface{}, error) {
+	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, last_run_at, next_run_at, created_at, result_summary, result_risk_level, result_detail, result_logs_analyzed FROM analysis_tasks ORDER BY created_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var id, taskNo, name, apiKeyID, model, timeRange, scheduleType, status string
+		var intervalMinutes int
+		var lastRunAt, nextRunAt, createdAt sql.NullString
+		var resultSummary, resultRiskLevel, resultDetail sql.NullString
+		var resultLogsAnalyzed int
+		if err := rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &scheduleType, &intervalMinutes, &status, &lastRunAt, &nextRunAt, &createdAt, &resultSummary, &resultRiskLevel, &resultDetail, &resultLogsAnalyzed); err != nil {
+			continue
+		}
+		task := map[string]interface{}{
+			"id":                   id,
+			"task_no":              taskNo,
+			"name":                 name,
+			"api_key_id":           apiKeyID,
+			"model":                model,
+			"time_range":           timeRange,
+			"schedule_type":        scheduleType,
+			"interval_minutes":     intervalMinutes,
+			"status":               status,
+			"created_at":           createdAt,
+			"result_logs_analyzed": resultLogsAnalyzed,
+		}
+		if lastRunAt.Valid {
+			task["last_run_at"] = lastRunAt.String
+		}
+		if nextRunAt.Valid {
+			task["next_run_at"] = nextRunAt.String
+		}
+		if resultSummary.Valid {
+			task["result_summary"] = resultSummary.String
+		}
+		if resultRiskLevel.Valid {
+			task["result_risk_level"] = resultRiskLevel.String
+		}
+		if resultDetail.Valid {
+			task["result_detail"] = resultDetail.String
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+func dbUpdateAnalysisTask(id, name, apiKeyID, model, timeRange, scheduleType string, intervalMinutes int) error {
+	_, err := db.Exec(`UPDATE analysis_tasks SET name=?, api_key_id=?, model=?, time_range=?, schedule_type=?, interval_minutes=? WHERE id=?`,
+		name, apiKeyID, model, timeRange, scheduleType, intervalMinutes, id)
+	return err
+}
+
+func dbUpdateAnalysisTaskStatus(id, status string) error {
+	if status == "running" {
+		nextRun := time.Now().UTC().Format(time.RFC3339)
+		_, err := db.Exec(`UPDATE analysis_tasks SET status=?, next_run_at=? WHERE id=?`, status, nextRun, id)
+		return err
+	}
+	_, err := db.Exec(`UPDATE analysis_tasks SET status=? WHERE id=?`, status, id)
+	return err
+}
+
+func dbUpdateAnalysisTaskResult(id, riskLevel, summary, detail string, logsAnalyzed int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.Exec(`UPDATE analysis_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_logs_analyzed=?, last_run_at=? WHERE id=?`,
+		riskLevel, summary, detail, logsAnalyzed, now, id)
+	return err
+}
+
+func dbDeleteAnalysisTask(id string) error {
+	_, err := db.Exec("DELETE FROM analysis_tasks WHERE id=?", id)
+	return err
+}
+
+func dbGetDuePeriodicTasks() ([]map[string]interface{}, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, interval_minutes FROM analysis_tasks WHERE schedule_type='periodic' AND status='running' AND next_run_at <= ?", now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var id, taskNo, name, apiKeyID, model, timeRange string
+		var intervalMinutes int
+		if rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &intervalMinutes) == nil {
+			tasks = append(tasks, map[string]interface{}{
+				"id": id, "task_no": taskNo, "name": name,
+				"api_key_id": apiKeyID, "model": model, "time_range": timeRange,
+				"interval_minutes": intervalMinutes,
+			})
+		}
+	}
+	return tasks, nil
+}
+
+func dbSetTaskNextRun(id string, intervalMinutes int) error {
+	nextRun := time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
+	_, err := db.Exec("UPDATE analysis_tasks SET next_run_at=? WHERE id=?", nextRun, id)
+	return err
 }

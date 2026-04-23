@@ -230,6 +230,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get_skills_detection_history,
             get_profile_analysis_history,
 
+            // 分析任务管理命令
+            create_analysis_task,
+            list_analysis_tasks,
+            delete_analysis_task,
+            update_analysis_task,
+            start_analysis_task,
+            stop_analysis_task,
+
+            // 智能体安全命令
+            scan_agent_logs,
+            check_agent_env,
+
             // 配置档案命令
             list_profiles,
             save_current_as_profile,
