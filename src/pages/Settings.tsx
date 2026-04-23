@@ -23,9 +23,7 @@ interface AppConfig {
     port: number;
     host: string;
     api_key: string;
-    default_format: string;
     log_level: string;
-    enable_metrics: boolean;
   };
   ui: {
     theme: string;
@@ -37,7 +35,6 @@ interface AppConfig {
   };
   advanced: {
     proxy_url: string | null;
-    timeout_seconds: number;
   };
 }
 
@@ -538,28 +535,6 @@ export default function Settings() {
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                 min="1"
                 max="65535"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                请求超时 (秒)
-              </label>
-              <p className="text-xs text-muted-foreground mb-1">
-                等待上游 API 响应的最长时间，超时后返回错误
-              </p>
-              <input
-                type="number"
-                value={config.advanced.timeout_seconds}
-                onChange={(e) =>
-                  updateConfig(
-                    "advanced",
-                    "timeout_seconds",
-                    parseInt(e.target.value),
-                  )
-                }
-                className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                min="10"
-                max="300"
               />
             </div>
             <div>

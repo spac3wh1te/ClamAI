@@ -37,9 +37,7 @@ pub async fn reset_config(state: tauri::State<'_, AppState>) -> Result<(), Strin
             port: 8080,
             host: "127.0.0.1".to_string(),
             api_key: "".to_string(),
-            default_format: crate::config::ApiFormat::OpenAI,
             log_level: "info".to_string(),
-            enable_metrics: true,
         },
         ui: crate::config::UiConfig {
             theme: "dark".to_string(),
@@ -51,7 +49,6 @@ pub async fn reset_config(state: tauri::State<'_, AppState>) -> Result<(), Strin
         },
         advanced: crate::config::AdvancedConfig {
             proxy_url: None,
-            timeout_seconds: 30,
         },
         service: crate::config::ServiceConfig::default(),
     };

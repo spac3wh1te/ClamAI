@@ -119,9 +119,7 @@ pub struct GatewayConfig {
     pub port: u16,
     pub host: String,
     pub api_key: String,
-    pub default_format: ApiFormat,
     pub log_level: String,
-    pub enable_metrics: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,7 +140,6 @@ fn default_timezone() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdvancedConfig {
     pub proxy_url: Option<String>,
-    pub timeout_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,14 +176,6 @@ pub enum OAuthProviderType {
     QwenCode,
     IFlow,
     Custom,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ApiFormat {
-    OpenAI,
-    Anthropic,
-    Gemini,
 }
 
 #[derive(Debug)]
@@ -246,9 +235,7 @@ impl ConfigManager {
                 port: 8080,
                 host: "127.0.0.1".to_string(),
                 api_key: "".to_string(),
-                default_format: ApiFormat::OpenAI,
                 log_level: "info".to_string(),
-                enable_metrics: true,
             },
             ui: UiConfig {
                 theme: "dark".to_string(),
@@ -260,7 +247,6 @@ impl ConfigManager {
             },
             advanced: AdvancedConfig {
                 proxy_url: None,
-                timeout_seconds: 30,
             },
             service: ServiceConfig::default(),
         }
