@@ -16,6 +16,8 @@ import {
   Cpu,
   Zap,
   TrendingUp,
+  History,
+  Trash2,
 } from "lucide-react";
 import { registerSecurityApp } from "./registry";
 
@@ -51,6 +53,18 @@ interface ProfileAnalysis {
     token_usage: ProfileDimension;
   };
   recommendations: string[];
+}
+
+interface ProfileHistoryRecord {
+  id: number;
+  analyzed_at: string;
+  api_key_id: string;
+  time_range: string;
+  risk_level: string;
+  summary: string;
+  result: string;
+  model_used: string;
+  logs_analyzed: number;
 }
 
 function parseAnalysis(text: string): ProfileAnalysis | null {
@@ -142,6 +156,10 @@ function CallerProfileAnalysis() {
   const [rawResult, setRawResult] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<number | null>(
+    null,
+  );
 
   const { data: apiKeysData } = useQuery({
     queryKey: ["api-keys"],
@@ -155,6 +173,16 @@ function CallerProfileAnalysis() {
 
   const apiKeys = (apiKeysData?.keys || []).filter((k) => k.active);
   const allModels = proxyModels || [];
+
+  const { data: historyData, refetch: refetchHistory } = useQuery({
+    queryKey: ["profile-history"],
+    queryFn: () =>
+      invoke<{ records: ProfileHistoryRecord[]; total: number }>(
+        "get_profile_analysis_history",
+        { limit: 20, offset: 0 },
+      ),
+    enabled: showHistory,
+  });
 
   const profileData = rawResult ? parseAnalysis(rawResult) : null;
 
@@ -173,6 +201,7 @@ function CallerProfileAnalysis() {
         setErrorMsg(`分析失败: ${data.message}`);
       }
       setIsAnalyzing(false);
+      if (showHistory) refetchHistory();
     },
     onError: (err: any) => {
       setErrorMsg(`调用失败: ${err}`);
@@ -199,7 +228,93 @@ function CallerProfileAnalysis() {
       <div className="flex items-center gap-3 mb-4">
         <User className="w-6 h-6 text-primary" />
         <h2 className="text-xl font-bold">调用者画像分析</h2>
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="ml-auto flex items-center gap-1 px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <History className="w-4 h-4" />
+          {showHistory ? "隐藏历史" : "查看历史"}
+        </button>
       </div>
+
+      {showHistory && (
+        <div className="bg-card rounded-lg border border-border overflow-hidden">
+          <div className="px-4 py-3 border-b border-border">
+            <h4 className="text-sm font-medium">分析历史</h4>
+          </div>
+          <div className="divide-y divide-border max-h-72 overflow-y-auto">
+            {historyData?.records?.length === 0 && (
+              <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+                暂无分析记录
+              </div>
+            )}
+            {historyData?.records?.map((record) => (
+              <div key={record.id} className="px-4 py-3">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        record.risk_level === "极高" ||
+                        record.risk_level === "高"
+                          ? "bg-red-500/20 text-red-400"
+                          : record.risk_level === "中"
+                            ? "bg-orange-500/20 text-orange-400"
+                            : record.risk_level === "低"
+                              ? "bg-green-500/20 text-green-400"
+                              : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {record.risk_level === "极高"
+                        ? "极高风险"
+                        : record.risk_level === "高"
+                          ? "高风险"
+                          : record.risk_level === "中"
+                            ? "中风险"
+                            : record.risk_level === "低"
+                              ? "低风险"
+                              : "未知"}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {record.model_used}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {record.time_range}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {record.logs_analyzed}条日志
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(record.analyzed_at).toLocaleString("zh-CN")}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setExpandedHistoryId(
+                          expandedHistoryId === record.id ? null : record.id,
+                        )
+                      }
+                      className="text-xs text-primary hover:underline"
+                    >
+                      {expandedHistoryId === record.id ? "收起" : "详情"}
+                    </button>
+                  </div>
+                </div>
+                {record.summary && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {record.summary}
+                  </p>
+                )}
+                {expandedHistoryId === record.id && record.result && (
+                  <div className="mt-2 p-2 bg-muted/30 rounded text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">
+                    {record.result}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="bg-muted/30 rounded-lg p-4 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

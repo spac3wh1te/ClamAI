@@ -195,6 +195,18 @@ func createTables() error {
 			api_key_id TEXT DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_skills_detection_checked_at ON skills_detection_history(checked_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS profile_analysis_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			analyzed_at DATETIME NOT NULL,
+			api_key_id TEXT DEFAULT '',
+			time_range TEXT DEFAULT '7d',
+			risk_level TEXT DEFAULT 'unknown',
+			summary TEXT DEFAULT '',
+			result TEXT DEFAULT '',
+			model_used TEXT DEFAULT '',
+			logs_analyzed INTEGER DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_profile_analysis_analyzed_at ON profile_analysis_history(analyzed_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
@@ -650,6 +662,53 @@ func dbGetSkillsDetectionHistory(limit, offset int) ([]map[string]interface{}, i
 		}
 	}
 	return records, total
+}
+
+func dbInsertProfileAnalysis(apiKeyID, timeRange, riskLevel, summary, result, modelUsed string, logsAnalyzed int) {
+	_, err := db.Exec(`INSERT INTO profile_analysis_history (analyzed_at, api_key_id, time_range, risk_level, summary, result, model_used, logs_analyzed)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), apiKeyID, timeRange, riskLevel, summary, result, modelUsed, logsAnalyzed)
+	if err != nil {
+		log.Printf("[ERROR] dbInsertProfileAnalysis: %v", err)
+	}
+}
+
+func dbGetProfileAnalysisHistory(limit, offset int) ([]map[string]interface{}, int) {
+	var total int
+	db.QueryRow("SELECT COUNT(*) FROM profile_analysis_history").Scan(&total)
+
+	rows, err := db.Query("SELECT id, analyzed_at, api_key_id, time_range, risk_level, summary, result, model_used, logs_analyzed FROM profile_analysis_history ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		log.Printf("[ERROR] dbGetProfileAnalysisHistory: %v", err)
+		return nil, 0
+	}
+	defer rows.Close()
+
+	var records []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var analyzedAt, apiKeyID, timeRange, riskLevel, summary, result, modelUsed string
+		var logsAnalyzed int
+		if rows.Scan(&id, &analyzedAt, &apiKeyID, &timeRange, &riskLevel, &summary, &result, &modelUsed, &logsAnalyzed) == nil {
+			records = append(records, map[string]interface{}{
+				"id":            id,
+				"analyzed_at":   analyzedAt,
+				"api_key_id":    apiKeyID,
+				"time_range":    timeRange,
+				"risk_level":    riskLevel,
+				"summary":       summary,
+				"result":        result,
+				"model_used":    modelUsed,
+				"logs_analyzed": logsAnalyzed,
+			})
+		}
+	}
+	return records, total
+}
+
+func dbDeleteProfileAnalysis(id int) error {
+	_, err := db.Exec("DELETE FROM profile_analysis_history WHERE id = ?", id)
+	return err
 }
 
 type DBUsageStats struct {

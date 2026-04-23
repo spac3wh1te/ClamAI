@@ -12,6 +12,10 @@ import {
   Monitor,
   Globe,
   RefreshCw,
+  FolderOpen,
+  Plus,
+  Trash2,
+  Pencil,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useApp } from "../context/AppContext";
@@ -41,6 +45,12 @@ interface AppConfig {
 interface ProxyTestResult {
   success: boolean;
   message: string;
+}
+
+interface ProfileInfo {
+  id: string;
+  name: string;
+  active: boolean;
 }
 
 function detectProxyType(url: string): string {
@@ -84,10 +94,21 @@ export default function Settings() {
   const [reconnectPwd, setReconnectPwd] = useState("");
   const [reconnectLoading, setReconnectLoading] = useState(false);
   const [reconnectError, setReconnectError] = useState("");
+  const [newProfileName, setNewProfileName] = useState("");
+  const [showNewProfile, setShowNewProfile] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const { data: currentConfig, isLoading } = useQuery<AppConfig>({
     queryKey: ["config"],
     queryFn: () => invoke<AppConfig>("get_config"),
+  });
+
+  const { data: profilesData, refetch: refetchProfiles } = useQuery<
+    ProfileInfo[]
+  >({
+    queryKey: ["profiles"],
+    queryFn: () => invoke<ProfileInfo[]>("list_profiles"),
   });
 
   useEffect(() => {
@@ -258,6 +279,65 @@ export default function Settings() {
     }
   };
 
+  const handleSaveProfile = async () => {
+    if (!newProfileName.trim()) return;
+    try {
+      const id = "profile_" + Date.now();
+      await invoke("save_current_as_profile", {
+        profileId: id,
+        displayName: newProfileName.trim(),
+      });
+      setNewProfileName("");
+      setShowNewProfile(false);
+      refetchProfiles();
+    } catch (e: any) {
+      alert("保存失败: " + (e?.toString() || "未知错误"));
+    }
+  };
+
+  const handleLoadProfile = async (profileId: string) => {
+    if (
+      !confirm(
+        "切换配置档案将替换当前所有配置（Providers、网关、服务等）。确定继续？",
+      )
+    )
+      return;
+    try {
+      await invoke("load_profile", { profileId });
+      queryClient.invalidateQueries({ queryKey: ["config"] });
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+      queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
+      refetchProfiles();
+      await checkSetup();
+    } catch (e: any) {
+      alert("切换失败: " + (e?.toString() || "未知错误"));
+    }
+  };
+
+  const handleDeleteProfile = async (profileId: string) => {
+    if (!confirm("确定删除此配置档案？")) return;
+    try {
+      await invoke("delete_profile", { profileId });
+      refetchProfiles();
+    } catch (e: any) {
+      alert("删除失败: " + (e?.toString() || "未知错误"));
+    }
+  };
+
+  const handleRenameProfile = async (profileId: string) => {
+    if (!renameValue.trim()) return;
+    try {
+      await invoke("rename_profile", {
+        profileId,
+        newName: renameValue.trim(),
+      });
+      setRenamingId(null);
+      refetchProfiles();
+    } catch (e: any) {
+      alert("重命名失败: " + (e?.toString() || "未知错误"));
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-end gap-2">
@@ -279,6 +359,124 @@ export default function Settings() {
           <Save size={20} />
           <span>{saveMutation.isPending ? "保存中..." : "保存"}</span>
         </button>
+      </div>
+
+      <div className="bg-card rounded-lg p-6 border border-border">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            <FolderOpen className="w-5 h-5 text-primary" />
+            配置档案
+          </h2>
+          <button
+            onClick={() => setShowNewProfile(!showNewProfile)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+          >
+            <Plus size={14} />
+            保存当前为新档案
+          </button>
+        </div>
+
+        {showNewProfile && (
+          <div className="flex items-center gap-3 mb-4 p-3 bg-secondary/30 rounded-lg border border-border">
+            <input
+              type="text"
+              value={newProfileName}
+              onChange={(e) => setNewProfileName(e.target.value)}
+              className="flex-1 px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+              placeholder="输入档案名称，如：工作环境、测试环境..."
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveProfile();
+              }}
+            />
+            <button
+              onClick={handleSaveProfile}
+              disabled={!newProfileName.trim()}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 text-sm"
+            >
+              保存
+            </button>
+            <button
+              onClick={() => {
+                setShowNewProfile(false);
+                setNewProfileName("");
+              }}
+              className="px-3 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 text-sm"
+            >
+              取消
+            </button>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {profilesData?.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              暂无配置档案，点击上方按钮保存当前配置
+            </p>
+          )}
+          {profilesData?.map((profile) => (
+            <div
+              key={profile.id}
+              className={`flex items-center justify-between p-3 rounded-lg border ${
+                profile.active
+                  ? "border-primary/50 bg-primary/5"
+                  : "border-border hover:border-primary/30"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                {renamingId === profile.id ? (
+                  <input
+                    type="text"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    className="px-2 py-1 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleRenameProfile(profile.id);
+                      if (e.key === "Escape") setRenamingId(null);
+                    }}
+                    onBlur={() => setRenamingId(null)}
+                  />
+                ) : (
+                  <span className="font-medium text-sm">{profile.name}</span>
+                )}
+                {profile.active && (
+                  <span className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary">
+                    当前使用
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                {!profile.active && (
+                  <button
+                    onClick={() => handleLoadProfile(profile.id)}
+                    className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
+                  >
+                    切换
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setRenamingId(profile.id);
+                    setRenameValue(profile.name);
+                  }}
+                  className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                  title="重命名"
+                >
+                  <Pencil size={14} />
+                </button>
+                {!profile.active && (
+                  <button
+                    onClick={() => handleDeleteProfile(profile.id)}
+                    className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors"
+                    title="删除"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

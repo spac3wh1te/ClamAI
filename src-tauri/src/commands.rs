@@ -51,10 +51,81 @@ pub async fn reset_config(state: tauri::State<'_, AppState>) -> Result<(), Strin
             proxy_url: None,
         },
         service: crate::config::ServiceConfig::default(),
+        active_profile: "default".to_string(),
+        profiles: std::collections::HashMap::new(),
     };
 
     let mut manager = state.config_manager.lock().await;
     manager.update_config(default_config).await.map_err(|e| e.to_string())
+}
+
+// ==================== 配置档案管理命令 ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileInfo {
+    pub id: String,
+    pub name: String,
+    pub active: bool,
+}
+
+#[tauri::command]
+pub async fn list_profiles(state: tauri::State<'_, AppState>) -> Result<Vec<ProfileInfo>, String> {
+    let manager = state.config_manager.lock().await;
+    let active = manager.get_active_profile().to_string();
+    let profiles = manager.list_profiles();
+    Ok(profiles
+        .into_iter()
+        .map(|(id, name)| ProfileInfo {
+            active: id == active,
+            id,
+            name,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn save_current_as_profile(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+    display_name: String,
+) -> Result<(), String> {
+    let mut manager = state.config_manager.lock().await;
+    manager
+        .save_current_as_profile(profile_id, display_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn load_profile(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), String> {
+    {
+        let mut manager = state.config_manager.lock().await;
+        manager.load_profile(&profile_id).await.map_err(|e| e.to_string())?;
+    }
+    sync_all_providers_to_service_inner(&state).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_profile(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), String> {
+    let mut manager = state.config_manager.lock().await;
+    manager.delete_profile(&profile_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn rename_profile(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+    new_name: String,
+) -> Result<(), String> {
+    let mut manager = state.config_manager.lock().await;
+    manager.rename_profile(&profile_id, new_name).await.map_err(|e| e.to_string())
 }
 
 // ==================== 提供商管理命令 ====================
@@ -2037,6 +2108,24 @@ pub async fn get_skills_detection_history(
     let l = limit.unwrap_or(50);
     let o = offset.unwrap_or(0);
     let (url, auth) = get_proxy_url(&state, &format!("skills/history?limit={}&offset={}", l, o)).await?;
+    let client = https_client()?;
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, body) = send_and_log_full("GET", &url, req).await?;
+    Ok(body)
+}
+
+#[tauri::command]
+pub async fn get_profile_analysis_history(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<String, String> {
+    let l = limit.unwrap_or(50);
+    let o = offset.unwrap_or(0);
+    let (url, auth) = get_proxy_url(&state, &format!("profile/history?limit={}&offset={}", l, o)).await?;
     let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(key) = auth {

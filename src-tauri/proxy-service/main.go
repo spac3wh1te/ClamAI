@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,6 +27,12 @@ const (
 	maxLogEntries  = 10000
 	maxCaptureSize = 1 << 20
 )
+
+func generateID() string {
+	b := make([]byte, 12)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 func initLogging() *os.File {
 	exePath, err := os.Executable()
@@ -319,31 +327,50 @@ type OpenAIChatRequest struct {
 	Stream      bool            `json:"stream,omitempty"`
 	Temperature float64         `json:"temperature,omitempty"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Tools       []OpenAITool    `json:"tools,omitempty"`
+	ToolChoice  interface{}     `json:"tool_choice,omitempty"`
 }
 
 type OpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"`
+	Name    string      `json:"name,omitempty"`
+}
+
+type OpenAITool struct {
+	Type     string             `json:"type"`
+	Function OpenAIToolFunction `json:"function"`
+}
+
+type OpenAIToolFunction struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters"`
 }
 
 type AnthropicMessagesRequest struct {
-	Model      string             `json:"model"`
-	Messages   []AnthropicMessage `json:"messages"`
-	Stream     bool               `json:"stream,omitempty"`
-	MaxTokens  int                `json:"max_tokens,omitempty"`
-	System     string             `json:"system,omitempty"`
-	Tools      []AnthropicTool    `json:"tools,omitempty"`
-	ToolChoice interface{}        `json:"tool_choice,omitempty"`
+	Model         string             `json:"model"`
+	Messages      []AnthropicMessage `json:"messages"`
+	Stream        bool               `json:"stream,omitempty"`
+	MaxTokens     int                `json:"max_tokens,omitempty"`
+	Temperature   float64            `json:"temperature,omitempty"`
+	TopP          float64            `json:"top_p,omitempty"`
+	TopK          int                `json:"top_k,omitempty"`
+	System        interface{}        `json:"system,omitempty"`
+	Tools         []AnthropicTool    `json:"tools,omitempty"`
+	ToolChoice    interface{}        `json:"tool_choice,omitempty"`
+	StopSequences []string           `json:"stop_sequences,omitempty"`
+	Metadata      interface{}        `json:"metadata,omitempty"`
 }
 
 type AnthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"`
 }
 
 type AnthropicTool struct {
 	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
+	Description string                 `json:"description,omitempty"`
 	InputSchema map[string]interface{} `json:"input_schema"`
 }
 
@@ -629,6 +656,7 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/proxy/test", p.handleProxyTest).Methods("GET")
 	api.HandleFunc("/security/check", p.handleContentCheck).Methods("POST")
 	api.HandleFunc("/skills/history", p.handleSkillsHistory).Methods("GET")
+	api.HandleFunc("/profile/history", p.handleProfileAnalysisHistory).Methods("GET")
 
 	p.router.HandleFunc("/analysis/v1/chat/completions", p.handleAnalysisChat).Methods("POST")
 
@@ -815,6 +843,21 @@ func (p *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	_, isAnthropic := provider.(*AnthropicProvider)
+
+	if isAnthropic {
+		req.Model = modelName
+		newBody, err := json.Marshal(req)
+		if err != nil {
+			http.Error(w, "Failed to create request body", http.StatusInternalServerError)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(newBody))
+		r.ContentLength = int64(len(newBody))
+		provider.ProxyRequest(w, r)
+		return
+	}
+
 	openAIReq := p.convertAnthropicToOpenAI(req)
 	openAIReq.Model = modelName
 
@@ -824,10 +867,58 @@ func (p *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	r.Body = io.NopCloser(bytes.NewReader(newBody))
-	r.ContentLength = int64(len(newBody))
-	r.URL.Path = "/v1/chat/completions"
-	provider.ProxyRequest(w, r)
+	upstreamURL := provider.GetBaseURL() + "/v1/chat/completions"
+	proxyReq, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(newBody))
+	if err != nil {
+		http.Error(w, "Failed to create proxy request", http.StatusBadGateway)
+		return
+	}
+
+	for key, values := range r.Header {
+		switch key {
+		case "Authorization", "X-Api-Key", "Anthropic-Version", "Anthropic-Beta":
+		default:
+			for _, value := range values {
+				proxyReq.Header.Add(key, value)
+			}
+		}
+	}
+	if apiKey := provider.GetAPIKey(); apiKey != "" {
+		proxyReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	proxyReq.Header.Set("Content-Type", "application/json")
+
+	client := getSharedClient()
+	resp, err := client.Do(proxyReq)
+	if err != nil {
+		http.Error(w, "Failed to send request: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		copyHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+		return
+	}
+
+	isStream := req.Stream
+	if isStream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		p.convertStreamOpenAIToAnthropic(w, resp.Body)
+	} else {
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "Failed to read response", http.StatusBadGateway)
+			return
+		}
+		anthropicResp := p.convertOpenAIResponseToAnthropic(bodyBytes, modelName)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(anthropicResp)
+	}
 }
 
 func (p *ProxyServer) handleListModels(w http.ResponseWriter, r *http.Request) {
@@ -864,7 +955,31 @@ func (p *ProxyServer) handleOpenAIEmbeddings(w http.ResponseWriter, r *http.Requ
 }
 
 func (p *ProxyServer) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Count tokens endpoint not yet implemented", http.StatusNotImplemented)
+	var req struct {
+		Model    string      `json:"model"`
+		Messages interface{} `json:"messages"`
+		System   interface{} `json:"system,omitempty"`
+		Tools    interface{} `json:"tools,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":    "token_count_" + generateID(),
+		"model": req.Model,
+		"type":  "token_count",
+		"input_tokens": func() int {
+			msgBytes, _ := json.Marshal(req.Messages)
+			est := len(msgBytes) / 4
+			if est < 1 {
+				est = 1
+			}
+			return est
+		}(),
+	})
 }
 
 func (p *ProxyServer) handleListProviders(w http.ResponseWriter, r *http.Request) {
@@ -1421,7 +1536,7 @@ func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request)
 
 		log.Printf("[INFO] handleAnalysisChat: using gateway key id=%s, model=%s",
 			req.APIKeyID, modelForGateway)
-		p.handleUserProfileAnalysis(w, r, modelForGateway, req.TimeRange, gatewayKey.Key)
+		p.handleUserProfileAnalysis(w, r, modelForGateway, req.TimeRange, gatewayKey.Key, req.APIKeyID)
 		return
 	}
 
@@ -1471,7 +1586,7 @@ func (p *ProxyServer) internalChatCompletion(model string, messages []map[string
 	return resp.StatusCode, respBody, nil
 }
 
-func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.Request, modelName string, timeRange string, gatewayKeyStr string) {
+func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.Request, modelName string, timeRange string, gatewayKeyStr string, apiKeyID string) {
 	start := time.Now()
 	if gatewayKeyStr == "" {
 		http.Error(w, "gateway API key is required for user profile analysis", http.StatusBadRequest)
@@ -1576,6 +1691,43 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 	}
 	p.logBuffer.Add(entry)
 	dbInsertLog(entry)
+
+	if statusCode >= 200 && statusCode < 300 {
+		var analysisResp map[string]interface{}
+		if json.Unmarshal(respBody, &analysisResp) == nil {
+			if choices, ok := analysisResp["choices"].([]interface{}); ok && len(choices) > 0 {
+				if choice, ok := choices[0].(map[string]interface{}); ok {
+					if msg, ok := choice["message"].(map[string]interface{}); ok {
+						if contentStr, ok := msg["content"].(string); ok {
+							riskLevel := "unknown"
+							if strings.Contains(contentStr, "极高") {
+								riskLevel = "极高"
+							} else if strings.Contains(contentStr, "高风险") || strings.Contains(contentStr, "\"高\"") {
+								riskLevel = "高"
+							} else if strings.Contains(contentStr, "中风险") || strings.Contains(contentStr, "\"中\"") {
+								riskLevel = "中"
+							} else if strings.Contains(contentStr, "低风险") || strings.Contains(contentStr, "\"低\"") {
+								riskLevel = "低"
+							}
+
+							summary := ""
+							parsed := extractJSON(contentStr)
+							if parsed != nil {
+								if s, ok := parsed["summary"].(string); ok {
+									summary = s
+								}
+								if rl, ok := parsed["risk_level"].(string); ok && rl != "" {
+									riskLevel = rl
+								}
+							}
+
+							dbInsertProfileAnalysis(apiKeyID, timeRange, riskLevel, summary, contentStr, modelName, total)
+						}
+					}
+				}
+			}
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
@@ -1814,6 +1966,26 @@ func (p *ProxyServer) handleSkillsHistory(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func (p *ProxyServer) handleProfileAnalysisHistory(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+	limit := 50
+	offset := 0
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+		limit = l
+	}
+	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+		offset = o
+	}
+
+	records, total := dbGetProfileAnalysisHistory(limit, offset)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"records": records,
+		"total":   total,
+	})
+}
+
 func (p *ProxyServer) resolveProvider(model string) (Provider, string) {
 	log.Printf("[DEBUG] resolveProvider called with model=%s", model)
 	if strings.Contains(model, ":") {
@@ -1846,17 +2018,362 @@ func (p *ProxyServer) resolveProvider(model string) (Provider, string) {
 
 func (p *ProxyServer) convertAnthropicToOpenAI(req AnthropicMessagesRequest) OpenAIChatRequest {
 	openAIReq := OpenAIChatRequest{
-		Model:    req.Model,
-		Messages: make([]OpenAIMessage, len(req.Messages)),
-		Stream:   req.Stream,
+		Model:       req.Model,
+		Messages:    []OpenAIMessage{},
+		Stream:      req.Stream,
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
 	}
-	for i, msg := range req.Messages {
-		openAIReq.Messages[i] = OpenAIMessage{
+
+	if req.TopP > 0 {
+		openAIReq.Temperature = 0
+	}
+
+	if req.System != nil {
+		openAIReq.Messages = append(openAIReq.Messages, OpenAIMessage{
+			Role:    "system",
+			Content: req.System,
+		})
+	}
+
+	for _, msg := range req.Messages {
+		oaiMsg := OpenAIMessage{
 			Role:    msg.Role,
-			Content: msg.Content,
+			Content: p.convertAnthropicContent(msg.Content),
+		}
+		openAIReq.Messages = append(openAIReq.Messages, oaiMsg)
+	}
+
+	if len(req.Tools) > 0 {
+		for _, tool := range req.Tools {
+			openAIReq.Tools = append(openAIReq.Tools, OpenAITool{
+				Type: "function",
+				Function: OpenAIToolFunction{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.InputSchema,
+				},
+			})
 		}
 	}
+
+	if req.ToolChoice != nil {
+		switch tc := req.ToolChoice.(type) {
+		case string:
+			if tc == "any" || tc == "auto" {
+				openAIReq.ToolChoice = tc
+			}
+		case map[string]interface{}:
+			if tc["type"] == "tool" {
+				if name, ok := tc["name"].(string); ok {
+					openAIReq.ToolChoice = map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name": name,
+						},
+					}
+				}
+			}
+		}
+	}
+
 	return openAIReq
+}
+
+func (p *ProxyServer) convertAnthropicContent(content interface{}) interface{} {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []interface{}:
+		var parts []map[string]interface{}
+		hasOnlyText := true
+		for _, item := range c {
+			if block, ok := item.(map[string]interface{}); ok {
+				blockType, _ := block["type"].(string)
+				if blockType == "text" {
+					if text, ok := block["text"].(string); ok {
+						parts = append(parts, map[string]interface{}{
+							"type": "text",
+							"text": text,
+						})
+					}
+				} else if blockType == "tool_use" {
+					hasOnlyText = false
+					parts = append(parts, block)
+				} else if blockType == "tool_result" {
+					hasOnlyText = false
+					parts = append(parts, block)
+				} else if blockType == "image" {
+					hasOnlyText = false
+					parts = append(parts, block)
+				} else {
+					hasOnlyText = false
+					parts = append(parts, block)
+				}
+			}
+		}
+		if hasOnlyText {
+			var sb strings.Builder
+			for _, part := range parts {
+				if t, ok := part["text"].(string); ok {
+					sb.WriteString(t)
+				}
+			}
+			return sb.String()
+		}
+		return parts
+	default:
+		return fmt.Sprintf("%v", content)
+	}
+}
+
+func (p *ProxyServer) convertOpenAIResponseToAnthropic(body []byte, model string) map[string]interface{} {
+	var openaiResp map[string]interface{}
+	if err := json.Unmarshal(body, &openaiResp); err != nil {
+		return map[string]interface{}{
+			"type": "error",
+			"error": map[string]interface{}{
+				"type":    "api_error",
+				"message": "Failed to parse upstream response",
+			},
+		}
+	}
+
+	anthropicResp := map[string]interface{}{
+		"type":  "message",
+		"role":  "assistant",
+		"model": model,
+	}
+
+	if id, ok := openaiResp["id"].(string); ok {
+		anthropicResp["id"] = "msg_" + id
+	} else {
+		anthropicResp["id"] = "msg_" + generateID()
+	}
+
+	if usage, ok := openaiResp["usage"].(map[string]interface{}); ok {
+		inputTokens := 0
+		outputTokens := 0
+		if pt, ok := usage["prompt_tokens"].(float64); ok {
+			inputTokens = int(pt)
+		}
+		if ct, ok := usage["completion_tokens"].(float64); ok {
+			outputTokens = int(ct)
+		}
+		anthropicResp["usage"] = map[string]interface{}{
+			"input_tokens":  inputTokens,
+			"output_tokens": outputTokens,
+		}
+	}
+
+	content := []interface{}{}
+	stopReason := "end_turn"
+
+	if choices, ok := openaiResp["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if msg, ok := choice["message"].(map[string]interface{}); ok {
+				if msgContent, ok := msg["content"].(string); ok && msgContent != "" {
+					content = append(content, map[string]interface{}{
+						"type": "text",
+						"text": msgContent,
+					})
+				}
+				if toolCalls, ok := msg["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
+					for _, tc := range toolCalls {
+						if tcMap, ok := tc.(map[string]interface{}); ok {
+							block := map[string]interface{}{
+								"type": "tool_use",
+								"id":   fmt.Sprintf("toolu_%v", tcMap["id"]),
+								"name": "",
+							}
+							if fn, ok := tcMap["function"].(map[string]interface{}); ok {
+								if n, ok := fn["name"].(string); ok {
+									block["name"] = n
+								}
+								if args, ok := fn["arguments"].(string); ok {
+									var parsed interface{}
+									if json.Unmarshal([]byte(args), &parsed) == nil {
+										block["input"] = parsed
+									} else {
+										block["input"] = map[string]interface{}{}
+									}
+								}
+							}
+							if id, ok := tcMap["id"].(string); ok {
+								block["id"] = "toolu_" + id
+							}
+							content = append(content, block)
+						}
+					}
+					stopReason = "tool_use"
+				}
+			}
+			if finishReason, ok := choice["finish_reason"].(string); ok {
+				switch finishReason {
+				case "stop":
+					stopReason = "end_turn"
+				case "length":
+					stopReason = "max_tokens"
+				case "tool_calls":
+					stopReason = "tool_use"
+				case "content_filter":
+					stopReason = "stop_sequence"
+				}
+			}
+		}
+	}
+
+	if len(content) == 0 {
+		content = append(content, map[string]interface{}{
+			"type": "text",
+			"text": "",
+		})
+	}
+
+	anthropicResp["content"] = content
+	anthropicResp["stop_reason"] = stopReason
+	anthropicResp["stop_sequence"] = nil
+
+	return anthropicResp
+}
+
+func (p *ProxyServer) convertStreamOpenAIToAnthropic(w http.ResponseWriter, body io.ReadCloser) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	msgID := "msg_" + generateID()
+	started := false
+
+	reader := bufio.NewReader(body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" || data == "" {
+			if started {
+				evt := fmt.Sprintf("event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n")
+				w.Write([]byte(evt))
+				flusher.Flush()
+			}
+			break
+		}
+
+		var chunk map[string]interface{}
+		if json.Unmarshal([]byte(data), &chunk) != nil {
+			continue
+		}
+
+		if !started {
+			started = true
+			msgStart := map[string]interface{}{
+				"type": "message_start",
+				"message": map[string]interface{}{
+					"id":            msgID,
+					"type":          "message",
+					"role":          "assistant",
+					"content":       []interface{}{},
+					"model":         "",
+					"stop_reason":   nil,
+					"stop_sequence": nil,
+					"usage":         map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
+				},
+			}
+			if model, ok := chunk["model"].(string); ok {
+				msgStart["message"].(map[string]interface{})["model"] = model
+			}
+			evtData, _ := json.Marshal(msgStart)
+			w.Write([]byte("event: message_start\ndata: " + string(evtData) + "\n\n"))
+			flusher.Flush()
+		}
+
+		if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+			if choice, ok := choices[0].(map[string]interface{}); ok {
+				if delta, ok := choice["delta"].(map[string]interface{}); ok {
+					if content, ok := delta["content"].(string); ok && content != "" {
+						contentBlock := map[string]interface{}{
+							"type":  "content_block_delta",
+							"index": 0,
+							"delta": map[string]interface{}{
+								"type": "text_delta",
+								"text": content,
+							},
+						}
+						evtData, _ := json.Marshal(contentBlock)
+						w.Write([]byte("event: content_block_delta\ndata: " + string(evtData) + "\n\n"))
+						flusher.Flush()
+					}
+					if toolCalls, ok := delta["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
+						for _, tc := range toolCalls {
+							if tcMap, ok := tc.(map[string]interface{}); ok {
+								idx := 0
+								if idxF, ok := tcMap["index"].(float64); ok {
+									idx = int(idxF)
+								}
+								if fn, ok := tcMap["function"].(map[string]interface{}); ok {
+									if args, ok := fn["arguments"].(string); ok && args != "" {
+										inputBlock := map[string]interface{}{
+											"type":  "content_block_delta",
+											"index": idx,
+											"delta": map[string]interface{}{
+												"type":         "input_json_delta",
+												"partial_json": args,
+											},
+										}
+										evtData, _ := json.Marshal(inputBlock)
+										w.Write([]byte("event: content_block_delta\ndata: " + string(evtData) + "\n\n"))
+										flusher.Flush()
+									}
+								}
+							}
+						}
+					}
+				}
+
+				if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" && finishReason != "null" {
+					stopReason := "end_turn"
+					switch finishReason {
+					case "stop":
+						stopReason = "end_turn"
+					case "length":
+						stopReason = "max_tokens"
+					case "tool_calls":
+						stopReason = "tool_use"
+					}
+					msgDelta := map[string]interface{}{
+						"type": "message_delta",
+						"delta": map[string]interface{}{
+							"stop_reason":   stopReason,
+							"stop_sequence": nil,
+						},
+						"usage": map[string]interface{}{
+							"output_tokens": 0,
+						},
+					}
+					evtData, _ := json.Marshal(msgDelta)
+					w.Write([]byte("event: message_delta\ndata: " + string(evtData) + "\n\n"))
+					flusher.Flush()
+				}
+			}
+		}
+	}
 }
 
 func (p *ProxyServer) apiLoggingMiddleware(next http.Handler) http.Handler {

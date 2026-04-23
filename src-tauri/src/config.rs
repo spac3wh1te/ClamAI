@@ -46,6 +46,14 @@ pub struct AppConfig {
     pub advanced: AdvancedConfig,
     #[serde(default)]
     pub service: ServiceConfig,
+    #[serde(default = "default_active_profile")]
+    pub active_profile: String,
+    #[serde(default)]
+    pub profiles: HashMap<String, ConfigProfile>,
+}
+
+fn default_active_profile() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +150,17 @@ pub struct AdvancedConfig {
     pub proxy_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigProfile {
+    pub name: String,
+    pub providers: HashMap<String, ProviderConfig>,
+    pub mappings: HashMap<String, ModelMapping>,
+    pub gateway: GatewayConfig,
+    pub advanced: AdvancedConfig,
+    #[serde(default)]
+    pub service: ServiceConfig,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {
@@ -199,8 +218,22 @@ impl ConfigManager {
             if !c.service.setup_complete && (!c.providers.is_empty() || c.gateway.port > 0) {
                 c.service.setup_complete = true;
                 c.service.deploy_mode = DeployMode::PC;
-                let _ = Self::save_config(&config_path, &c).await;
             }
+            if c.profiles.is_empty() {
+                c.profiles.insert(
+                    "default".to_string(),
+                    ConfigProfile {
+                        name: "默认".to_string(),
+                        providers: c.providers.clone(),
+                        mappings: c.mappings.clone(),
+                        gateway: c.gateway.clone(),
+                        advanced: c.advanced.clone(),
+                        service: c.service.clone(),
+                    },
+                );
+                c.active_profile = "default".to_string();
+            }
+            let _ = Self::save_config(&config_path, &c).await;
             c
         } else {
             let default_config = Self::default_config();
@@ -249,6 +282,8 @@ impl ConfigManager {
                 proxy_url: None,
             },
             service: ServiceConfig::default(),
+            active_profile: "default".to_string(),
+            profiles: HashMap::new(),
         }
     }
 
@@ -310,6 +345,70 @@ impl ConfigManager {
 
     pub async fn update_gateway_config(&mut self, config: GatewayConfig) -> Result<()> {
         self.config.gateway = config;
+        self.update_config(self.config.clone()).await?;
+        Ok(())
+    }
+
+    pub fn get_active_profile(&self) -> &str {
+        &self.config.active_profile
+    }
+
+    pub fn list_profiles(&self) -> Vec<(String, String)> {
+        self.config
+            .profiles
+            .iter()
+            .map(|(id, p)| (id.clone(), p.name.clone()))
+            .collect()
+    }
+
+    pub async fn save_current_as_profile(&mut self, profile_id: String, display_name: String) -> Result<()> {
+        let snapshot = ConfigProfile {
+            name: display_name,
+            providers: self.config.providers.clone(),
+            mappings: self.config.mappings.clone(),
+            gateway: self.config.gateway.clone(),
+            advanced: self.config.advanced.clone(),
+            service: self.config.service.clone(),
+        };
+        self.config.profiles.insert(profile_id, snapshot);
+        self.update_config(self.config.clone()).await?;
+        Ok(())
+    }
+
+    pub async fn load_profile(&mut self, profile_id: &str) -> Result<()> {
+        let snapshot = self
+            .config
+            .profiles
+            .get(profile_id)
+            .ok_or_else(|| ClamAIError::Config(format!("配置档案 {} 不存在", profile_id)))?
+            .clone();
+
+        self.config.providers = snapshot.providers;
+        self.config.mappings = snapshot.mappings;
+        self.config.gateway = snapshot.gateway;
+        self.config.advanced = snapshot.advanced;
+        self.config.service = snapshot.service;
+        self.config.active_profile = profile_id.to_string();
+        self.update_config(self.config.clone()).await?;
+        Ok(())
+    }
+
+    pub async fn delete_profile(&mut self, profile_id: &str) -> Result<()> {
+        if profile_id == self.config.active_profile {
+            return Err(ClamAIError::Config("不能删除当前正在使用的配置档案".to_string()));
+        }
+        self.config.profiles.remove(profile_id);
+        self.update_config(self.config.clone()).await?;
+        Ok(())
+    }
+
+    pub async fn rename_profile(&mut self, profile_id: &str, new_name: String) -> Result<()> {
+        let profile = self
+            .config
+            .profiles
+            .get_mut(profile_id)
+            .ok_or_else(|| ClamAIError::Config(format!("配置档案 {} 不存在", profile_id)))?;
+        profile.name = new_name;
         self.update_config(self.config.clone()).await?;
         Ok(())
     }

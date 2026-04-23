@@ -228,6 +228,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             analyze_user_profile,
             check_skills_content,
             get_skills_detection_history,
+            get_profile_analysis_history,
+
+            // 配置档案命令
+            list_profiles,
+            save_current_as_profile,
+            load_profile,
+            delete_profile,
+            rename_profile,
 
             // 安装向导和服务连接命令
             get_setup_state,
