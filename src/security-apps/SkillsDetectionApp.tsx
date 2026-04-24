@@ -268,8 +268,8 @@ function SkillsDetection() {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    模型: {task.model} | 来源: {task.source_type}
-                    {task.last_run_at && ` | 上次: ${new Date(task.last_run_at).toLocaleString()}`}
+                                        模型: {task.model} • 来源: {task.source_type}
+                    {task.last_run_at && ` • 上次: ${new Date(task.last_run_at).toLocaleString()}`}
                   </p>
                 </div>
                 <div className="flex items-center gap-1">

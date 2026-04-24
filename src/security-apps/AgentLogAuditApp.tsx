@@ -128,7 +128,7 @@ function AgentLogAuditApp() {
             onChange={(e) => setSelectedModel(e.target.value)}
             className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
           >
-            <option value="">无AI分析</option>
+            <option value="">不使用AI分析</option>
             {models.map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
@@ -213,7 +213,7 @@ function AgentLogAuditApp() {
                             </span>
                             {session.risk_flags?.length > 0 && (
                               <span className="text-xs px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">
-                                {session.risk_flags.length} 风险
+                                {session.risk_flags.length} 个风险
                               </span>
                             )}
                             <Eye className="w-3 h-3 text-muted-foreground" />

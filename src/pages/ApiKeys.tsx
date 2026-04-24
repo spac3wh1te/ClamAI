@@ -709,7 +709,7 @@ export default function ApiKeys() {
                   </button>
                   <button
                     onClick={() => {
-                      if (confirm("确定删除？")) deleteMutation.mutate(key.id);
+                      if (confirm("确定要删除此密钥吗？")) deleteMutation.mutate(key.id);
                     }}
                     className="p-2 hover:bg-destructive/10 text-destructive rounded-lg transition-colors"
                   >

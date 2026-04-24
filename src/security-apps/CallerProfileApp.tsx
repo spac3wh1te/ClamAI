@@ -267,7 +267,7 @@ function CallerProfileAnalysis() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">被审计 API Key</label>
+              <label className="block text-sm font-medium mb-1">目标 API Key</label>
               <select
                 value={newTask.api_key_id}
                 onChange={(e) => setNewTask({ ...newTask, api_key_id: e.target.value })}
@@ -280,7 +280,7 @@ function CallerProfileAnalysis() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">分析模型</label>
+              <label className="block text-sm font-medium mb-1">AI分析模型</label>
               <select
                 value={newTask.model}
                 onChange={(e) => setNewTask({ ...newTask, model: e.target.value })}
@@ -312,8 +312,8 @@ function CallerProfileAnalysis() {
                 onChange={(e) => setNewTask({ ...newTask, schedule_type: e.target.value })}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
               >
-                <option value="once">单次执行</option>
-                <option value="periodic">周期执行</option>
+                <option value="once">立即执行</option>
+                <option value="periodic">定时执行</option>
               </select>
             </div>
             {newTask.schedule_type === "periodic" && (
@@ -365,7 +365,7 @@ function CallerProfileAnalysis() {
                     </span>
                     <span className="text-xs text-muted-foreground">{r.model_used}</span>
                     <span className="text-xs text-muted-foreground">{r.time_range}</span>
-                    <span className="text-xs text-muted-foreground">{r.logs_analyzed}条日志</span>
+                    <span className="text-xs text-muted-foreground">{r.logs_analyzed} 条日志</span>
                   </div>
                   <span className="text-xs text-muted-foreground">
                     {new Date(r.analyzed_at).toLocaleString("zh-CN")}
@@ -453,7 +453,7 @@ function CallerProfileAnalysis() {
                   )}
                   {!isRunning && (
                     <button
-                      onClick={() => { if (confirm("确定删除?")) deleteMutation.mutate(task.id); }}
+                      onClick={() => { if (confirm("确定要删除此任务吗？")) deleteMutation.mutate(task.id); }}
                       className="p-1.5 text-muted-foreground hover:text-red-500"
                       title="删除"
                     >
@@ -491,7 +491,7 @@ function CallerProfileAnalysis() {
                   {task.result_detail && (
                     <details className="mt-3">
                       <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
-                        查看原始分析
+                        查看详细分析报告
                       </summary>
                       <div className="mt-2 p-2 bg-muted/30 rounded text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">
                         {task.result_detail}

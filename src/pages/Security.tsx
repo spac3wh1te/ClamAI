@@ -520,7 +520,7 @@ export default function Security() {
               ))}
             </div>
             <div>
-              <label className="text-sm font-medium">研判模型</label>
+              <label className="text-sm font-medium">分析模型</label>
               <select
                 value={cfg.semantic_model}
                 onChange={(e) =>
@@ -528,7 +528,7 @@ export default function Security() {
                 }
                 className="w-full mt-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
-                <option value="">选择研判模型...</option>
+                <option value="">选择分析模型...</option>
                 {(proxyModels || []).map((m) => (
                   <option key={m} value={m}>
                     {m}

@@ -298,7 +298,7 @@ export default function Settings() {
   const handleLoadProfile = async (profileId: string) => {
     if (
       !confirm(
-        "切换配置档案将替换当前所有配置（Providers、网关、服务等）。确定继续？",
+        "切换配置方案将替换当前所有配置（Providers、网关、服务等）。确定继续？",
       )
     )
       return;
@@ -315,7 +315,7 @@ export default function Settings() {
   };
 
   const handleDeleteProfile = async (profileId: string) => {
-    if (!confirm("确定删除此配置档案？")) return;
+    if (!confirm("确定删除此配置方案？")) return;
     try {
       await invoke("delete_profile", { profileId });
       refetchProfiles();
@@ -365,14 +365,14 @@ export default function Settings() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold flex items-center gap-2">
             <FolderOpen className="w-5 h-5 text-primary" />
-            配置档案
+            配置方案
           </h2>
           <button
             onClick={() => setShowNewProfile(!showNewProfile)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
           >
             <Plus size={14} />
-            保存当前为新档案
+            保存当前为新方案
           </button>
         </div>
 
@@ -383,7 +383,7 @@ export default function Settings() {
               value={newProfileName}
               onChange={(e) => setNewProfileName(e.target.value)}
               className="flex-1 px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-              placeholder="输入档案名称，如：工作环境、测试环境..."
+              placeholder="输入方案名称，如：工作环境、测试环境..."
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleSaveProfile();
               }}
@@ -410,7 +410,7 @@ export default function Settings() {
         <div className="space-y-2">
           {profilesData?.length === 0 && (
             <p className="text-sm text-muted-foreground text-center py-4">
-              暂无配置档案，点击上方按钮保存当前配置
+              暂无配置方案，点击上方按钮保存当前配置
             </p>
           )}
           {profilesData?.map((profile) => (

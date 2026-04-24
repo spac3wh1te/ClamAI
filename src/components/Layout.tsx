@@ -30,8 +30,8 @@ function Layout({ children }: LayoutProps) {
   const navigation = [
     { name: "仪表盘", href: "/", icon: LayoutDashboard },
     { name: "模型提供商", href: "/providers", icon: Server },
-    { name: "模型服务", href: "/models", icon: Layers },
-    { name: "调用密钥", href: "/api-keys", icon: Key },
+    { name: "模型管理", href: "/models", icon: Layers },
+    { name: "API密钥", href: "/api-keys", icon: Key },
     { name: "调用记录", href: "/logs", icon: FileText },
     { name: "安全广场", href: "/security-square", icon: Shield },
     { name: "安全防护", href: "/security", icon: Shield },

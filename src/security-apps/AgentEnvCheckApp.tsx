@@ -228,7 +228,7 @@ function AgentEnvCheckApp() {
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm">{agent.name}</span>
                     {agent.has_skills && (
-                      <span className="text-xs px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded">有Skills</span>
+                      <span className="text-xs px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded">有技能</span>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground truncate">{agent.dir}</p>

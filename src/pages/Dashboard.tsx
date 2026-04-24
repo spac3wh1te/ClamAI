@@ -485,7 +485,7 @@ export default function Dashboard() {
                   </div>
                   <div className="text-right">
                     <p className="font-medium">
-                      {formatTokens(data.tokens || 0)} tokens
+                      {formatTokens(data.tokens || 0)} Tokens
                     </p>
                     <p className="text-xs text-muted-foreground">
                       成功率 {((data.success_rate || 0) * 100).toFixed(1)}%
@@ -516,7 +516,7 @@ export default function Dashboard() {
                   <div className="text-right">
                     <span className="text-sm">{data.requests || 0} 次</span>
                     <span className="text-xs text-muted-foreground ml-2">
-                      {formatTokens(data.tokens || 0)} tokens
+                      {formatTokens(data.tokens || 0)} Tokens
                     </span>
                   </div>
                 </div>
