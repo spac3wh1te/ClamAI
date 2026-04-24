@@ -2227,7 +2227,10 @@ pub async fn create_analysis_task(
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
     }
-    let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    let (status, resp_body) = send_and_log_full("POST", &url, req).await?;
+    if status >= 400 {
+        return Err(format!("API error {}: {}", status, resp_body));
+    }
     Ok(resp_body)
 }
 

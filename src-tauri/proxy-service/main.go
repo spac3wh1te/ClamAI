@@ -2812,20 +2812,23 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 
 	homeDir, _ := os.UserHomeDir()
 	type CheckItem struct {
-		Category string `json:"category"`
-		Name     string `json:"name"`
-		Status   string `json:"status"`
-		Detail   string `json:"detail"`
+		Category string   `json:"category"`
+		Name     string   `json:"name"`
+		Status   string   `json:"status"`
+		Detail   string   `json:"detail"`
+		Items    []string `json:"items,omitempty"`
 	}
 	var checks []CheckItem
 
 	agentDirs := map[string]string{
-		"claude":   filepath.Join(homeDir, ".claude"),
-		"cursor":   filepath.Join(homeDir, ".cursor"),
-		"windsurf": filepath.Join(homeDir, ".windsurf"),
-		"cline":    filepath.Join(homeDir, ".cline"),
-		"aider":    filepath.Join(homeDir, ".aider"),
-		"codex":    filepath.Join(homeDir, ".codex"),
+		"claude":      filepath.Join(homeDir, ".claude"),
+		"claude code": filepath.Join(homeDir, ".claude"),
+		"cursor":      filepath.Join(homeDir, ".cursor"),
+		"windsurf":    filepath.Join(homeDir, ".windsurf"),
+		"cline":       filepath.Join(homeDir, ".cline"),
+		"aider":       filepath.Join(homeDir, ".aider"),
+		"codex":       filepath.Join(homeDir, ".codex"),
+		"codex cli":   filepath.Join(homeDir, ".codex"),
 	}
 	agentDir, ok := agentDirs[strings.ToLower(req.AgentName)]
 	if !ok {
@@ -2882,25 +2885,43 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 	})
 
 	if len(sensitiveFiles) > 0 {
-		checks = append(checks, CheckItem{"security", "敏感命名文件", "fail",
-			fmt.Sprintf("发现 %d 个疑似敏感文件: %s", len(sensitiveFiles), strings.Join(sensitiveFiles[:min(3, len(sensitiveFiles))], ", "))})
+		summary := fmt.Sprintf("发现 %d 个疑似敏感命名的文件", len(sensitiveFiles))
+		relFiles := make([]string, len(sensitiveFiles))
+		for i, f := range sensitiveFiles {
+			rel, err := filepath.Rel(homeDir, f)
+			if err == nil {
+				relFiles[i] = rel
+			} else {
+				relFiles[i] = f
+			}
+		}
+		checks = append(checks, CheckItem{"security", "敏感命名文件", "fail", summary, relFiles})
 	} else {
-		checks = append(checks, CheckItem{"security", "敏感命名文件", "pass", "未发现可疑命名的敏感文件"})
+		checks = append(checks, CheckItem{"security", "敏感命名文件", "pass", "未发现可疑命名的敏感文件", nil})
 	}
 
 	if len(envRisks) > 0 {
+		relRisks := make([]string, len(envRisks))
+		for i, f := range envRisks {
+			rel, err := filepath.Rel(homeDir, f)
+			if err == nil {
+				relRisks[i] = rel
+			} else {
+				relRisks[i] = f
+			}
+		}
 		checks = append(checks, CheckItem{"security", "凭据泄露风险", "fail",
-			fmt.Sprintf("发现 %d 个文件可能包含硬编码凭据", len(envRisks))})
+			fmt.Sprintf("发现 %d 个文件可能包含硬编码凭据", len(envRisks)), relRisks})
 	} else {
-		checks = append(checks, CheckItem{"security", "凭据泄露风险", "pass", "未发现硬编码凭据"})
+		checks = append(checks, CheckItem{"security", "凭据泄露风险", "pass", "未发现硬编码凭据", nil})
 	}
 
 	if info, err := os.Stat(agentDir); err == nil {
 		perms := info.Mode().Perm()
 		if perms&0077 == 0 {
-			checks = append(checks, CheckItem{"files", "目录权限", "pass", fmt.Sprintf("权限安全 (%o)", perms)})
+			checks = append(checks, CheckItem{"files", "目录权限", "pass", fmt.Sprintf("权限安全 (%o)", perms), nil})
 		} else {
-			checks = append(checks, CheckItem{"files", "目录权限", "warn", fmt.Sprintf("权限过于开放 (%o)", perms)})
+			checks = append(checks, CheckItem{"files", "目录权限", "warn", fmt.Sprintf("权限过于开放 (%o)，建议收紧至 0700", perms), nil})
 		}
 	}
 
@@ -2929,8 +2950,17 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 		fmt.Sprintf("发现 %d 个会话/日志文件", len(sessionFiles))})
 
 	if len(skillsFiles) > 0 {
+		relSkills := make([]string, len(skillsFiles))
+		for i, f := range skillsFiles {
+			rel, err := filepath.Rel(homeDir, f)
+			if err == nil {
+				relSkills[i] = rel
+			} else {
+				relSkills[i] = f
+			}
+		}
 		checks = append(checks, CheckItem{"files", "Skills/规则文件", "info",
-			fmt.Sprintf("发现 %d 个Skills/规则文件", len(skillsFiles))})
+			fmt.Sprintf("发现 %d 个Skills/规则文件", len(skillsFiles)), relSkills})
 
 		if req.Model != "" {
 			skillsContent := ""
@@ -2971,8 +3001,19 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 												if s, ok := parsed["summary"].(string); ok {
 													summary = s
 												}
+												var findingItems []string
+												if findings, ok := parsed["findings"].([]interface{}); ok {
+													for _, f := range findings {
+														if fm, ok := f.(map[string]interface{}); ok {
+															fName, _ := fm["name"].(string)
+															fSev, _ := fm["severity"].(string)
+															fDetail, _ := fm["detail"].(string)
+															findingItems = append(findingItems, fmt.Sprintf("[%s] %s: %s", fSev, fName, fDetail))
+														}
+													}
+												}
 												checks = append(checks, CheckItem{"security", "Skills安全分析(AI)", status,
-													fmt.Sprintf("风险等级: %s | %s", rl, summary)})
+													fmt.Sprintf("风险等级: %s | %s", rl, summary), findingItems})
 											}
 										}
 									}
@@ -2984,7 +3025,7 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	} else {
-		checks = append(checks, CheckItem{"files", "Skills/规则文件", "info", "未发现Skills或规则文件"})
+		checks = append(checks, CheckItem{"files", "Skills/规则文件", "info", "未发现Skills或规则文件", nil})
 	}
 
 	configFiles := []string{"settings.json", "config.json", "config.yaml", "config.yml", ".aider.conf.yml"}
@@ -2996,25 +3037,31 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 			hasToken := strings.Contains(content, "token") && (strings.Contains(content, "bearer") || strings.Contains(content, "auth"))
 			if hasAPIKey || hasToken {
 				checks = append(checks, CheckItem{"security", "配置文件凭据", "warn",
-					fmt.Sprintf("配置文件 %s 中可能包含API密钥或Token", cf)})
+					fmt.Sprintf("配置文件 %s 中可能包含API密钥或Token", cf), []string{cf}})
 			} else {
 				checks = append(checks, CheckItem{"security", "配置文件", "pass",
-					fmt.Sprintf("配置文件 %s 未发现明文凭据", cf)})
+					fmt.Sprintf("配置文件 %s 未发现明文凭据", cf), nil})
 			}
 			break
 		}
 	}
 
-	passCount := 0
+	scoringTotal := 0
+	scoringPass := 0
 	for _, c := range checks {
-		if c.Status == "pass" {
-			passCount++
+		switch c.Status {
+		case "pass":
+			scoringTotal++
+			scoringPass++
+		case "warn":
+			scoringTotal++
+		case "fail":
+			scoringTotal++
 		}
 	}
-	total := len(checks)
-	score := 0
-	if total > 0 {
-		score = passCount * 100 / total
+	score := 100
+	if scoringTotal > 0 {
+		score = scoringPass * 100 / scoringTotal
 	}
 
 	w.Header().Set("Content-Type", "application/json")

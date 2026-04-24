@@ -15,6 +15,8 @@ import {
   RefreshCw,
   Search,
   Brain,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { registerSecurityApp } from "./registry";
 
@@ -23,6 +25,7 @@ interface CheckItem {
   name: string;
   status: "pass" | "warn" | "fail" | "info";
   detail: string;
+  items?: string[];
 }
 
 interface EnvCheckResult {
@@ -48,11 +51,11 @@ const STATUS_ICON: Record<string, typeof CheckCircle> = {
   info: Monitor,
 };
 
-const STATUS_STYLE: Record<string, { bg: string; text: string }> = {
-  pass: { bg: "bg-green-500/10", text: "text-green-500" },
-  warn: { bg: "bg-orange-500/10", text: "text-orange-500" },
-  fail: { bg: "bg-red-500/10", text: "text-red-500" },
-  info: { bg: "bg-blue-500/10", text: "text-blue-500" },
+const STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
+  pass: { bg: "bg-green-500/10", text: "text-green-500", label: "通过" },
+  warn: { bg: "bg-orange-500/10", text: "text-orange-500", label: "警告" },
+  fail: { bg: "bg-red-500/10", text: "text-red-500", label: "未通过" },
+  info: { bg: "bg-muted", text: "text-muted-foreground", label: "信息" },
 };
 
 const CATEGORY_ICON: Record<string, typeof Monitor> = {
@@ -71,6 +74,56 @@ const CATEGORY_LABEL: Record<string, string> = {
   services: "服务状态",
 };
 
+function CheckItemRow({ item }: { item: CheckItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasItems = item.items && item.items.length > 0;
+  const Icon = STATUS_ICON[item.status] || Monitor;
+  const style = STATUS_STYLE[item.status] || STATUS_STYLE.info;
+
+  return (
+    <div>
+      <div className="px-4 py-3 flex items-start gap-3">
+        <div className={`p-1 rounded ${style.bg} mt-0.5`}>
+          <Icon className={`w-4 h-4 ${style.text}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{item.name}</span>
+            <span className={`text-xs px-1.5 py-0.5 rounded ${style.bg} ${style.text}`}>
+              {style.label}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5">{item.detail}</p>
+        </div>
+        {hasItems && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="flex items-center gap-1 px-2 py-1 text-xs text-primary hover:underline shrink-0"
+          >
+            {expanded ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+            {expanded ? "收起" : `详情(${item.items!.length})`}
+          </button>
+        )}
+      </div>
+      {hasItems && expanded && (
+        <div className="pl-14 pr-4 pb-3">
+          <div className="bg-muted/40 rounded-md border border-border divide-y divide-border">
+            {item.items!.map((it, idx) => (
+              <div key={idx} className="px-3 py-1.5 text-xs text-muted-foreground font-mono break-all">
+                {it}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CheckResultView({ result }: { result: EnvCheckResult }) {
   const score = result.score;
   const scoreColor = score >= 80 ? "text-green-500" : score >= 50 ? "text-orange-500" : "text-red-500";
@@ -86,6 +139,9 @@ function CheckResultView({ result }: { result: EnvCheckResult }) {
     {} as Record<string, CheckItem[]>,
   );
 
+  const scoringItems = result.checks.filter((c) => c.status !== "info");
+  const passCount = scoringItems.filter((c) => c.status === "pass").length;
+
   return (
     <div className="space-y-4">
       <div className="bg-card rounded-lg border border-border p-4 flex items-center justify-between">
@@ -93,6 +149,9 @@ function CheckResultView({ result }: { result: EnvCheckResult }) {
           <h4 className="text-sm font-medium">安全评分</h4>
           <p className="text-xs text-muted-foreground mt-1">
             扫描时间: {new Date(result.scan_time).toLocaleString("zh-CN")}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {passCount}/{scoringItems.length} 项通过（信息性项不计入评分）
           </p>
         </div>
         <div className="text-center">
@@ -103,30 +162,24 @@ function CheckResultView({ result }: { result: EnvCheckResult }) {
 
       {Object.entries(grouped).map(([category, items]) => {
         const catLabel = CATEGORY_LABEL[category] || category;
+        const catScoring = items.filter((i) => i.status !== "info");
+        const catPass = catScoring.filter((i) => i.status === "pass").length;
         return (
           <div key={category} className="bg-card rounded-lg border border-border overflow-hidden">
             <div className="px-4 py-3 border-b border-border flex items-center gap-2">
               <span className="text-sm font-medium">{catLabel}</span>
-              <span className="text-xs text-muted-foreground ml-auto">
-                {items.filter((i) => i.status === "pass").length}/{items.length} 通过
-              </span>
+              {catScoring.length > 0 ? (
+                <span className="text-xs text-muted-foreground ml-auto">
+                  {catPass}/{catScoring.length} 通过
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground ml-auto">仅信息展示</span>
+              )}
             </div>
             <div className="divide-y divide-border">
-              {items.map((item, i) => {
-                const Icon = STATUS_ICON[item.status] || Monitor;
-                const style = STATUS_STYLE[item.status] || STATUS_STYLE.info;
-                return (
-                  <div key={i} className="px-4 py-3 flex items-start gap-3">
-                    <div className={`p-1 rounded ${style.bg} mt-0.5`}>
-                      <Icon className={`w-4 h-4 ${style.text}`} />
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-sm font-medium">{item.name}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">{item.detail}</p>
-                    </div>
-                  </div>
-                );
-              })}
+              {items.map((item, i) => (
+                <CheckItemRow key={i} item={item} />
+              ))}
             </div>
           </div>
         );
@@ -288,7 +341,7 @@ function AgentEnvCheckApp() {
               </span>
               <button
                 onClick={() => {
-                  if (deepCheckModel) deepMutation.mutate({ agent: selectedAgent, model: deepCheckModel });
+                  if (deepCheckModel) deepMutation.mutate({ agent: selectedAgent!, model: deepCheckModel });
                 }}
                 className="ml-auto flex items-center gap-1 px-2 py-1 bg-secondary rounded text-xs"
               >

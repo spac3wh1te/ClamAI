@@ -165,8 +165,9 @@ function CallerProfileAnalysis() {
   const { data: tasksData, refetch: refetchTasks } = useQuery({
     queryKey: ["analysis-tasks"],
     queryFn: async () => {
-      const resp = await invoke<{ tasks: AnalysisTask[] }>("list_analysis_tasks");
-      return resp.tasks || [];
+      const raw = await invoke<string>("list_analysis_tasks");
+      const parsed = JSON.parse(raw);
+      return (parsed.tasks || []) as AnalysisTask[];
     },
     refetchInterval: 3000,
   });
