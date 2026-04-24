@@ -2416,6 +2416,39 @@ pub async fn start_skills_task(state: tauri::State<'_, AppState>, id: String) ->
     Ok(resp_body)
 }
 
+#[tauri::command]
+pub async fn discover_agents(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "agent/discover").await?;
+    let client = https_client()?;
+    let mut req = client.get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json");
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("GET", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn deep_check_agent(state: tauri::State<'_, AppState>, agent_name: String, model: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "agent/deep-check").await?;
+    let client = https_client()?;
+    let body = serde_json::json!({
+        "agent_name": agent_name,
+        "model": model,
+    });
+    let mut req = client.post(&url)
+        .timeout(std::time::Duration::from_secs(60))
+        .header("Content-Type", "application/json")
+        .body(body.to_string());
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    Ok(resp_body)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupState {
     pub setup_complete: bool,

@@ -245,6 +245,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             list_skills_tasks,
             delete_skills_task,
             start_skills_task,
+            discover_agents,
+            deep_check_agent,
 
             // 模型列表增强
             get_proxy_models_with_info,
