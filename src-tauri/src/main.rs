@@ -241,6 +241,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // 智能体安全命令
             scan_agent_logs,
             check_agent_env,
+            create_skills_task,
+            list_skills_tasks,
+            delete_skills_task,
+            start_skills_task,
 
             // 模型列表增强
             get_proxy_models_with_info,

@@ -664,6 +664,10 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/analysis/tasks/{id}", p.handleDeleteAnalysisTask).Methods("DELETE")
 	api.HandleFunc("/analysis/tasks/{id}/start", p.handleStartAnalysisTask).Methods("POST")
 	api.HandleFunc("/analysis/tasks/{id}/stop", p.handleStopAnalysisTask).Methods("POST")
+	api.HandleFunc("/skills/tasks", p.handleCreateSkillsTask).Methods("POST")
+	api.HandleFunc("/skills/tasks", p.handleListSkillsTasks).Methods("GET")
+	api.HandleFunc("/skills/tasks/{id}", p.handleDeleteSkillsTask).Methods("DELETE")
+	api.HandleFunc("/skills/tasks/{id}/start", p.handleStartSkillsTask).Methods("POST")
 	api.HandleFunc("/analysis/tasks/{id}", p.handleUpdateAnalysisTask).Methods("PUT")
 	api.HandleFunc("/agent/scan-logs", p.handleAgentLogScan).Methods("POST")
 	api.HandleFunc("/agent/env-check", p.handleAgentEnvCheck).Methods("POST")
@@ -2139,6 +2143,168 @@ func (p *ProxyServer) handleUpdateAnalysisTask(w http.ResponseWriter, r *http.Re
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (p *ProxyServer) handleCreateSkillsTask(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name       string `json:"name"`
+		Model      string `json:"model"`
+		SourceType string `json:"source_type"`
+		SourceInfo string `json:"source_info"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.Model == "" {
+		http.Error(w, "name and model are required", http.StatusBadRequest)
+		return
+	}
+	id := fmt.Sprintf("stask_%d", time.Now().UnixNano())
+	taskNo := nextSkillsTaskNo()
+	if err := dbCreateSkillsTask(id, taskNo, req.Name, req.Model, req.SourceType, req.SourceInfo, "once"); err != nil {
+		http.Error(w, "Failed to create task: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "task_no": taskNo})
+}
+
+func (p *ProxyServer) handleListSkillsTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := dbGetSkillsTasks()
+	if err != nil {
+		http.Error(w, "Failed to list tasks: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tasks == nil {
+		tasks = []map[string]interface{}{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"tasks": tasks})
+}
+
+func (p *ProxyServer) handleDeleteSkillsTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	if err := dbDeleteSkillsTask(id); err != nil {
+		http.Error(w, "Failed to delete task: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (p *ProxyServer) handleStartSkillsTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	tasks, _ := dbGetSkillsTasks()
+	var task map[string]interface{}
+	for _, t := range tasks {
+		if t["id"] == id {
+			task = t
+			break
+		}
+	}
+	if task == nil {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+	dbUpdateSkillsTaskStatus(id, "running")
+	go p.executeSkillsTask(id, task)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": "running"})
+}
+
+func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface{}) {
+	model, _ := task["model"].(string)
+	sourceType, _ := task["source_type"].(string)
+	sourceInfo, _ := task["source_info"].(string)
+
+	var content string
+	switch sourceType {
+	case "text":
+		content = sourceInfo
+	case "url":
+		resp, err := http.Get(sourceInfo)
+		if err != nil {
+			dbUpdateSkillsTaskResult(taskID, "error", "获取URL失败: "+err.Error(), "", "")
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		content = string(body)
+	case "file":
+		data, err := os.ReadFile(sourceInfo)
+		if err != nil {
+			dbUpdateSkillsTaskResult(taskID, "error", "读取文件失败: "+err.Error(), "", "")
+			return
+		}
+		content = string(data)
+	default:
+		dbUpdateSkillsTaskResult(taskID, "error", "未知的来源类型", "", "")
+		return
+	}
+
+	if content == "" {
+		dbUpdateSkillsTaskResult(taskID, "error", "内容为空", "", "")
+		return
+	}
+
+	systemPrompt := `你是一个专业的AI网关安全分析师，专注于检测AI智能体Skills文档中的安全威胁。请对以下Skills文档进行安全检测，覆盖以下6个维度：
+1. 恶意指令注入
+2. 数据投毒风险
+3. 隐私泄露
+4. 后门植入
+5. 虚假信息
+6. 提示词注入
+
+你必须只返回纯JSON：{"risk_level":"低|中|高|极高","summary":"一句话总结","details":{"malicious_instructions":{"level":"低|中|高|极高","description":"描述"},"data_poisoning":{"level":"低|中|高|极高","description":"描述"},"privacy_leak":{"level":"低|中|高|极高","description":"描述"},"backdoor":{"level":"低|中|高|极高","description":"描述"},"misinformation":{"level":"低|中|高|极高","description":"描述"},"prompt_injection":{"level":"低|中|高|极高","description":"描述"}},"recommendations":["建议1"]}`
+
+	messages := []map[string]interface{}{
+		{"role": "system", "content": systemPrompt},
+		{"role": "user", "content": content},
+	}
+
+	statusCode, respBody, err := p.internalChatCompletion(model, messages, 0.2, 2000)
+	if err != nil {
+		dbUpdateSkillsTaskResult(taskID, "error", "检测失败: "+err.Error(), "", "")
+		return
+	}
+
+	riskLevel := "unknown"
+	summary := ""
+	detail := ""
+	dimensions := ""
+	if statusCode >= 200 && statusCode < 300 {
+		var resp map[string]interface{}
+		if json.Unmarshal(respBody, &resp) == nil {
+			if choices, ok := resp["choices"].([]interface{}); ok && len(choices) > 0 {
+				if choice, ok := choices[0].(map[string]interface{}); ok {
+					if msg, ok := choice["message"].(map[string]interface{}); ok {
+						if c, ok := msg["content"].(string); ok {
+							detail = c
+							parsed := extractJSON(c)
+							if parsed != nil {
+								if rl, ok := parsed["risk_level"].(string); ok {
+									riskLevel = rl
+								}
+								if s, ok := parsed["summary"].(string); ok {
+									summary = s
+								}
+								if det, ok := parsed["details"].(map[string]interface{}); ok {
+									if dimBytes, err := json.Marshal(det); err == nil {
+										dimensions = string(dimBytes)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	dbUpdateSkillsTaskResult(taskID, riskLevel, summary, detail, dimensions)
 }
 
 func (p *ProxyServer) handleStartAnalysisTask(w http.ResponseWriter, r *http.Request) {

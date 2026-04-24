@@ -2352,7 +2352,69 @@ pub async fn check_agent_env(state: tauri::State<'_, AppState>) -> Result<String
     Ok(resp_body)
 }
 
-// ==================== 安装向导和服务连接命令 ====================
+#[tauri::command]
+pub async fn create_skills_task(state: tauri::State<'_, AppState>, name: String, model: String, source_type: String, source_info: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "skills/tasks").await?;
+    let client = https_client()?;
+    let body = serde_json::json!({
+        "name": name,
+        "model": model,
+        "source_type": source_type,
+        "source_info": source_info,
+    });
+    let mut req = client.post(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json")
+        .body(body.to_string());
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn list_skills_tasks(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, "skills/tasks").await?;
+    let client = https_client()?;
+    let mut req = client.get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json");
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("GET", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn delete_skills_task(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("skills/tasks/{}", id)).await?;
+    let client = https_client()?;
+    let mut req = client.delete(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json");
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("DELETE", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn start_skills_task(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("skills/tasks/{}/start", id)).await?;
+    let client = https_client()?;
+    let mut req = client.post(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json")
+        .body("{}");
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    Ok(resp_body)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupState {

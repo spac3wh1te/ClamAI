@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   Shield,
@@ -11,433 +11,329 @@ import {
   CheckCircle,
   XCircle,
   Brain,
-  History,
+  Plus,
+  Trash2,
+  Play,
+  RefreshCw,
 } from "lucide-react";
 import { registerSecurityApp } from "./registry";
 
-interface AnalysisResult {
-  success: boolean;
-  message: string;
-  analysis: string | null;
-  risk_level: string;
-}
-
-interface SkillsHistoryRecord {
-  id: number;
-  checked_at: string;
+interface SkillsTask {
+  id: string;
+  task_no: string;
+  name: string;
+  model: string;
   source_type: string;
   source_info: string;
-  result: string;
-  risk_level: string;
-  model_used: string;
+  schedule_type: string;
+  status: string;
+  progress?: string;
+  last_run_at?: string;
+  created_at: string;
+  result_risk_level?: string;
+  result_summary?: string;
+  result_detail?: string;
+  result_dimensions?: string;
 }
 
-const SKILLS_DIM_LABELS: Record<string, string> = {
-  malicious_instructions: "恶意指令",
+const DIM_LABELS: Record<string, string> = {
+  malicious_instructions: "恶意指令注入",
   data_poisoning: "数据投毒",
   privacy_leak: "隐私泄露",
-  backdoor: "后门陷阱",
-  misinformation: "经验误导",
-  prompt_injection: "提示注入",
+  backdoor: "后门植入",
+  misinformation: "虚假信息",
+  prompt_injection: "提示词注入",
 };
 
-function parseSkillsResult(text: string): {
-  conclusion: string;
-  summary: string;
-  dimensions: Record<string, any>;
-  recommendation: string;
-} | null {
-  try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (parsed.conclusion) return parsed;
-    return null;
-  } catch {
-    return null;
+function riskColor(level: string) {
+  switch (level) {
+    case "极高": return "bg-red-500/20 text-red-400 border-red-500/30";
+    case "高": return "bg-orange-500/20 text-orange-400 border-orange-500/30";
+    case "中": return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+    case "低": return "bg-green-500/20 text-green-400 border-green-500/30";
+    default: return "bg-muted text-muted-foreground border-border";
   }
 }
 
+function riskIcon(level: string) {
+  switch (level) {
+    case "极高": return <XCircle className="w-5 h-5 text-red-500" />;
+    case "高": return <AlertTriangle className="w-5 h-5 text-orange-500" />;
+    case "中": return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
+    case "低": return <CheckCircle className="w-5 h-5 text-green-500" />;
+    default: return <Shield className="w-5 h-5 text-muted-foreground" />;
+  }
+}
+
+function DimensionCards({ dimensionsJson }: { dimensionsJson: string }) {
+  let dims: Record<string, any> = {};
+  try {
+    dims = JSON.parse(dimensionsJson);
+  } catch {
+    return null;
+  }
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
+      {Object.entries(dims).map(([key, val]: [string, any]) => (
+        <div key={key} className={`border rounded-lg p-3 ${riskColor(val?.level || "")}`}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-medium text-sm">{DIM_LABELS[key] || key}</span>
+            <span className="text-xs font-medium">{val?.level || "未知"}</span>
+          </div>
+          {val?.description && (
+            <p className="text-xs text-muted-foreground mt-1">{val.description}</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SkillsDetection() {
-  const [selectedModel, setSelectedModel] = useState("");
-  const [sourceType, setSourceType] = useState<
-    "text" | "url" | "file_path" | "upload"
-  >("text");
-  const [inputValue, setInputValue] = useState("");
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [isChecking, setIsChecking] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newModel, setNewModel] = useState("");
+  const [sourceType, setSourceType] = useState<"text" | "url" | "file">("text");
+  const [sourceInfo, setSourceInfo] = useState("");
+  const [expandedTask, setExpandedTask] = useState<string | null>(null);
 
   const { data: proxyModels } = useQuery({
     queryKey: ["proxy-models"],
     queryFn: () => invoke<string[]>("get_proxy_models"),
   });
 
-  const { data: historyData, refetch: refetchHistory } = useQuery({
-    queryKey: ["skills-history"],
-    queryFn: () =>
-      invoke<{ records: SkillsHistoryRecord[]; total: number }>(
-        "get_skills_detection_history",
-        { limit: 20, offset: 0 },
-      ),
-    enabled: showHistory,
+  const { data: tasksData, isLoading } = useQuery({
+    queryKey: ["skills-tasks"],
+    queryFn: async () => {
+      const raw = await invoke<string>("list_skills_tasks");
+      const parsed = JSON.parse(raw);
+      return (parsed.tasks || []) as SkillsTask[];
+    },
+    refetchInterval: 3000,
   });
 
-  const checkMutation = useMutation({
-    mutationFn: async (params: {
-      model: string;
-      sourceType: string;
-      content: string;
-    }) => {
-      return invoke<AnalysisResult>("check_skills_content", params);
-    },
-    onSuccess: (data) => {
-      setResult(data);
-      setIsChecking(false);
-      if (showHistory) refetchHistory();
-    },
-    onError: (err: any) => {
-      setErrorMsg(`检测失败: ${err}`);
-      setResult({
-        success: false,
-        message: String(err),
-        analysis: null,
-        risk_level: "unknown",
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      return invoke<string>("create_skills_task", {
+        name: newName,
+        model: newModel,
+        sourceType,
+        sourceInfo,
       });
-      setIsChecking(false);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["skills-tasks"] });
+      setShowCreate(false);
+      setNewName("");
+      setNewModel("");
+      setSourceInfo("");
     },
   });
 
-  const handleCheck = () => {
-    if (!selectedModel || !inputValue.trim()) return;
-    setIsChecking(true);
-    setResult(null);
-    setErrorMsg(null);
-    checkMutation.mutate({
-      model: selectedModel,
-      sourceType: sourceType === "upload" ? "text" : sourceType,
-      content: inputValue,
-    });
-  };
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => invoke<string>("delete_skills_task", { id }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }),
+  });
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setInputValue(ev.target?.result as string);
-    reader.readAsText(file);
-  };
+  const startMutation = useMutation({
+    mutationFn: (id: string) => invoke<string>("start_skills_task", { id }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }),
+  });
 
+  const tasks = tasksData || [];
   const models = proxyModels || [];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3 mb-4">
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
         <Brain className="w-6 h-6 text-primary" />
         <h2 className="text-xl font-bold">Skills 文档检测</h2>
         <button
-          onClick={() => setShowHistory(!showHistory)}
-          className="ml-auto flex items-center gap-1 px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+          onClick={() => setShowCreate(true)}
+          className="ml-auto flex items-center gap-1 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90"
         >
-          <History className="w-4 h-4" />
-          {showHistory ? "隐藏历史" : "查看历史"}
+          <Plus className="w-4 h-4" />
+          新建检测
         </button>
       </div>
 
-      {showHistory && (
-        <div className="bg-card rounded-lg border border-border overflow-hidden">
-          <div className="px-4 py-3 border-b border-border">
-            <h4 className="text-sm font-medium">检测历史</h4>
-          </div>
-          <div className="divide-y divide-border max-h-64 overflow-y-auto">
-            {historyData?.records?.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-                暂无检测记录
-              </div>
-            )}
-            {historyData?.records?.map((record) => (
-              <div key={record.id} className="px-4 py-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${
-                      record.risk_level === "high"
-                        ? "bg-red-500/20 text-red-400"
-                        : record.risk_level === "medium"
-                          ? "bg-orange-500/20 text-orange-400"
-                          : record.risk_level === "low"
-                            ? "bg-green-500/20 text-green-400"
-                            : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {record.risk_level === "high"
-                      ? "高风险"
-                      : record.risk_level === "medium"
-                        ? "中风险"
-                        : record.risk_level === "low"
-                          ? "低风险"
-                          : "未知"}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(record.checked_at).toLocaleString()}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground mb-1">
-                  类型: {record.source_type} | 模型: {record.model_used}
-                </p>
-                <p className="text-xs text-muted-foreground truncate">
-                  {record.source_info}
-                </p>
-              </div>
+      {showCreate && (
+        <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+          <h3 className="text-sm font-medium">新建检测任务</h3>
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="任务名称"
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          />
+          <select
+            value={newModel}
+            onChange={(e) => setNewModel(e.target.value)}
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="">选择分析模型...</option>
+            {models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <div className="flex gap-2">
+            {(["text", "url", "file"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setSourceType(t)}
+                className={`flex-1 px-3 py-1.5 rounded-lg text-xs border ${
+                  sourceType === t
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-background border-border hover:bg-muted"
+                }`}
+              >
+                {t === "text" ? "粘贴文本" : t === "url" ? "URL链接" : "文件路径"}
+              </button>
             ))}
           </div>
-        </div>
-      )}
-
-      <div className="bg-muted/30 rounded-lg p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">分析模型</label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
-            >
-              <option value="">选择分析模型...</option>
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">输入方式</label>
-            <div className="flex gap-2">
-              {[
-                { value: "text", label: "粘贴文本", icon: FileText },
-                { value: "url", label: "URL 链接", icon: Link },
-                { value: "file_path", label: "文件路径", icon: FileText },
-                { value: "upload", label: "文件上传", icon: Upload },
-              ].map(({ value, label, icon: Icon }) => (
-                <button
-                  key={value}
-                  onClick={() => setSourceType(value as typeof sourceType)}
-                  className={`flex-1 flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-sm border ${
-                    sourceType === value
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-background border-border hover:bg-muted"
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div>
-          {sourceType === "url" && (
+          {sourceType === "text" ? (
+            <textarea
+              value={sourceInfo}
+              onChange={(e) => setSourceInfo(e.target.value)}
+              placeholder="粘贴 Skills 文档内容..."
+              className="w-full h-32 px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono resize-none"
+            />
+          ) : sourceType === "url" ? (
             <input
-              type="url"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
+              value={sourceInfo}
+              onChange={(e) => setSourceInfo(e.target.value)}
               placeholder="https://example.com/skills.md"
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
             />
-          )}
-          {sourceType === "file_path" && (
+          ) : (
             <input
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
+              value={sourceInfo}
+              onChange={(e) => setSourceInfo(e.target.value)}
               placeholder="/path/to/skills.md"
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono"
             />
           )}
-          {sourceType === "text" && (
-            <textarea
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              className="w-full h-40 px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono resize-none"
-              placeholder="粘贴 Skills 文档内容..."
-            />
-          )}
-          {sourceType === "upload" && (
-            <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
-              <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground mb-3">
-                支持 .md, .txt, .json 等文本文件
-              </p>
-              <input
-                type="file"
-                accept=".md,.txt,.json,.yaml,.yml"
-                onChange={handleFileUpload}
-                className="hidden"
-                id="skills-upload"
-              />
-              <label
-                htmlFor="skills-upload"
-                className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm cursor-pointer hover:bg-primary/90 inline-block"
-              >
-                选择文件
-              </label>
-              {inputValue && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  已加载: {inputValue.length} 字符
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-
-        <button
-          onClick={handleCheck}
-          disabled={!selectedModel || !inputValue.trim() || isChecking}
-          className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50"
-        >
-          {isChecking ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Shield className="w-4 h-4" />
-          )}
-          {isChecking ? "检测中..." : "开始检测"}
-        </button>
-      </div>
-
-      {result &&
-        (() => {
-          const skillsData = result.analysis
-            ? parseSkillsResult(result.analysis)
-            : null;
-          if (skillsData) {
-            const conclusionCfg =
-              skillsData.conclusion === "safe"
-                ? {
-                    bg: "bg-green-500/10",
-                    border: "border-green-500/30",
-                    text: "text-green-500",
-                    icon: CheckCircle,
-                    label: "安全",
-                  }
-                : skillsData.conclusion === "dangerous"
-                  ? {
-                      bg: "bg-red-500/10",
-                      border: "border-red-500/30",
-                      text: "text-red-500",
-                      icon: XCircle,
-                      label: "危险",
-                    }
-                  : {
-                      bg: "bg-muted",
-                      border: "border-border",
-                      text: "text-muted-foreground",
-                      icon: Shield,
-                      label: "未知",
-                    };
-            const ConclusionIcon = conclusionCfg.icon;
-            return (
-              <div className="space-y-4">
-                <div
-                  className={`${conclusionCfg.bg} border ${conclusionCfg.border} rounded-lg p-4`}
-                >
-                  <div className="flex items-center gap-3 mb-2">
-                    <ConclusionIcon
-                      className={`w-6 h-6 ${conclusionCfg.text}`}
-                    />
-                    <span className={`text-lg font-bold ${conclusionCfg.text}`}>
-                      {conclusionCfg.label}
-                    </span>
-                    <span className="text-sm text-muted-foreground ml-2">
-                      {skillsData.summary}
-                    </span>
-                  </div>
-                </div>
-                {skillsData.dimensions && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {Object.entries(skillsData.dimensions).map(
-                      ([key, dim]: [string, any]) => {
-                        const dimLabel = SKILLS_DIM_LABELS[key] || key;
-                        const dimColor = dim.detected
-                          ? "text-red-500"
-                          : "text-green-500";
-                        return (
-                          <div
-                            key={key}
-                            className={`border rounded-lg p-3 ${dim.detected ? "bg-red-500/5 border-red-500/20" : "bg-card border-border"}`}
-                          >
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="font-medium text-sm">
-                                {dimLabel}
-                              </span>
-                              <span
-                                className={`ml-auto text-xs font-medium ${dimColor}`}
-                              >
-                                {dim.detected
-                                  ? `检测到 (${dim.confidence}%)`
-                                  : "未检测到"}
-                              </span>
-                            </div>
-                            {dim.detail && (
-                              <p className="text-xs text-muted-foreground">
-                                {dim.detail}
-                              </p>
-                            )}
-                          </div>
-                        );
-                      },
-                    )}
-                  </div>
-                )}
-                {skillsData.recommendation && (
-                  <div className="bg-card rounded-lg border border-border p-4">
-                    <h4 className="text-sm font-medium mb-1 flex items-center gap-2">
-                      <Shield className="w-4 h-4" />
-                      处理建议
-                    </h4>
-                    <p className="text-sm text-muted-foreground">
-                      {skillsData.recommendation}
-                    </p>
-                  </div>
-                )}
-              </div>
-            );
-          }
-          return (
-            <div
-              className={`rounded-lg p-4 border ${result.risk_level === "high" ? "bg-red-500/10 border-red-500/30" : result.risk_level === "medium" ? "bg-orange-500/10 border-orange-500/30" : result.risk_level === "low" ? "bg-green-500/10 border-green-500/30" : "bg-muted border-border"}`}
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setShowCreate(false)}
+              className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
             >
-              <div className="flex items-center gap-2 mb-3">
-                {result.risk_level === "high" ? (
-                  <XCircle className="w-5 h-5 text-red-500" />
-                ) : result.risk_level === "medium" ? (
-                  <AlertTriangle className="w-5 h-5 text-orange-500" />
-                ) : result.risk_level === "low" ? (
-                  <CheckCircle className="w-5 h-5 text-green-500" />
+              取消
+            </button>
+            <button
+              onClick={() => createMutation.mutate()}
+              disabled={!newName || !newModel || !sourceInfo}
+              className="flex items-center gap-1 px-4 py-1.5 bg-primary text-primary-foreground rounded-lg text-sm disabled:opacity-50"
+            >
+              创建
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : tasks.length === 0 ? (
+        <div className="text-center py-8 text-muted-foreground text-sm">
+          暂无检测任务，点击"新建检测"开始
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {tasks.map((task) => (
+            <div key={task.id} className="bg-card rounded-lg border border-border p-4">
+              <div className="flex items-center gap-3">
+                {task.status === "running" ? (
+                  <Loader2 className="w-5 h-5 text-primary animate-spin" />
+                ) : task.result_risk_level ? (
+                  riskIcon(task.result_risk_level)
                 ) : (
                   <Shield className="w-5 h-5 text-muted-foreground" />
                 )}
-                <span className="font-semibold">
-                  风险等级:{" "}
-                  {result.risk_level === "high"
-                    ? "高风险"
-                    : result.risk_level === "medium"
-                      ? "中风险"
-                      : result.risk_level === "low"
-                        ? "低风险"
-                        : "未知"}
-                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-sm">{task.name}</span>
+                    <span className="text-xs text-muted-foreground">#{task.task_no}</span>
+                    {task.status === "running" && (
+                      <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">
+                        检测中
+                      </span>
+                    )}
+                    {task.result_risk_level && task.status !== "running" && (
+                      <span className={`text-xs px-2 py-0.5 rounded ${riskColor(task.result_risk_level)}`}>
+                        {task.result_risk_level}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    模型: {task.model} | 来源: {task.source_type}
+                    {task.last_run_at && ` | 上次: ${new Date(task.last_run_at).toLocaleString()}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1">
+                  {task.status !== "running" && (
+                    <button
+                      onClick={() => startMutation.mutate(task.id)}
+                      className="p-1.5 hover:bg-muted rounded"
+                      title="运行检测"
+                    >
+                      <Play className="w-4 h-4" />
+                    </button>
+                  )}
+                  {(task.result_detail || task.result_dimensions) && (
+                    <button
+                      onClick={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
+                      className="p-1.5 hover:bg-muted rounded"
+                      title="查看详情"
+                    >
+                      <FileText className="w-4 h-4" />
+                    </button>
+                  )}
+                  {task.status !== "running" && (
+                    <button
+                      onClick={() => deleteMutation.mutate(task.id)}
+                      className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-red-500"
+                      title="删除"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               </div>
-              {result.analysis && (
-                <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {result.analysis}
+
+              {task.status === "running" && task.progress && (
+                <div className="mt-2 px-3 py-1.5 bg-blue-500/10 rounded text-xs text-blue-400">
+                  {task.progress}
+                </div>
+              )}
+
+              {task.result_summary && task.status !== "running" && (
+                <p className="mt-2 text-sm text-muted-foreground">{task.result_summary}</p>
+              )}
+
+              {expandedTask === task.id && (
+                <div className="mt-3 border-t border-border pt-3">
+                  {task.result_dimensions && (
+                    <DimensionCards dimensionsJson={task.result_dimensions} />
+                  )}
+                  {task.result_detail && (
+                    <details className="mt-3">
+                      <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                        原始分析结果
+                      </summary>
+                      <pre className="mt-2 p-3 bg-muted/30 rounded text-xs whitespace-pre-wrap overflow-auto max-h-96">
+                        {task.result_detail}
+                      </pre>
+                    </details>
+                  )}
                 </div>
               )}
             </div>
-          );
-        })()}
+          ))}
+        </div>
+      )}
     </div>
   );
 }

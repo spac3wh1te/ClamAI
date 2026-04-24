@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -227,6 +228,24 @@ func createTables() error {
 			result_logs_analyzed INTEGER DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status ON analysis_tasks(status)`,
+		`CREATE TABLE IF NOT EXISTS skills_tasks (
+			id TEXT PRIMARY KEY,
+			task_no TEXT NOT NULL,
+			name TEXT NOT NULL,
+			model TEXT DEFAULT '',
+			source_type TEXT DEFAULT 'text',
+			source_info TEXT DEFAULT '',
+			schedule_type TEXT DEFAULT 'once',
+			status TEXT DEFAULT 'idle',
+			progress TEXT DEFAULT '',
+			last_run_at DATETIME,
+			created_at DATETIME NOT NULL,
+			result_risk_level TEXT DEFAULT '',
+			result_summary TEXT DEFAULT '',
+			result_detail TEXT DEFAULT '',
+			result_dimensions TEXT DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_skills_tasks_status ON skills_tasks(status)`,
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
@@ -1056,5 +1075,79 @@ func dbGetDuePeriodicTasks() ([]map[string]interface{}, error) {
 func dbSetTaskNextRun(id string, intervalMinutes int) error {
 	nextRun := time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
 	_, err := db.Exec("UPDATE analysis_tasks SET next_run_at=? WHERE id=?", nextRun, id)
+	return err
+}
+
+var skillsTaskCounter int64
+
+func nextSkillsTaskNo() string {
+	n := atomic.AddInt64(&skillsTaskCounter, 1)
+	return fmt.Sprintf("SK%04d", n)
+}
+
+func dbCreateSkillsTask(id, taskNo, name, model, sourceType, sourceInfo, scheduleType string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.Exec(`INSERT INTO skills_tasks (id, task_no, name, model, source_type, source_info, schedule_type, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?)`,
+		id, taskNo, name, model, sourceType, sourceInfo, scheduleType, now)
+	return err
+}
+
+func dbGetSkillsTasks() ([]map[string]interface{}, error) {
+	rows, err := db.Query("SELECT id, task_no, name, model, source_type, source_info, schedule_type, status, progress, last_run_at, created_at, result_risk_level, result_summary, result_detail, result_dimensions FROM skills_tasks ORDER BY created_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var id, taskNo, name, model, sourceType, sourceInfo, scheduleType, status string
+		var lastRunAt, createdAt sql.NullString
+		var resultRiskLevel, resultSummary, resultDetail, resultDimensions, progress sql.NullString
+		if err := rows.Scan(&id, &taskNo, &name, &model, &sourceType, &sourceInfo, &scheduleType, &status, &progress, &lastRunAt, &createdAt, &resultRiskLevel, &resultSummary, &resultDetail, &resultDimensions); err != nil {
+			continue
+		}
+		task := map[string]interface{}{
+			"id": id, "task_no": taskNo, "name": name, "model": model,
+			"source_type": sourceType, "source_info": sourceInfo,
+			"schedule_type": scheduleType, "status": status, "created_at": createdAt,
+		}
+		if lastRunAt.Valid {
+			task["last_run_at"] = lastRunAt.String
+		}
+		if resultRiskLevel.Valid {
+			task["result_risk_level"] = resultRiskLevel.String
+		}
+		if resultSummary.Valid {
+			task["result_summary"] = resultSummary.String
+		}
+		if resultDetail.Valid {
+			task["result_detail"] = resultDetail.String
+		}
+		if resultDimensions.Valid && resultDimensions.String != "" {
+			task["result_dimensions"] = resultDimensions.String
+		}
+		if progress.Valid {
+			task["progress"] = progress.String
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+func dbUpdateSkillsTaskResult(id, riskLevel, summary, detail, dimensions string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.Exec(`UPDATE skills_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_dimensions=?, last_run_at=?, status='idle', progress='' WHERE id=?`,
+		riskLevel, summary, detail, dimensions, now, id)
+	return err
+}
+
+func dbUpdateSkillsTaskStatus(id, status string) error {
+	_, err := db.Exec(`UPDATE skills_tasks SET status=?, progress='正在检测...' WHERE id=?`, status, id)
+	return err
+}
+
+func dbDeleteSkillsTask(id string) error {
+	_, err := db.Exec("DELETE FROM skills_tasks WHERE id=?", id)
 	return err
 }
