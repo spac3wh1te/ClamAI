@@ -2184,7 +2184,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 	gatewayKey, exists := apiKeysByID[apiKeyID]
 	apiKeysMu.Unlock()
 	if !exists {
-		dbUpdateAnalysisTaskResult(taskID, "error", "API Key not found", "", 0)
+		dbUpdateAnalysisTaskResult(taskID, "error", "API Key not found", "", "", 0)
 		tasks, _ := dbGetAnalysisTasks()
 		for _, t := range tasks {
 			if t["id"] == taskID && t["schedule_type"] == "once" {
@@ -2221,7 +2221,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 
 	statusCode, respBody, err := p.internalChatCompletion(modelForGateway, messages, 0.3, 1500)
 	if err != nil {
-		dbUpdateAnalysisTaskResult(taskID, "error", "Analysis failed: "+err.Error(), "", 0)
+		dbUpdateAnalysisTaskResult(taskID, "error", "Analysis failed: "+err.Error(), "", "", 0)
 		tasks, _ := dbGetAnalysisTasks()
 		for _, t := range tasks {
 			if t["id"] == taskID && t["schedule_type"] == "once" {
@@ -2234,6 +2234,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 	riskLevel := "unknown"
 	summary := ""
 	detail := ""
+	dimensions := ""
 	if statusCode >= 200 && statusCode < 300 {
 		var resp map[string]interface{}
 		if json.Unmarshal(respBody, &resp) == nil {
@@ -2250,6 +2251,11 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 								if s, ok := parsed["summary"].(string); ok {
 									summary = s
 								}
+								if det, ok := parsed["details"].(map[string]interface{}); ok {
+									if dimBytes, err := json.Marshal(det); err == nil {
+										dimensions = string(dimBytes)
+									}
+								}
 							}
 						}
 					}
@@ -2258,7 +2264,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 		}
 	}
 
-	dbUpdateAnalysisTaskResult(taskID, riskLevel, summary, detail, total)
+	dbUpdateAnalysisTaskResult(taskID, riskLevel, summary, detail, dimensions, total)
 
 	inputTokens, outputTokens := extractTokensFromBody(respBody)
 	prov, resolvedModel := p.resolveProvider(modelForGateway)

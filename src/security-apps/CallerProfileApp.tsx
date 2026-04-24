@@ -17,7 +17,12 @@ import {
   RefreshCw,
   Clock,
   Repeat,
+  Activity,
+  TrendingUp,
+  Globe,
+  Cpu,
   Zap,
+  Eye,
 } from "lucide-react";
 import { registerSecurityApp } from "./registry";
 
@@ -39,12 +44,14 @@ interface AnalysisTask {
   schedule_type: string;
   interval_minutes: number;
   status: string;
+  progress?: string;
   last_run_at?: string;
   next_run_at?: string;
   created_at?: string;
   result_summary?: string;
   result_risk_level?: string;
   result_detail?: string;
+  result_dimensions?: string;
   result_logs_analyzed?: number;
 }
 
@@ -60,10 +67,7 @@ interface ProfileHistoryRecord {
   logs_analyzed: number;
 }
 
-const STATUS_CONFIG: Record<
-  string,
-  { bg: string; text: string; label: string }
-> = {
+const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
   idle: { bg: "bg-muted", text: "text-muted-foreground", label: "空闲" },
   running: { bg: "bg-blue-500/10", text: "text-blue-500", label: "运行中" },
   error: { bg: "bg-red-500/10", text: "text-red-500", label: "错误" },
@@ -75,6 +79,64 @@ const RISK_BADGE: Record<string, { bg: string; text: string }> = {
   中: { bg: "bg-orange-500/20", text: "text-orange-400" },
   低: { bg: "bg-green-500/20", text: "text-green-400" },
 };
+
+const RISK_CARD: Record<string, { bg: string; border: string; text: string; icon: typeof XCircle }> = {
+  极高: { bg: "bg-red-500/10", border: "border-red-500/30", text: "text-red-500", icon: XCircle },
+  高: { bg: "bg-red-500/10", border: "border-red-500/30", text: "text-red-500", icon: XCircle },
+  中: { bg: "bg-orange-500/10", border: "border-orange-500/30", text: "text-orange-500", icon: AlertTriangle },
+  低: { bg: "bg-green-500/10", border: "border-green-500/30", text: "text-green-500", icon: CheckCircle },
+};
+
+const DIMENSION_ICONS: Record<string, typeof Activity> = {
+  call_frequency: Clock,
+  model_usage: Cpu,
+  success_rate: TrendingUp,
+  request_content: FileText,
+  ip_distribution: Globe,
+  token_usage: Zap,
+};
+
+const DIMENSION_LABELS: Record<string, string> = {
+  call_frequency: "调用频率",
+  model_usage: "模型使用",
+  success_rate: "成功率",
+  request_content: "请求内容",
+  ip_distribution: "IP 分布",
+  token_usage: "Token 消耗",
+};
+
+function DimensionCards({ dimensionsJson }: { dimensionsJson: string }) {
+  let dims: Record<string, { level: string; description: string }> = {};
+  try {
+    dims = JSON.parse(dimensionsJson);
+  } catch {
+    return null;
+  }
+  if (!dims || Object.keys(dims).length === 0) return null;
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 mt-3">
+      {Object.entries(dims).map(([key, dim]) => {
+        const cfg = RISK_CARD[dim.level] || RISK_CARD["低"];
+        const Icon = DIMENSION_ICONS[key] || Activity;
+        const label = DIMENSION_LABELS[key] || key;
+        const RiskIcon = cfg.icon;
+        return (
+          <div key={key} className={`${cfg.bg} border ${cfg.border} rounded-lg p-2.5`}>
+            <div className="flex items-center gap-1.5 mb-1">
+              <Icon className={`w-3.5 h-3.5 ${cfg.text}`} />
+              <span className="font-medium text-xs">{label}</span>
+              <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${cfg.bg} ${cfg.text} font-medium`}>
+                {dim.level}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">{dim.description}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function CallerProfileAnalysis() {
   const queryClient = useQueryClient();
@@ -103,12 +165,10 @@ function CallerProfileAnalysis() {
   const { data: tasksData, refetch: refetchTasks } = useQuery({
     queryKey: ["analysis-tasks"],
     queryFn: async () => {
-      const resp = await invoke<{ tasks: AnalysisTask[] }>(
-        "list_analysis_tasks",
-      );
+      const resp = await invoke<{ tasks: AnalysisTask[] }>("list_analysis_tasks");
       return resp.tasks || [];
     },
-    refetchInterval: 5000,
+    refetchInterval: 3000,
   });
 
   const { data: historyData, refetch: refetchHistory } = useQuery({
@@ -137,14 +197,7 @@ function CallerProfileAnalysis() {
       }),
     onSuccess: () => {
       setShowCreateForm(false);
-      setNewTask({
-        name: "",
-        api_key_id: "",
-        model: "",
-        time_range: "7d",
-        schedule_type: "once",
-        interval_minutes: 60,
-      });
+      setNewTask({ name: "", api_key_id: "", model: "", time_range: "7d", schedule_type: "once", interval_minutes: 60 });
       refetchTasks();
     },
     onError: (e: any) => alert("创建失败: " + e),
@@ -168,8 +221,7 @@ function CallerProfileAnalysis() {
     onError: (e: any) => alert("删除失败: " + e),
   });
 
-  const getApiKeyName = (id: string) =>
-    apiKeys.find((k) => k.id === id)?.name || id;
+  const getApiKeyName = (id: string) => apiKeys.find((k) => k.id === id)?.name || id;
 
   return (
     <div className="space-y-6">
@@ -209,29 +261,21 @@ function CallerProfileAnalysis() {
               <input
                 type="text"
                 value={newTask.name}
-                onChange={(e) =>
-                  setNewTask({ ...newTask, name: e.target.value })
-                }
+                onChange={(e) => setNewTask({ ...newTask, name: e.target.value })}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
                 placeholder="如: 监控主Key调用行为"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">
-                被审计 API Key
-              </label>
+              <label className="block text-sm font-medium mb-1">被审计 API Key</label>
               <select
                 value={newTask.api_key_id}
-                onChange={(e) =>
-                  setNewTask({ ...newTask, api_key_id: e.target.value })
-                }
+                onChange={(e) => setNewTask({ ...newTask, api_key_id: e.target.value })}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
               >
                 <option value="">选择 Key...</option>
                 {apiKeys.map((k) => (
-                  <option key={k.id} value={k.id}>
-                    {k.name}
-                  </option>
+                  <option key={k.id} value={k.id}>{k.name}</option>
                 ))}
               </select>
             </div>
@@ -239,16 +283,12 @@ function CallerProfileAnalysis() {
               <label className="block text-sm font-medium mb-1">分析模型</label>
               <select
                 value={newTask.model}
-                onChange={(e) =>
-                  setNewTask({ ...newTask, model: e.target.value })
-                }
+                onChange={(e) => setNewTask({ ...newTask, model: e.target.value })}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
               >
                 <option value="">选择模型...</option>
                 {allModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
+                  <option key={m} value={m}>{m}</option>
                 ))}
               </select>
             </div>
@@ -256,9 +296,7 @@ function CallerProfileAnalysis() {
               <label className="block text-sm font-medium mb-1">时间范围</label>
               <select
                 value={newTask.time_range}
-                onChange={(e) =>
-                  setNewTask({ ...newTask, time_range: e.target.value })
-                }
+                onChange={(e) => setNewTask({ ...newTask, time_range: e.target.value })}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
               >
                 <option value="1d">最近 1 天</option>
@@ -271,9 +309,7 @@ function CallerProfileAnalysis() {
               <label className="block text-sm font-medium mb-1">执行方式</label>
               <select
                 value={newTask.schedule_type}
-                onChange={(e) =>
-                  setNewTask({ ...newTask, schedule_type: e.target.value })
-                }
+                onChange={(e) => setNewTask({ ...newTask, schedule_type: e.target.value })}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
               >
                 <option value="once">单次执行</option>
@@ -282,18 +318,11 @@ function CallerProfileAnalysis() {
             </div>
             {newTask.schedule_type === "periodic" && (
               <div>
-                <label className="block text-sm font-medium mb-1">
-                  间隔(分钟)
-                </label>
+                <label className="block text-sm font-medium mb-1">间隔(分钟)</label>
                 <input
                   type="number"
                   value={newTask.interval_minutes}
-                  onChange={(e) =>
-                    setNewTask({
-                      ...newTask,
-                      interval_minutes: parseInt(e.target.value) || 60,
-                    })
-                  }
+                  onChange={(e) => setNewTask({ ...newTask, interval_minutes: parseInt(e.target.value) || 60 })}
                   className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
                   min={5}
                 />
@@ -303,12 +332,7 @@ function CallerProfileAnalysis() {
           <div className="flex gap-2">
             <button
               onClick={() => createMutation.mutate()}
-              disabled={
-                !newTask.name ||
-                !newTask.api_key_id ||
-                !newTask.model ||
-                createMutation.isPending
-              }
+              disabled={!newTask.name || !newTask.api_key_id || !newTask.model || createMutation.isPending}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 text-sm"
             >
               {createMutation.isPending ? "创建中..." : "创建并启动"}
@@ -330,38 +354,24 @@ function CallerProfileAnalysis() {
           </div>
           <div className="divide-y divide-border max-h-72 overflow-y-auto">
             {historyData?.records?.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-                暂无记录
-              </div>
+              <div className="px-4 py-6 text-center text-sm text-muted-foreground">暂无记录</div>
             )}
             {historyData?.records?.map((r) => (
               <div key={r.id} className="px-4 py-3">
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded ${(RISK_BADGE[r.risk_level] || { bg: "bg-muted", text: "text-muted-foreground" }).bg} ${(RISK_BADGE[r.risk_level] || { bg: "", text: "text-muted-foreground" }).text}`}
-                    >
+                    <span className={`text-xs px-2 py-0.5 rounded ${(RISK_BADGE[r.risk_level] || { bg: "bg-muted", text: "text-muted-foreground" }).bg} ${(RISK_BADGE[r.risk_level] || { bg: "", text: "text-muted-foreground" }).text}`}>
                       {r.risk_level || "未知"}
                     </span>
-                    <span className="text-xs text-muted-foreground">
-                      {r.model_used}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {r.time_range}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {r.logs_analyzed}条日志
-                    </span>
+                    <span className="text-xs text-muted-foreground">{r.model_used}</span>
+                    <span className="text-xs text-muted-foreground">{r.time_range}</span>
+                    <span className="text-xs text-muted-foreground">{r.logs_analyzed}条日志</span>
                   </div>
                   <span className="text-xs text-muted-foreground">
                     {new Date(r.analyzed_at).toLocaleString("zh-CN")}
                   </span>
                 </div>
-                {r.summary && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {r.summary}
-                  </p>
-                )}
+                {r.summary && <p className="text-xs text-muted-foreground mt-1">{r.summary}</p>}
               </div>
             ))}
           </div>
@@ -378,34 +388,28 @@ function CallerProfileAnalysis() {
           const statusCfg = STATUS_CONFIG[task.status] || STATUS_CONFIG.idle;
           const isRunning = task.status === "running";
           const riskBadge = RISK_BADGE[task.result_risk_level || ""];
+          const hasDimensions = !!task.result_dimensions;
+          const isExpanded = expandedTaskId === task.id;
 
           return (
-            <div
-              key={task.id}
-              className="bg-card rounded-lg border border-border overflow-hidden"
-            >
+            <div key={task.id} className="bg-card rounded-lg border border-border overflow-hidden">
               <div className="px-4 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {task.task_no}
-                  </span>
+                  <span className="font-mono text-xs text-muted-foreground">{task.task_no}</span>
                   <span className="font-medium text-sm">{task.name}</span>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${statusCfg.bg} ${statusCfg.text}`}
-                  >
+                  <span className={`text-xs px-2 py-0.5 rounded ${statusCfg.bg} ${statusCfg.text} flex items-center gap-1`}>
+                    {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
                     {statusCfg.label}
                   </span>
                   {task.result_risk_level && riskBadge && (
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded ${riskBadge.bg} ${riskBadge.text}`}
-                    >
+                    <span className={`text-xs px-2 py-0.5 rounded ${riskBadge.bg} ${riskBadge.text}`}>
                       {task.result_risk_level}风险
                     </span>
                   )}
                   {task.schedule_type === "periodic" && (
                     <span className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Repeat className="w-3 h-3" />每{task.interval_minutes}
-                      分钟
+                      <Repeat className="w-3 h-3" />
+                      每{task.interval_minutes}分钟
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground">
@@ -413,18 +417,12 @@ function CallerProfileAnalysis() {
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
-                  {isRunning && (
-                    <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                  )}
                   <button
-                    onClick={() =>
-                      setExpandedTaskId(
-                        expandedTaskId === task.id ? null : task.id,
-                      )
-                    }
-                    className="text-xs text-primary hover:underline px-2"
+                    onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}
+                    className="text-xs text-primary hover:underline px-2 flex items-center gap-1"
                   >
-                    {expandedTaskId === task.id ? "收起" : "详情"}
+                    <Eye className="w-3 h-3" />
+                    {isExpanded ? "收起" : hasDimensions ? "维度详情" : "详情"}
                   </button>
                   {!isRunning && task.schedule_type === "once" && (
                     <button
@@ -455,10 +453,7 @@ function CallerProfileAnalysis() {
                   )}
                   {!isRunning && (
                     <button
-                      onClick={() => {
-                        if (confirm("确定删除?"))
-                          deleteMutation.mutate(task.id);
-                      }}
+                      onClick={() => { if (confirm("确定删除?")) deleteMutation.mutate(task.id); }}
                       className="p-1.5 text-muted-foreground hover:text-red-500"
                       title="删除"
                     >
@@ -468,25 +463,46 @@ function CallerProfileAnalysis() {
                 </div>
               </div>
 
+              {task.progress && isRunning && (
+                <div className="px-4 py-2 border-t border-border bg-blue-500/5 text-xs text-blue-500 flex items-center gap-2">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {task.progress}
+                </div>
+              )}
+
               {task.result_summary && (
-                <div className="px-4 py-2 border-t border-border bg-muted/20 text-xs text-muted-foreground">
-                  {task.result_summary}
+                <div className="px-4 py-2 border-t border-border bg-muted/20 text-xs text-muted-foreground flex items-center gap-3">
+                  <span>{task.result_summary}</span>
                   {task.last_run_at && (
-                    <span className="ml-3 flex items-center gap-1 inline-flex">
+                    <span className="flex items-center gap-1">
                       <Clock className="w-3 h-3" />
                       {new Date(task.last_run_at).toLocaleString("zh-CN")}
                     </span>
                   )}
                   {(task.result_logs_analyzed ?? 0) > 0 && (
-                    <span className="ml-3">
-                      {task.result_logs_analyzed}条日志
-                    </span>
+                    <span>{task.result_logs_analyzed}条日志</span>
                   )}
                 </div>
               )}
 
-              {expandedTaskId === task.id && task.result_detail && (
-                <div className="px-4 py-3 border-t border-border bg-muted/10">
+              {isExpanded && hasDimensions && (
+                <div className="px-4 py-3 border-t border-border">
+                  <DimensionCards dimensionsJson={task.result_dimensions!} />
+                  {task.result_detail && (
+                    <details className="mt-3">
+                      <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                        查看原始分析
+                      </summary>
+                      <div className="mt-2 p-2 bg-muted/30 rounded text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">
+                        {task.result_detail}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+
+              {isExpanded && !hasDimensions && task.result_detail && (
+                <div className="px-4 py-3 border-t border-border">
                   <div className="whitespace-pre-wrap text-xs leading-relaxed max-h-64 overflow-y-auto">
                     {task.result_detail}
                   </div>

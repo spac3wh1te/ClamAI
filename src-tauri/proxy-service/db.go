@@ -223,6 +223,7 @@ func createTables() error {
 			result_summary TEXT DEFAULT '',
 			result_risk_level TEXT DEFAULT '',
 			result_detail TEXT DEFAULT '',
+			result_dimensions TEXT DEFAULT '',
 			result_logs_analyzed INTEGER DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status ON analysis_tasks(status)`,
@@ -246,6 +247,8 @@ func createTables() error {
 	db.Exec("ALTER TABLE security_alerts ADD COLUMN client_ip TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE request_logs ADD COLUMN request_content TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE request_logs ADD COLUMN response_content TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE analysis_tasks ADD COLUMN result_dimensions TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE analysis_tasks ADD COLUMN progress TEXT DEFAULT ''")
 
 	return nil
 }
@@ -940,7 +943,7 @@ func dbCreateAnalysisTask(id, taskNo, name, apiKeyID, model, timeRange, schedule
 }
 
 func dbGetAnalysisTasks() ([]map[string]interface{}, error) {
-	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, last_run_at, next_run_at, created_at, result_summary, result_risk_level, result_detail, result_logs_analyzed FROM analysis_tasks ORDER BY created_at DESC")
+	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, last_run_at, next_run_at, created_at, result_summary, result_risk_level, result_detail, result_dimensions, result_logs_analyzed, progress FROM analysis_tasks ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -950,9 +953,10 @@ func dbGetAnalysisTasks() ([]map[string]interface{}, error) {
 		var id, taskNo, name, apiKeyID, model, timeRange, scheduleType, status string
 		var intervalMinutes int
 		var lastRunAt, nextRunAt, createdAt sql.NullString
-		var resultSummary, resultRiskLevel, resultDetail sql.NullString
+		var resultSummary, resultRiskLevel, resultDetail, resultDimensions sql.NullString
 		var resultLogsAnalyzed int
-		if err := rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &scheduleType, &intervalMinutes, &status, &lastRunAt, &nextRunAt, &createdAt, &resultSummary, &resultRiskLevel, &resultDetail, &resultLogsAnalyzed); err != nil {
+		var progress sql.NullString
+		if err := rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &scheduleType, &intervalMinutes, &status, &lastRunAt, &nextRunAt, &createdAt, &resultSummary, &resultRiskLevel, &resultDetail, &resultDimensions, &resultLogsAnalyzed, &progress); err != nil {
 			continue
 		}
 		task := map[string]interface{}{
@@ -983,6 +987,12 @@ func dbGetAnalysisTasks() ([]map[string]interface{}, error) {
 		if resultDetail.Valid {
 			task["result_detail"] = resultDetail.String
 		}
+		if resultDimensions.Valid && resultDimensions.String != "" {
+			task["result_dimensions"] = resultDimensions.String
+		}
+		if progress.Valid {
+			task["progress"] = progress.String
+		}
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
@@ -997,17 +1007,22 @@ func dbUpdateAnalysisTask(id, name, apiKeyID, model, timeRange, scheduleType str
 func dbUpdateAnalysisTaskStatus(id, status string) error {
 	if status == "running" {
 		nextRun := time.Now().UTC().Format(time.RFC3339)
-		_, err := db.Exec(`UPDATE analysis_tasks SET status=?, next_run_at=? WHERE id=?`, status, nextRun, id)
+		_, err := db.Exec(`UPDATE analysis_tasks SET status=?, next_run_at=?, progress='正在分析...' WHERE id=?`, status, nextRun, id)
 		return err
 	}
 	_, err := db.Exec(`UPDATE analysis_tasks SET status=? WHERE id=?`, status, id)
 	return err
 }
 
-func dbUpdateAnalysisTaskResult(id, riskLevel, summary, detail string, logsAnalyzed int) error {
+func dbUpdateAnalysisTaskProgress(id, progress string) error {
+	_, err := db.Exec(`UPDATE analysis_tasks SET progress=? WHERE id=?`, progress, id)
+	return err
+}
+
+func dbUpdateAnalysisTaskResult(id, riskLevel, summary, detail, dimensions string, logsAnalyzed int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`UPDATE analysis_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_logs_analyzed=?, last_run_at=? WHERE id=?`,
-		riskLevel, summary, detail, logsAnalyzed, now, id)
+	_, err := db.Exec(`UPDATE analysis_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_dimensions=?, result_logs_analyzed=?, last_run_at=? WHERE id=?`,
+		riskLevel, summary, detail, dimensions, logsAnalyzed, now, id)
 	return err
 }
 
