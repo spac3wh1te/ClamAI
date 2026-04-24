@@ -166,7 +166,7 @@ function AgentEnvCheckApp() {
 
   const deepMutation = useMutation({
     mutationFn: async ({ agent, model }: { agent: string; model: string }) => {
-      const resp = await invoke<string>("deep_check_agent", { agentName: agent, model });
+      const resp = await invoke<string>("deep_check_agent", { agent: agent, model });
       const parsed = JSON.parse(resp);
       return parsed as EnvCheckResult & { agent: string; dir: string };
     },

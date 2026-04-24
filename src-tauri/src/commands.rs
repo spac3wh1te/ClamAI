@@ -2210,7 +2210,7 @@ pub async fn create_analysis_task(
     schedule_type: Option<String>,
     interval_minutes: Option<u32>,
 ) -> Result<String, String> {
-    let (url, auth) = get_proxy_url_no_prefix(&state, "api/v1/analysis/tasks").await?;
+    let (url, auth) = get_proxy_url(&state, "analysis/tasks").await?;
     let client = https_client()?;
     let body = serde_json::json!({
         "name": name,
@@ -2430,11 +2430,11 @@ pub async fn discover_agents(state: tauri::State<'_, AppState>) -> Result<String
 }
 
 #[tauri::command]
-pub async fn deep_check_agent(state: tauri::State<'_, AppState>, agent_name: String, model: String) -> Result<String, String> {
+pub async fn deep_check_agent(state: tauri::State<'_, AppState>, agent: String, model: String) -> Result<String, String> {
     let (url, auth) = get_proxy_url(&state, "agent/deep-check").await?;
     let client = https_client()?;
     let body = serde_json::json!({
-        "agent_name": agent_name,
+        "agent_name": agent,
         "model": model,
     });
     let mut req = client.post(&url)
