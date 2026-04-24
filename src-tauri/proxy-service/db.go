@@ -893,34 +893,34 @@ func dbGetSecurityTokenStats(periodMinutes int) *SecurityTokenStats {
 
 	row := db.QueryRow(`SELECT COUNT(*),
 		COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
-		FROM request_logs WHERE timestamp >= ? AND path = '/analysis/v1/chat/completions'`,
+		FROM request_logs WHERE timestamp >= ? AND (path = '/analysis/v1/chat/completions' OR path = '/security/semantic-check')`,
 		cutoff.Format(time.RFC3339))
 	row.Scan(&stats.TotalChecks, &stats.InputTokens, &stats.OutputTokens)
 	stats.TotalTokens = stats.InputTokens + stats.OutputTokens
 
-	rows, err := db.Query(`SELECT request_content, COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) as tok
-		FROM request_logs WHERE timestamp >= ? AND path = '/analysis/v1/chat/completions'
-		GROUP BY request_content`, cutoff.Format(time.RFC3339))
+	rows, err := db.Query(`SELECT
+		CASE
+			WHEN path = '/security/semantic-check' THEN 'security_check'
+			WHEN request_content LIKE '%"analysis_type":"user_profile%' THEN 'user_profile'
+			WHEN request_content LIKE '%"analysis_type":"user_profile_task%' THEN 'user_profile_task'
+			WHEN request_content LIKE '%"analysis_type":"skills_detection%' THEN 'skills_detection'
+			ELSE 'other'
+		END as atype,
+		COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) as tok
+		FROM request_logs WHERE timestamp >= ? AND (path = '/analysis/v1/chat/completions' OR path = '/security/semantic-check')
+		GROUP BY atype`, cutoff.Format(time.RFC3339))
 	if err != nil {
 		return stats
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var content string
+		var atype string
 		var tok int64
-		if rows.Scan(&content, &tok) != nil {
+		if rows.Scan(&atype, &tok) != nil {
 			continue
 		}
-		var reqMap map[string]interface{}
-		if json.Unmarshal([]byte(content), &reqMap) != nil {
-			continue
-		}
-		analysisType, _ := reqMap["analysis_type"].(string)
-		if analysisType == "" {
-			analysisType = "other"
-		}
-		stats.ByType[analysisType] += tok
+		stats.ByType[atype] += tok
 	}
 	return stats
 }

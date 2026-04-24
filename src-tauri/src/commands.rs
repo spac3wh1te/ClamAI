@@ -1552,6 +1552,70 @@ pub async fn get_proxy_models(state: tauri::State<'_, AppState>) -> Result<Vec<S
     Ok(all_models)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub provider: String,
+    pub provider_type: String,
+}
+
+#[tauri::command]
+pub async fn get_proxy_models_with_info(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
+    let config = state.config_manager.lock().await.get_config();
+    if config.service.deploy_mode == DeployMode::Server {
+        let remote_url = config.service.remote_service_url.clone().unwrap_or_default();
+        let provider_configs = config.providers.clone();
+        drop(config);
+        if remote_url.is_empty() {
+            return Ok(vec![]);
+        }
+        ensure_server_token(&state).await.map_err(|e| format!("刷新token失败: {}", e))?;
+        let auth = get_server_access_token(&state).await;
+        let client = https_client()?;
+        let url = format!("{}/v1/models", remote_url.trim_end_matches('/'));
+        let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
+        if let Some(token) = auth {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let resp = send_and_log("GET", &url, req).await.map_err(|e| format!("{}", e))?;
+        if !resp.status().is_success() {
+            return Ok(vec![]);
+        }
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        let mut models: Vec<ModelInfo> = Vec::new();
+        if let Some(data) = body.get("data").and_then(|v| v.as_array()) {
+            for m in data {
+                if let Some(id) = m.get("id").and_then(|v| v.as_str()) {
+                    let parts: Vec<&str> = id.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        let prov = parts[0].to_string();
+                        let ptype = prov.clone();
+                        models.push(ModelInfo { id: id.to_string(), provider: prov, provider_type: ptype });
+                    }
+                }
+            }
+        }
+        return Ok(models);
+    }
+    let providers = config.providers.clone();
+    drop(config);
+    let mut models: Vec<ModelInfo> = Vec::new();
+    for (_, pc) in &providers {
+        if !pc.enabled { continue; }
+        let provider_name = format!("{:?}", pc.provider_type).to_lowercase();
+        let disabled = pc.disabled_models.as_deref().unwrap_or(&[]);
+        for model in &pc.models {
+            if disabled.contains(model) { continue; }
+            models.push(ModelInfo {
+                id: format!("{}:{}", provider_name, model),
+                provider: provider_name.clone(),
+                provider_type: provider_name.clone(),
+            });
+        }
+    }
+    Ok(models)
+}
+
 // ==================== 系统命令 ====================
 
 #[tauri::command]

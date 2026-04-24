@@ -955,7 +955,39 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 		}
 		result.Categories[cat] = cr
 	}
+
+	inTok, outTok := extractTokensFromSecurityResp(respData)
+	entry := &RequestLog{
+		Timestamp:       time.Now(),
+		Provider:        provider.GetName(),
+		Model:           modelName,
+		InputTokens:     inTok,
+		OutputTokens:    outTok,
+		Success:         true,
+		ClientIP:        "security",
+		APIKeyUsed:      "security-semantic",
+		StatusCode:      200,
+		Path:            "/security/semantic-check",
+		Method:          "POST",
+		RequestContent:  truncateStr(content, 500),
+		ResponseContent: truncateStr(string(respBody), 5000),
+	}
+	dbInsertLog(entry)
+
 	return result, nil
+}
+
+func extractTokensFromSecurityResp(respData map[string]interface{}) (int, int) {
+	inTok, outTok := 0, 0
+	if usage, ok := respData["usage"].(map[string]interface{}); ok {
+		if pt, ok := usage["prompt_tokens"].(float64); ok {
+			inTok = int(pt)
+		}
+		if ct, ok := usage["completion_tokens"].(float64); ok {
+			outTok = int(ct)
+		}
+	}
+	return inTok, outTok
 }
 
 func extractJSON(s string) map[string]interface{} {

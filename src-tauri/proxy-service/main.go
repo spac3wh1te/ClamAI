@@ -808,29 +808,30 @@ func getProviderNames(providers map[string]Provider) []string {
 }
 
 func (p *ProxyServer) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[DEBUG] handleOpenAIChatCompletions called, path=%s", r.URL.Path)
-	var req OpenAIChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("[ERROR] handleOpenAIChatCompletions: failed to decode body: %v", err)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	var rawReq map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &rawReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("[DEBUG] handleOpenAIChatCompletions: model=%s", req.Model)
-	provider, modelName := p.resolveProvider(req.Model)
-	log.Printf("[DEBUG] handleOpenAIChatCompletions: resolveProvider returned provider=%v, modelName=%s", provider != nil, modelName)
+	model, _ := rawReq["model"].(string)
+	log.Printf("[DEBUG] handleOpenAIChatCompletions: model=%s", model)
+	provider, modelName := p.resolveProvider(model)
 	if provider == nil {
-		log.Printf("[ERROR] handleOpenAIChatCompletions: Unknown provider for model: %s, available providers: %v", req.Model, getProviderNames(p.providers))
-		http.Error(w, "Unknown provider for model: "+req.Model, http.StatusNotFound)
+		log.Printf("[ERROR] handleOpenAIChatCompletions: Unknown provider for model: %s", model)
+		http.Error(w, "Unknown provider for model: "+model, http.StatusNotFound)
 		return
 	}
 
-	log.Printf("[DEBUG] handleOpenAIChatCompletions: proxying to provider, final model=%s", modelName)
-	req.Model = modelName
-
-	newBody, err := json.Marshal(req)
+	rawReq["model"] = modelName
+	newBody, err := json.Marshal(rawReq)
 	if err != nil {
-		log.Printf("[ERROR] handleOpenAIChatCompletions: failed to marshal modified req: %v", err)
 		http.Error(w, "Failed to create request body", http.StatusInternalServerError)
 		return
 	}
@@ -841,23 +842,30 @@ func (p *ProxyServer) handleOpenAIChatCompletions(w http.ResponseWriter, r *http
 }
 
 func (p *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
-	var req AnthropicMessagesRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	var rawReq map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &rawReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	provider, modelName := p.resolveProvider(req.Model)
+	model, _ := rawReq["model"].(string)
+	provider, modelName := p.resolveProvider(model)
 	if provider == nil {
-		http.Error(w, "Unknown provider for model: "+req.Model, http.StatusNotFound)
+		http.Error(w, "Unknown provider for model: "+model, http.StatusNotFound)
 		return
 	}
 
 	_, isAnthropic := provider.(*AnthropicProvider)
 
 	if isAnthropic {
-		req.Model = modelName
-		newBody, err := json.Marshal(req)
+		rawReq["model"] = modelName
+		newBody, err := json.Marshal(rawReq)
 		if err != nil {
 			http.Error(w, "Failed to create request body", http.StatusInternalServerError)
 			return
@@ -865,6 +873,12 @@ func (p *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		r.Body = io.NopCloser(bytes.NewReader(newBody))
 		r.ContentLength = int64(len(newBody))
 		provider.ProxyRequest(w, r)
+		return
+	}
+
+	var req AnthropicMessagesRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
@@ -1559,12 +1573,47 @@ func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request)
 }
 
 func (p *ProxyServer) internalChatCompletion(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, []byte, error) {
-	reqBody := map[string]interface{}{
-		"model":       model,
-		"messages":    messages,
-		"temperature": temperature,
-		"max_tokens":  maxTokens,
+	provider, modelName := p.resolveProvider(model)
+	if provider == nil {
+		return 0, nil, fmt.Errorf("no provider for model: %s", model)
 	}
+
+	_, isAnthropic := provider.(*AnthropicProvider)
+
+	var reqBody map[string]interface{}
+	if isAnthropic {
+		anthMessages := []interface{}{}
+		systemContent := ""
+		for _, msg := range messages {
+			role, _ := msg["role"].(string)
+			content, _ := msg["content"].(string)
+			if role == "system" {
+				systemContent = content
+				continue
+			}
+			anthMessages = append(anthMessages, map[string]interface{}{
+				"role":    role,
+				"content": content,
+			})
+		}
+		reqBody = map[string]interface{}{
+			"model":       modelName,
+			"messages":    anthMessages,
+			"max_tokens":  maxTokens,
+			"temperature": temperature,
+		}
+		if systemContent != "" {
+			reqBody["system"] = systemContent
+		}
+	} else {
+		reqBody = map[string]interface{}{
+			"model":       modelName,
+			"messages":    messages,
+			"temperature": temperature,
+			"max_tokens":  maxTokens,
+		}
+	}
+
 	body, _ := json.Marshal(reqBody)
 
 	scheme := "http"
@@ -1581,7 +1630,11 @@ func (p *ProxyServer) internalChatCompletion(model string, messages []map[string
 		client = &http.Client{Timeout: 120 * time.Second}
 	}
 
-	url := fmt.Sprintf("%s://%s/v1/chat/completions", scheme, p.listenAddr)
+	targetPath := "/v1/chat/completions"
+	if isAnthropic {
+		targetPath = "/v1/messages"
+	}
+	url := fmt.Sprintf("%s://%s%s", scheme, p.listenAddr, targetPath)
 	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-Internal-Analysis", "true")
@@ -2207,6 +2260,33 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 
 	dbUpdateAnalysisTaskResult(taskID, riskLevel, summary, detail, total)
 
+	inputTokens, outputTokens := extractTokensFromBody(respBody)
+	prov, resolvedModel := p.resolveProvider(modelForGateway)
+	providerName := ""
+	if prov != nil {
+		providerName = prov.GetName()
+	}
+	taskName, _ := task["name"].(string)
+	logEntry := &RequestLog{
+		Timestamp:       time.Now(),
+		Provider:        providerName,
+		Model:           resolvedModel,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		LatencyMs:       0,
+		Success:         statusCode >= 200 && statusCode < 300,
+		ClientIP:        "internal",
+		APIKeyUsed:      "analysis-task",
+		StatusCode:      statusCode,
+		Path:            "/analysis/v1/chat/completions",
+		Method:          "POST",
+		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"user_profile_task","task_id":"%s","model":"%s"}`, taskID, modelForGateway), 10000),
+		ResponseContent: truncateStr(string(respBody), 10000),
+	}
+	p.logBuffer.Add(logEntry)
+	dbInsertLog(logEntry)
+	_ = taskName
+
 	tasks, _ := dbGetAnalysisTasks()
 	for _, t := range tasks {
 		if t["id"] == taskID && t["schedule_type"] == "once" {
@@ -2407,6 +2487,56 @@ func (p *ProxyServer) handleAgentLogScan(w http.ResponseWriter, r *http.Request)
 
 	if sessions == nil {
 		sessions = []AgentSession{}
+	}
+
+	if req.Model != "" && len(sessions) > 0 {
+		for i, session := range sessions {
+			if len(session.Messages) == 0 {
+				continue
+			}
+			var contentPreview strings.Builder
+			for j, msg := range session.Messages {
+				if j >= 20 {
+					contentPreview.WriteString("...(更多消息省略)")
+					break
+				}
+				contentPreview.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, truncateStr(msg.Content, 200)))
+			}
+			aiMessages := []map[string]interface{}{
+				{"role": "system", "content": "你是安全审计专家。分析以下AI智能体会话日志，指出安全风险。只返回JSON: {\"risk_flags\":[\"风险1\",\"风险2\"],\"summary\":\"一句话总结\"}"},
+				{"role": "user", "content": fmt.Sprintf("智能体: %s\n会话文件: %s\n消息数: %d\n\n%s", session.AgentName, session.SessionPath, session.MessageCount, contentPreview.String())},
+			}
+			modelForGateway := req.Model
+			if !strings.Contains(modelForGateway, ":") {
+				if prov, _ := p.resolveProvider(modelForGateway); prov != nil {
+					modelForGateway = prov.GetName() + ":" + modelForGateway
+				}
+			}
+			statusCode, respBody, err := p.internalChatCompletion(modelForGateway, aiMessages, 0.2, 500)
+			if err == nil && statusCode == 200 {
+				var aiResp map[string]interface{}
+				if json.Unmarshal(respBody, &aiResp) == nil {
+					if choices, ok := aiResp["choices"].([]interface{}); ok && len(choices) > 0 {
+						if choice, ok := choices[0].(map[string]interface{}); ok {
+							if msg, ok := choice["message"].(map[string]interface{}); ok {
+								if c, ok := msg["content"].(string); ok {
+									parsed := extractJSON(c)
+									if parsed != nil {
+										if flags, ok := parsed["risk_flags"].([]interface{}); ok {
+											for _, f := range flags {
+												if fs, ok := f.(string); ok {
+													sessions[i].RiskFlags = append(sessions[i].RiskFlags, fs)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

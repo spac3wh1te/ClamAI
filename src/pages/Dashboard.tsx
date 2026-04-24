@@ -653,9 +653,13 @@ export default function Dashboard() {
                       <span className="text-sm">
                         {type === "user_profile"
                           ? "调用者画像"
-                          : type === "skills_detection"
-                            ? "Skills 检测"
-                            : type}
+                          : type === "user_profile_task"
+                            ? "行为分析任务"
+                            : type === "skills_detection"
+                              ? "Skills 检测"
+                              : type === "security_check"
+                                ? "安全语义检测"
+                                : type}
                       </span>
                       <span className="text-sm text-muted-foreground">
                         {formatTokens(tokens)} tokens

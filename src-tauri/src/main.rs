@@ -242,6 +242,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             scan_agent_logs,
             check_agent_env,
 
+            // 模型列表增强
+            get_proxy_models_with_info,
+
             // 配置档案命令
             list_profiles,
             save_current_as_profile,
