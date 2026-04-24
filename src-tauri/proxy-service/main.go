@@ -1573,7 +1573,7 @@ func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request)
 }
 
 func (p *ProxyServer) internalChatCompletion(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, []byte, error) {
-	provider, modelName := p.resolveProvider(model)
+	provider, _ := p.resolveProvider(model)
 	if provider == nil {
 		return 0, nil, fmt.Errorf("no provider for model: %s", model)
 	}
@@ -1597,7 +1597,7 @@ func (p *ProxyServer) internalChatCompletion(model string, messages []map[string
 			})
 		}
 		reqBody = map[string]interface{}{
-			"model":       modelName,
+			"model":       model,
 			"messages":    anthMessages,
 			"max_tokens":  maxTokens,
 			"temperature": temperature,
@@ -1607,7 +1607,7 @@ func (p *ProxyServer) internalChatCompletion(model string, messages []map[string
 		}
 	} else {
 		reqBody = map[string]interface{}{
-			"model":       modelName,
+			"model":       model,
 			"messages":    messages,
 			"temperature": temperature,
 			"max_tokens":  maxTokens,
