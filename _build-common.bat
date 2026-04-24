@@ -45,8 +45,21 @@ goto :parse_args
 
 :start_build
 
+REM ============================================================
+REM  Version bump: read VERSION, increment patch
+REM ============================================================
+if not exist "%PROJECT_ROOT%VERSION" (
+    echo 0.5.1> "%PROJECT_ROOT%VERSION"
+)
+set /p BUILD_VERSION=<"%PROJECT_ROOT%VERSION"
+for /f "tokens=1,2,3 delims=." %%a in ("!BUILD_VERSION!") do (
+    set /a V_PATCH=%%c + 1
+    set "BUILD_VERSION=%%a.%%b.!V_PATCH!"
+)
+echo !BUILD_VERSION!> "%PROJECT_ROOT%VERSION"
+
 echo ============================================
-echo   ClamAI Build ^(%BUILD_CONFIG%^)
+echo   ClamAI v!BUILD_VERSION! Build ^(%BUILD_CONFIG%^)
 echo ============================================
 echo   Output: outputs\%BUILD_CONFIG%\{x86_64,arm64}\
 echo.
@@ -104,7 +117,7 @@ for %%T in (!TARGET_LIST!) do (
 
 echo.
 echo ============================================
-echo   Build complete! ^(%BUILD_CONFIG%^)
+echo   Build complete! v%BUILD_VERSION% ^(%BUILD_CONFIG%^)
 echo ============================================
 echo.
 echo Output:
@@ -179,7 +192,7 @@ set CGO_ENABLED=0
 set GOOS=%B_GOOS%
 set GOARCH=%B_GOARCH%
 pushd "%PROXY_SERVICE%"
-go build -ldflags="%B_LDFLAGS%" -o "%B_DIR%\%B_OUT%" .
+go build -ldflags="%B_LDFLAGS% -X main.BuildVersion=%BUILD_VERSION%" -o "%B_DIR%\%B_OUT%" .
 popd
 endlocal
 

@@ -1564,7 +1564,6 @@ pub async fn get_proxy_models_with_info(state: tauri::State<'_, AppState>) -> Re
     let config = state.config_manager.lock().await.get_config();
     if config.service.deploy_mode == DeployMode::Server {
         let remote_url = config.service.remote_service_url.clone().unwrap_or_default();
-        let provider_configs = config.providers.clone();
         drop(config);
         if remote_url.is_empty() {
             return Ok(vec![]);

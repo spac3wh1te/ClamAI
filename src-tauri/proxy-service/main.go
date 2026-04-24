@@ -387,6 +387,8 @@ type ModelList struct {
 	Data   []ModelInfo `json:"data"`
 }
 
+var BuildVersion = "dev"
+
 var oauthStates = make(map[string]*OAuthStateInfo)
 
 type OAuthStateInfo struct {
@@ -397,7 +399,7 @@ type OAuthStateInfo struct {
 
 func main() {
 	initLogging()
-	log.Printf("[MAIN] ========== ClamAI Service Starting ==========")
+	log.Printf("[MAIN] ========== ClamAI v%s Service Starting ==========", BuildVersion)
 	log.Printf("[MAIN] PID: %d", os.Getpid())
 	log.Printf("[MAIN] Working directory: %s", getWorkingDir())
 	log.Printf("[MAIN] Command line args: %v", os.Args)
@@ -3117,7 +3119,7 @@ func (p *ProxyServer) handleAgentEnvCheck(w http.ResponseWriter, r *http.Request
 		checks = append(checks, CheckItem{"security", "API密钥管理", "info", "未配置API密钥"})
 	}
 
-	checks = append(checks, CheckItem{"system", "Go代理服务", "pass", fmt.Sprintf("运行中，监听 %s:%d", p.config.Host, p.config.Port)})
+	checks = append(checks, CheckItem{"system", "Go代理服务", "pass", fmt.Sprintf("运行中，监听 %s:%s", p.config.Host, p.config.Port)})
 
 	providerCount := len(p.providers)
 	activeProviders := 0
