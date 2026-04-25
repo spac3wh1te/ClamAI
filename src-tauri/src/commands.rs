@@ -2831,8 +2831,10 @@ pub async fn switch_deploy_mode(
 
 #[tauri::command]
 pub async fn list_users(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, "users").await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/users", base_url.trim_end_matches('/'));
+    let client = https_client_for_url(&url)?;
+    let (_, auth) = get_proxy_url(&state, "users").await?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
@@ -2849,14 +2851,16 @@ pub async fn create_user(
     display_name: Option<String>,
     role: Option<String>,
 ) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, "users").await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/users", base_url.trim_end_matches('/'));
+    let client = https_client_for_url(&url)?;
     let body = serde_json::json!({
         "username": username,
         "password": password,
         "display_name": display_name.unwrap_or_default(),
         "role": role.unwrap_or_else(|| "user".to_string()),
     });
+    let (_, auth) = get_proxy_url(&state, "users").await?;
     let mut req = client.post(&url)
         .timeout(std::time::Duration::from_secs(10))
         .header("Content-Type", "application/json")
@@ -2879,13 +2883,15 @@ pub async fn update_user(
     role: Option<String>,
     status: Option<String>,
 ) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, &format!("users/{}", id)).await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/users/{}", base_url.trim_end_matches('/'), id);
+    let client = https_client_for_url(&url)?;
     let body = serde_json::json!({
         "display_name": display_name.unwrap_or_default(),
         "role": role.unwrap_or_else(|| "user".to_string()),
         "status": status.unwrap_or_else(|| "active".to_string()),
     });
+    let (_, auth) = get_proxy_url(&state, &format!("users/{}", id)).await?;
     let mut req = client.put(&url)
         .timeout(std::time::Duration::from_secs(10))
         .header("Content-Type", "application/json")
@@ -2899,8 +2905,10 @@ pub async fn update_user(
 
 #[tauri::command]
 pub async fn delete_user(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, &format!("users/{}", id)).await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/users/{}", base_url.trim_end_matches('/'), id);
+    let client = https_client_for_url(&url)?;
+    let (_, auth) = get_proxy_url(&state, &format!("users/{}", id)).await?;
     let mut req = client.delete(&url).timeout(std::time::Duration::from_secs(10));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
@@ -2918,9 +2926,11 @@ pub async fn reset_user_password(
     id: String,
     new_password: String,
 ) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, &format!("users/{}/reset-password", id)).await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/users/{}/reset-password", base_url.trim_end_matches('/'), id);
+    let client = https_client_for_url(&url)?;
     let body = serde_json::json!({"new_password": new_password});
+    let (_, auth) = get_proxy_url(&state, &format!("users/{}/reset-password", id)).await?;
     let mut req = client.post(&url)
         .timeout(std::time::Duration::from_secs(10))
         .header("Content-Type", "application/json")
@@ -2937,9 +2947,11 @@ pub async fn reset_user_password(
 
 #[tauri::command]
 pub async fn set_registration_open(state: tauri::State<'_, AppState>, open: bool) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, "users/settings/registration").await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/users/settings/registration", base_url.trim_end_matches('/'));
+    let client = https_client_for_url(&url)?;
     let body = serde_json::json!({"open": open});
+    let (_, auth) = get_proxy_url(&state, "users/settings/registration").await?;
     let mut req = client.put(&url)
         .timeout(std::time::Duration::from_secs(10))
         .header("Content-Type", "application/json")
@@ -2979,8 +2991,10 @@ pub async fn register_user(
 
 #[tauri::command]
 pub async fn get_current_user(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, "auth/me").await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/auth/me", base_url.trim_end_matches('/'));
+    let client = https_client_for_url(&url)?;
+    let (_, auth) = get_proxy_url(&state, "auth/me").await?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
     if let Some(key) = auth {
         req = req.header("Authorization", format!("Bearer {}", key));
