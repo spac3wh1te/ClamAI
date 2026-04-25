@@ -7,6 +7,7 @@ import Providers from "./pages/Providers";
 import Models from "./pages/Models";
 import ApiKeys from "./pages/ApiKeys";
 import Settings from "./pages/Settings";
+import UserManagement from "./pages/UserManagement";
 import Logs from "./pages/Logs";
 import Security from "./pages/Security";
 import SecuritySquare from "./pages/SecuritySquare";
@@ -19,6 +20,7 @@ import StatusBar from "./components/StatusBar";
 import ConnectBanner from "./components/ConnectBanner";
 import { ApiKeySecretsProvider } from "./context/ApiKeySecretsContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { UserProvider } from "./context/UserContext";
 import { AppProvider } from "./context/AppContext";
 import { SetupProvider, useSetup } from "./context/SetupContext";
 
@@ -43,6 +45,7 @@ const mainRoutes = (
     <Route path="/security" element={<Security />} />
     <Route path="/security-square" element={<SecuritySquare />} />
     <Route path="/rate-limit" element={<RateLimit />} />
+    <Route path="/users" element={<UserManagement />} />
   </Routes>
 );
 
@@ -135,6 +138,18 @@ function AppContent() {
     return <SetupWizard onComplete={checkSetup} />;
   }
 
+  if (isAuthenticated) {
+    return (
+      <ApiKeySecretsProvider>
+        <div className="min-h-screen bg-background text-foreground">
+          {!connected && <ConnectBanner />}
+          <Layout>{mainRoutes}</Layout>
+          <StatusBar />
+        </div>
+      </ApiKeySecretsProvider>
+    );
+  }
+
   if (connected && (!initialized || !isAuthenticated)) {
     return <Login />;
   }
@@ -155,6 +170,7 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
+          <UserProvider>
           <AppProvider>
             <SetupProvider>
               <AuthExpiredGuard>
@@ -162,6 +178,7 @@ function App() {
               </AuthExpiredGuard>
             </SetupProvider>
           </AppProvider>
+          </UserProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ErrorBoundary>

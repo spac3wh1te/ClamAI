@@ -13,9 +13,11 @@ import {
   Shield,
   Gauge,
   LogOut,
+  Users,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useSetup } from "../context/SetupContext";
+import { useCurrentUser } from "../context/UserContext";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -26,6 +28,7 @@ function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const { logout } = useAuth();
   const { connected, deployMode } = useSetup();
+  const { isAdmin } = useCurrentUser();
 
   const navigation = [
     { name: "仪表盘", href: "/", icon: LayoutDashboard },
@@ -36,6 +39,7 @@ function Layout({ children }: LayoutProps) {
     { name: "安全广场", href: "/security-square", icon: Shield },
     { name: "安全防护", href: "/security", icon: Shield },
     { name: "模型限流", href: "/rate-limit", icon: Gauge },
+    ...(isAdmin ? [{ name: "用户管理", href: "/users", icon: Users }] : []),
     { name: "基本设置", href: "/settings", icon: Settings },
   ];
 

@@ -25,6 +25,8 @@ import { User, Lock } from "lucide-react";
 interface AppConfig {
   gateway: {
     port: number;
+    admin_port: number;
+    use_tls: boolean;
     host: string;
     api_key: string;
     log_level: string;
@@ -84,6 +86,7 @@ export default function Settings() {
   } = useSetup();
   const [switchMode, setSwitchMode] = useState<"pc" | "server">("pc");
   const [switchRemoteUrl, setSwitchRemoteUrl] = useState("");
+  const [switchRemoteProxyUrl, setSwitchRemoteProxyUrl] = useState("");
   const [switchPort, setSwitchPort] = useState(8080);
   const [switching, setSwitching] = useState(false);
   const [connectTestResult, setConnectTestResult] =
@@ -98,6 +101,7 @@ export default function Settings() {
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [portRestarting, setPortRestarting] = useState(false);
 
   const { data: currentConfig, isLoading } = useQuery<AppConfig>({
     queryKey: ["config"],
@@ -232,9 +236,12 @@ export default function Settings() {
     try {
       const remoteUrl =
         switchMode === "server" ? switchRemoteUrl.trim() || null : null;
+      const remoteProxyUrl =
+        switchMode === "server" && switchRemoteProxyUrl.trim() ? switchRemoteProxyUrl.trim() : null;
       await invoke("switch_deploy_mode", {
         deployMode: switchMode,
         remoteUrl,
+        remoteProxyUrl,
         port: switchMode === "pc" ? switchPort : null,
       });
       setShowSwitchPanel(false);
@@ -366,6 +373,9 @@ export default function Settings() {
           <h2 className="text-xl font-semibold flex items-center gap-2">
             <FolderOpen className="w-5 h-5 text-primary" />
             配置方案
+            <span className="text-sm font-normal text-muted-foreground">
+              ({profilesData?.length ?? 0} 个方案)
+            </span>
           </h2>
           <button
             onClick={() => setShowNewProfile(!showNewProfile)}
@@ -375,6 +385,10 @@ export default function Settings() {
             保存当前为新方案
           </button>
         </div>
+
+        <p className="text-xs text-muted-foreground mb-3">
+          配置方案保存了完整的 Provider、模型映射、网关和服务设置。程序使用过程中的一切操作（添加 Provider、修改端口等）会自动保存到当前方案。
+        </p>
 
         {showNewProfile && (
           <div className="flex items-center gap-3 mb-4 p-3 bg-secondary/30 rounded-lg border border-border">
@@ -505,7 +519,7 @@ export default function Settings() {
           <div className="flex items-center gap-3 mb-4">
             <code className="text-sm bg-secondary px-3 py-1.5 rounded-md font-mono">
               {currentMode === "pc"
-                ? `https://127.0.0.1:${config.gateway.port}`
+                ? `管理: :${config.gateway.admin_port} | 代理: :${config.gateway.port}`
                 : "远程服务"}
             </code>
             <div className="flex gap-2">
@@ -665,17 +679,31 @@ export default function Settings() {
                   />
                 </div>
               ) : (
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    远程服务地址
-                  </label>
-                  <input
-                    type="text"
-                    value={switchRemoteUrl}
-                    onChange={(e) => setSwitchRemoteUrl(e.target.value)}
-                    className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="https://your-server.com:8080"
-                  />
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      管理面地址
+                    </label>
+                    <input
+                      type="text"
+                      value={switchRemoteUrl}
+                      onChange={(e) => setSwitchRemoteUrl(e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      placeholder="https://your-server.com:8081"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      模型代理地址 <span className="text-muted-foreground font-normal">（可留空同管理面）</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={switchRemoteProxyUrl}
+                      onChange={(e) => setSwitchRemoteProxyUrl(e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      placeholder="https://your-server.com:8080（留空则同管理面）"
+                    />
+                  </div>
                 </div>
               )}
               <div className="flex items-center gap-3">
@@ -717,25 +745,75 @@ export default function Settings() {
           )}
         </div>
         <div className="bg-card rounded-lg p-6 border border-border">
-          <h2 className="text-xl font-semibold mb-4">网关配置</h2>
+          <h2 className="text-xl font-semibold mb-4">网关端口配置</h2>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1">监听端口</label>
+              <label className="block text-sm font-medium mb-1">模型服务端口</label>
               <p className="text-xs text-muted-foreground mb-1">
-                代理服务监听的本地端口，外部程序通过此端口调用 API
+                下游应用（IDE、CLI、Agent 等）通过此端口连接网关调用模型 API。
               </p>
+              <div className="flex items-center gap-3 mb-2">
+                <code className="text-sm bg-secondary px-3 py-1.5 rounded-md font-mono">
+                  https://127.0.0.1:{config.gateway.port}/v1/chat/completions
+                </code>
+              </div>
               <input
                 type="number"
                 value={config.gateway.port}
                 onChange={(e) =>
-                  updateConfig("gateway", "port", parseInt(e.target.value))
+                  updateConfig("gateway", "port", parseInt(e.target.value) || 8080)
                 }
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                min="1"
+                min="1024"
                 max="65535"
               />
             </div>
             <div>
+              <label className="block text-sm font-medium mb-1">管理端口 <span className="text-muted-foreground font-normal">（内部）</span></label>
+              <p className="text-xs text-muted-foreground mb-1">
+                桌面应用与网关服务内部通信端口，默认为模型端口 +1。通常无需修改。
+              </p>
+              <input
+                type="number"
+                value={config.gateway.admin_port}
+                onChange={(e) =>
+                  updateConfig("gateway", "admin_port", parseInt(e.target.value) || 8081)
+                }
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                min="1024"
+                max="65535"
+              />
+            </div>
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={async () => {
+                  if (!confirm("修改端口将重启代理服务，确定继续？")) return;
+                  setPortRestarting(true);
+                  try {
+                    const result = await invoke<string>("update_gateway_ports", {
+                      port: config.gateway.port,
+                      adminPort: config.gateway.admin_port,
+                    });
+                    await checkSetup();
+                    queryClient.invalidateQueries({ queryKey: ["config"] });
+                    alert(result);
+                  } catch (e: any) {
+                    alert("端口更新失败: " + (e?.toString() || "未知错误"));
+                  } finally {
+                    setPortRestarting(false);
+                  }
+                }}
+                disabled={portRestarting}
+                className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors text-sm"
+              >
+                {portRestarting && <Loader2 size={14} className="animate-spin" />}
+                {portRestarting ? "重启中..." : "应用端口变更"}
+              </button>
+              <span className="text-xs text-muted-foreground">
+                修改端口后需点击此按钮重启服务才能生效
+              </span>
+            </div>
+            <div className="pt-2">
               <label className="block text-sm font-medium mb-1">日志级别</label>
               <select
                 value={config.gateway.log_level}

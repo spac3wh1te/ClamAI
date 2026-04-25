@@ -24,6 +24,7 @@ pub struct ServiceConfig {
     pub deploy_mode: DeployMode,
     pub setup_complete: bool,
     pub remote_service_url: Option<String>,
+    pub remote_proxy_url: Option<String>,
 }
 
 impl Default for ServiceConfig {
@@ -32,6 +33,7 @@ impl Default for ServiceConfig {
             deploy_mode: DeployMode::PC,
             setup_complete: false,
             remote_service_url: None,
+            remote_proxy_url: None,
         }
     }
 }
@@ -124,11 +126,20 @@ pub struct ModelMapping {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
+    #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_admin_port")]
+    pub admin_port: u16,
+    #[serde(default = "default_true")]
+    pub use_tls: bool,
     pub host: String,
     pub api_key: String,
     pub log_level: String,
 }
+
+fn default_port() -> u16 { 8080 }
+fn default_admin_port() -> u16 { 8081 }
+fn default_true() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
@@ -266,6 +277,8 @@ impl ConfigManager {
             mappings: HashMap::new(),
             gateway: GatewayConfig {
                 port: 8080,
+                admin_port: 8081,
+                use_tls: true,
                 host: "127.0.0.1".to_string(),
                 api_key: "".to_string(),
                 log_level: "info".to_string(),
@@ -291,7 +304,17 @@ impl ConfigManager {
         self.config.clone()
     }
 
-    pub async fn update_config(&mut self, config: AppConfig) -> Result<()> {
+    pub async fn update_config(&mut self, mut config: AppConfig) -> Result<()> {
+        let active = &config.active_profile;
+        if !active.is_empty() {
+            if let Some(profile) = config.profiles.get_mut(active) {
+                profile.providers = config.providers.clone();
+                profile.mappings = config.mappings.clone();
+                profile.gateway = config.gateway.clone();
+                profile.advanced = config.advanced.clone();
+                profile.service = config.service.clone();
+            }
+        }
         Self::save_config(&self.config_path, &config).await?;
         self.config = config;
         Ok(())
@@ -359,6 +382,10 @@ impl ConfigManager {
             .iter()
             .map(|(id, p)| (id.clone(), p.name.clone()))
             .collect()
+    }
+
+    pub fn list_profiles_map(&self) -> HashMap<String, ConfigProfile> {
+        self.config.profiles.clone()
     }
 
     pub async fn save_current_as_profile(&mut self, profile_id: String, display_name: String) -> Result<()> {

@@ -92,8 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 drop(service_manager);
                 let providers = app_state.config_manager.lock().await.get_providers();
-                let port = app_state.config_manager.lock().await.get_config().gateway.port;
-                let base_url = format!("https://127.0.0.1:{}", port);
+                let admin_port = app_state.config_manager.lock().await.get_config().gateway.admin_port;
+                let base_url = format!("https://127.0.0.1:{}", admin_port);
                 let client = crate::commands::https_client_for_url(&base_url);
                 if let Ok(client) = client {
                     for provider in providers {
@@ -153,6 +153,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get_config,
             save_config,
             reset_config,
+            update_gateway_ports,
+            check_port_available,
+            complete_setup_with_config,
 
             // 提供商管理命令
             get_providers,
@@ -266,6 +269,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             disconnect_service,
             switch_deploy_mode,
             init_remote_server,
+
+            // 多用户管理命令
+            list_users,
+            create_user,
+            update_user,
+            delete_user,
+            reset_user_password,
+            set_registration_open,
+            register_user,
+            get_current_user,
         ])
         .run(tauri::generate_context!())?;
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -22,11 +23,14 @@ const refreshTokenExpiry = 30 * 24 * time.Hour
 
 var jwtSecret []byte
 
-type AdminClaims struct {
+type UserClaims struct {
+	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	jwt.RegisteredClaims
 }
+
+type AdminClaims = UserClaims
 
 func initJWTSecret() {
 	secret := getOrCreateJWTSecret()
@@ -54,38 +58,23 @@ func checkPassword(password, hash string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
-func isValidJWT(tokenStr string) bool {
-	if jwtSecret == nil || len(jwtSecret) == 0 {
-		return false
-	}
-	token, err := jwt.ParseWithClaims(tokenStr, &AdminClaims{}, func(t *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
-	})
-	if err != nil {
-		return false
-	}
-	if claims, ok := token.Claims.(*AdminClaims); ok && token.Valid {
-		return claims.Role == "admin"
-	}
-	return false
-}
-
-func generateToken(username, role string, expiry time.Duration) (string, error) {
-	claims := AdminClaims{
+func generateToken(userID, username, role string, expiry time.Duration) (string, error) {
+	claims := UserClaims{
+		UserID:   userID,
 		Username: username,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "aiproxy",
+			Issuer:    "clamai",
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)
 }
 
-func validateToken(tokenStr string) (*AdminClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &AdminClaims{}, func(token *jwt.Token) (interface{}, error) {
+func validateToken(tokenStr string) (*UserClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &UserClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -94,13 +83,24 @@ func validateToken(tokenStr string) (*AdminClaims, error) {
 	if err != nil {
 		return nil, err
 	}
-	if claims, ok := token.Claims.(*AdminClaims); ok && token.Valid {
+	if claims, ok := token.Claims.(*UserClaims); ok && token.Valid {
 		return claims, nil
 	}
 	return nil, fmt.Errorf("invalid token")
 }
 
+func isValidJWT(tokenStr string) bool {
+	claims, err := validateToken(tokenStr)
+	if err != nil {
+		return false
+	}
+	return claims.Role == "admin" || claims.Role == "user"
+}
+
 func adminExists() bool {
+	if dbAdminExists() {
+		return true
+	}
 	var count int
 	db.QueryRow("SELECT COUNT(*) FROM admin_users").Scan(&count)
 	return count > 0
@@ -112,20 +112,34 @@ func createAdmin(username, password string) error {
 		return err
 	}
 	_, err = db.Exec(`INSERT OR REPLACE INTO admin_users (id, username, password_hash, role) VALUES (1, ?, ?, 'admin')`, username, hash)
-	return err
+	if err != nil {
+		return err
+	}
+	return dbCreateUser("user_admin", username, username, hash, "admin")
 }
 
-func verifyAdmin(username, password string) bool {
-	var hash string
-	err := db.QueryRow("SELECT password_hash FROM admin_users WHERE username = ? AND role = 'admin'", username).Scan(&hash)
+func verifyUser(username, password string) (map[string]interface{}, error) {
+	user, err := dbGetUserByUsername(username)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	return checkPassword(password, hash)
+	hash, _ := user["password_hash"].(string)
+	status, _ := user["status"].(string)
+	if status == "disabled" {
+		return nil, fmt.Errorf("account disabled")
+	}
+	if !checkPassword(password, hash) {
+		return nil, fmt.Errorf("invalid password")
+	}
+	return user, nil
 }
 
 func getAdminUsername() string {
 	var username string
+	err := db.QueryRow("SELECT username FROM users WHERE role = 'admin' LIMIT 1").Scan(&username)
+	if err == nil {
+		return username
+	}
 	db.QueryRow("SELECT username FROM admin_users WHERE role = 'admin' LIMIT 1").Scan(&username)
 	return username
 }
@@ -165,27 +179,77 @@ func consumeRefreshToken(token string) (string, error) {
 	return username, nil
 }
 
-func issueTokenPair(username string) map[string]interface{} {
-	accessToken, _ := generateToken(username, "admin", accessTokenExpiry)
+func issueTokenPairForUser(user map[string]interface{}) map[string]interface{} {
+	userID, _ := user["id"].(string)
+	username, _ := user["username"].(string)
+	role, _ := user["role"].(string)
+
+	accessToken, _ := generateToken(userID, username, role, accessTokenExpiry)
 	refreshToken := generateRefreshTokenString()
 	storeRefreshToken(username, refreshToken)
+
+	dbUpdateUserLastLogin(userID)
 
 	return map[string]interface{}{
 		"success":       true,
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"expires_in":    int(accessTokenExpiry.Seconds()),
+		"user_id":       userID,
+		"username":      username,
+		"role":          role,
 	}
+}
+
+func issueTokenPair(username string) map[string]interface{} {
+	user, err := dbGetUserByUsername(username)
+	if err != nil {
+		role := "admin"
+		accessToken, _ := generateToken("unknown", username, role, accessTokenExpiry)
+		refreshToken := generateRefreshTokenString()
+		storeRefreshToken(username, refreshToken)
+		return map[string]interface{}{
+			"success":       true,
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"expires_in":    int(accessTokenExpiry.Seconds()),
+			"username":      username,
+			"role":          role,
+		}
+	}
+	return issueTokenPairForUser(user)
+}
+
+func getUserFromRequest(r *http.Request) *UserClaims {
+	tokenStr := extractBearerToken(r)
+	if tokenStr == "" {
+		return nil
+	}
+	claims, err := validateToken(tokenStr)
+	if err != nil {
+		return nil
+	}
+	return claims
+}
+
+func isAdmin(claims *UserClaims) bool {
+	return claims != nil && claims.Role == "admin"
 }
 
 // ==================== Middleware ====================
 
 var noAuthPaths = map[string]bool{
-	"/api/v1/auth/status":  true,
-	"/api/v1/auth/setup":   true,
-	"/api/v1/auth/login":   true,
-	"/api/v1/auth/token":   true,
-	"/api/v1/auth/refresh": true,
+	"/api/v1/auth/status":       true,
+	"/api/v1/auth/setup":        true,
+	"/api/v1/auth/login":        true,
+	"/api/v1/auth/register":     true,
+	"/api/v1/auth/token":        true,
+	"/api/v1/auth/refresh":      true,
+	"/api/v1/auth/reg-open":     true,
+}
+
+func isAdminPath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/users")
 }
 
 func isLocalhost(r *http.Request) bool {
@@ -218,6 +282,12 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 			if tokenStr != "" {
 				claims, err := validateToken(tokenStr)
 				if err == nil && claims != nil {
+					if isAdminPath(r.URL.Path) && !isAdmin(claims) && r.Method != "GET" {
+						http.Error(w, "Forbidden: admin only", http.StatusForbidden)
+						return
+					}
+					ctx := r.Context()
+					r = r.WithContext(contextWithUser(ctx, claims))
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -240,6 +310,21 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+type contextKey string
+
+const userContextKey contextKey = "user"
+
+func contextWithUser(ctx context.Context, claims *UserClaims) context.Context {
+	return context.WithValue(ctx, userContextKey, claims)
+}
+
+func getUserFromContext(r *http.Request) *UserClaims {
+	if val, ok := r.Context().Value(userContextKey).(*UserClaims); ok {
+		return val
+	}
+	return getUserFromRequest(r)
+}
+
 func extractBearerToken(r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
@@ -254,17 +339,21 @@ func (p *ProxyServer) setupAuthRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/auth/status", p.handleAuthStatus).Methods("GET")
 	router.HandleFunc("/api/v1/auth/setup", p.handleAuthSetup).Methods("POST")
 	router.HandleFunc("/api/v1/auth/login", p.handleAuthLogin).Methods("POST")
+	router.HandleFunc("/api/v1/auth/register", p.handleAuthRegister).Methods("POST")
+	router.HandleFunc("/api/v1/auth/reg-open", p.handleRegistrationOpen).Methods("GET")
 	router.HandleFunc("/api/v1/auth/change-password", p.handleChangePassword).Methods("POST")
 	router.HandleFunc("/api/v1/auth/token", p.handleGetToken).Methods("POST")
 	router.HandleFunc("/api/v1/auth/refresh", p.handleRefreshToken).Methods("POST")
+	router.HandleFunc("/api/v1/auth/me", p.handleAuthMe).Methods("GET")
 }
 
 func (p *ProxyServer) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"initialized": adminExists(),
-		"mode":        p.config.DeployMode,
-		"has_api_key": p.config.APIKey != "",
+		"initialized":       adminExists(),
+		"mode":              p.config.DeployMode,
+		"has_api_key":       p.config.APIKey != "",
+		"registration_open": dbIsRegistrationOpen(),
 	})
 }
 
@@ -289,8 +378,10 @@ func (p *ProxyServer) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create admin", http.StatusInternalServerError)
 		return
 	}
+	dbSetRegistrationOpen(false)
+	user, _ := dbGetUserByUsername(req.Username)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(issueTokenPair(req.Username))
+	json.NewEncoder(w).Encode(issueTokenPairForUser(user))
 }
 
 func (p *ProxyServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -302,17 +393,81 @@ func (p *ProxyServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if !verifyAdmin(req.Username, req.Password) {
+	user, err := verifyUser(req.Username, req.Password)
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
-			"error":   "Invalid credentials",
+			"error":   "用户名或密码错误",
 		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(issueTokenPair(req.Username))
+	json.NewEncoder(w).Encode(issueTokenPairForUser(user))
+}
+
+func (p *ProxyServer) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if !dbIsRegistrationOpen() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "注册未开放",
+		})
+		return
+	}
+	var req struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" || len(req.Password) < 6 {
+		http.Error(w, "用户名必填，密码至少6位", http.StatusBadRequest)
+		return
+	}
+	if _, err := dbGetUserByUsername(req.Username); err == nil {
+		http.Error(w, "用户名已存在", http.StatusConflict)
+		return
+	}
+	hash, _ := hashPassword(req.Password)
+	id := fmt.Sprintf("user_%d", time.Now().UnixNano())
+	displayName := req.DisplayName
+	if displayName == "" {
+		displayName = req.Username
+	}
+	if err := dbCreateUser(id, req.Username, displayName, hash, "user"); err != nil {
+		http.Error(w, "创建用户失败", http.StatusInternalServerError)
+		return
+	}
+	user, _ := dbGetUserByUsername(req.Username)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(issueTokenPairForUser(user))
+}
+
+func (p *ProxyServer) handleRegistrationOpen(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"open": dbIsRegistrationOpen(),
+	})
+}
+
+func (p *ProxyServer) handleAuthMe(w http.ResponseWriter, r *http.Request) {
+	claims := getUserFromRequest(r)
+	if claims == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"user_id":  claims.UserID,
+		"username": claims.Username,
+		"role":     claims.Role,
+	})
 }
 
 func (p *ProxyServer) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
@@ -338,13 +493,8 @@ func (p *ProxyServer) handleRefreshToken(w http.ResponseWriter, r *http.Request)
 }
 
 func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	tokenStr := extractBearerToken(r)
-	if tokenStr == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	claims, err := validateToken(tokenStr)
-	if err != nil || claims == nil {
+	claims := getUserFromRequest(r)
+	if claims == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -356,18 +506,25 @@ func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if !verifyAdmin(claims.Username, req.OldPassword) {
-		http.Error(w, "Invalid old password", http.StatusUnauthorized)
+	user, err := dbGetUserByID(claims.UserID)
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	hash, _ := user["password_hash"].(string)
+	if !checkPassword(req.OldPassword, hash) {
+		http.Error(w, "旧密码错误", http.StatusUnauthorized)
 		return
 	}
 	if len(req.NewPassword) < 6 {
-		http.Error(w, "New password min 6 chars", http.StatusBadRequest)
+		http.Error(w, "新密码至少6位", http.StatusBadRequest)
 		return
 	}
-	hash, _ := hashPassword(req.NewPassword)
-	db.Exec("UPDATE admin_users SET password_hash = ? WHERE username = ?", hash, claims.Username)
+	newHash, _ := hashPassword(req.NewPassword)
+	dbUpdateUserPassword(claims.UserID, newHash)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(issueTokenPair(claims.Username))
+	user2, _ := dbGetUserByID(claims.UserID)
+	json.NewEncoder(w).Encode(issueTokenPairForUser(user2))
 }
 
 func (p *ProxyServer) handleGetToken(w http.ResponseWriter, r *http.Request) {
@@ -388,9 +545,8 @@ func (p *ProxyServer) handleGetToken(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(issueTokenPair(username))
 		return
 	}
-	var hash string
-	err := db.QueryRow("SELECT password_hash FROM admin_users WHERE role = 'admin' LIMIT 1").Scan(&hash)
-	if err != nil || !checkPassword(req.Password, hash) {
+	user, err := verifyUser(username, req.Password)
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -400,5 +556,149 @@ func (p *ProxyServer) handleGetToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(issueTokenPair(username))
+	json.NewEncoder(w).Encode(issueTokenPairForUser(user))
+}
+
+// ==================== User Management Handlers ====================
+
+func (p *ProxyServer) setupUserRoutes(api *mux.Router) {
+	api.HandleFunc("/users", p.handleListUsers).Methods("GET")
+	api.HandleFunc("/users", p.handleCreateUser).Methods("POST")
+	api.HandleFunc("/users/{id}", p.handleUpdateUser).Methods("PUT")
+	api.HandleFunc("/users/{id}", p.handleDeleteUser).Methods("DELETE")
+	api.HandleFunc("/users/{id}/reset-password", p.handleResetUserPassword).Methods("POST")
+	api.HandleFunc("/users/settings/registration", p.handleSetRegistrationOpen).Methods("PUT")
+}
+
+func (p *ProxyServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := dbListUsers()
+	if err != nil {
+		http.Error(w, "Failed to list users", http.StatusInternalServerError)
+		return
+	}
+	if users == nil {
+		users = []map[string]interface{}{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"users": users})
+}
+
+func (p *ProxyServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		DisplayName string `json:"display_name"`
+		Role        string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" || len(req.Password) < 6 {
+		http.Error(w, "用户名必填，密码至少6位", http.StatusBadRequest)
+		return
+	}
+	if req.Role == "" {
+		req.Role = "user"
+	}
+	if req.Role != "admin" && req.Role != "user" {
+		http.Error(w, "角色必须是 admin 或 user", http.StatusBadRequest)
+		return
+	}
+	if _, err := dbGetUserByUsername(req.Username); err == nil {
+		http.Error(w, "用户名已存在", http.StatusConflict)
+		return
+	}
+	hash, _ := hashPassword(req.Password)
+	id := fmt.Sprintf("user_%d", time.Now().UnixNano())
+	displayName := req.DisplayName
+	if displayName == "" {
+		displayName = req.Username
+	}
+	if err := dbCreateUser(id, req.Username, displayName, hash, req.Role); err != nil {
+		http.Error(w, "创建用户失败", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"id":      id,
+		"message": "用户创建成功",
+	})
+}
+
+func (p *ProxyServer) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	var req struct {
+		DisplayName string `json:"display_name"`
+		Role        string `json:"role"`
+		Status      string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := dbUpdateUser(id, req.DisplayName, req.Role, req.Status); err != nil {
+		http.Error(w, "更新失败", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (p *ProxyServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	claims := getUserFromRequest(r)
+	if claims != nil && claims.UserID == id {
+		http.Error(w, "不能删除自己", http.StatusBadRequest)
+		return
+	}
+	if err := dbDeleteUser(id); err != nil {
+		http.Error(w, "删除失败", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (p *ProxyServer) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	var req struct {
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if len(req.NewPassword) < 6 {
+		http.Error(w, "密码至少6位", http.StatusBadRequest)
+		return
+	}
+	hash, _ := hashPassword(req.NewPassword)
+	if err := dbUpdateUserPassword(id, hash); err != nil {
+		http.Error(w, "重置失败", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "密码已重置"})
+}
+
+func (p *ProxyServer) handleSetRegistrationOpen(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Open bool `json:"open"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	dbSetRegistrationOpen(req.Open)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"open":    req.Open,
+	})
 }

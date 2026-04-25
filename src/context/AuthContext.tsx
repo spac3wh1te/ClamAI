@@ -13,11 +13,14 @@ interface AuthContextType {
   isInitialized: boolean;
   initialized: boolean;
   mode: string;
+  registrationOpen: boolean;
   login: (username: string, password: string) => Promise<void>;
   setup: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string, displayName?: string) => Promise<void>;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
   handleAuthExpired: () => void;
+  refreshAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -29,6 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isInitialized, setIsInitialized] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [mode, setMode] = useState("pc");
+  const [registrationOpen, setRegistrationOpen] = useState(false);
 
   useEffect(() => {
     checkStatus();
@@ -48,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const status = JSON.parse(data);
       setInitialized(status.initialized);
       setMode(status.mode);
+      setRegistrationOpen(status.registration_open === true);
       setIsInitialized(true);
 
       if (status.mode === "pc" && status.initialized) {
@@ -91,9 +96,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = JSON.parse(data);
     if (result.success && result.access_token) {
       setToken(result.access_token);
+      localStorage.setItem("clamai_token", result.access_token);
       setInitialized(true);
     } else {
       throw new Error("Setup failed");
+    }
+  }, []);
+
+  const register = useCallback(async (username: string, password: string, displayName?: string) => {
+    const data = await invoke<string>("register_user", { username, password, displayName: displayName || null });
+    const result = JSON.parse(data);
+    if (result.access_token) {
+      setToken(result.access_token);
+    } else {
+      throw new Error(result.message || result.error || "注册失败");
     }
   }, []);
 
@@ -109,6 +125,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [token],
   );
 
+  const refreshAuth = useCallback(async () => {
+    await checkStatus();
+  }, [checkStatus]);
+
   return (
     <AuthContext.Provider
       value={{
@@ -117,11 +137,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isInitialized,
         initialized,
         mode,
+        registrationOpen,
         login,
         setup: setupAdmin,
+        register,
         logout,
         changePassword,
         handleAuthExpired,
+        refreshAuth,
       }}
     >
       {children}

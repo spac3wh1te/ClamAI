@@ -1,24 +1,27 @@
 import React, { useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import { Activity, Lock, User, Shield, Eye, EyeOff } from "lucide-react";
+import { Activity, Lock, User, Shield, Eye, EyeOff, UserPlus } from "lucide-react";
 
 export default function Login() {
-  const { login, setup, initialized } = useAuth();
+  const { login, setup, register, initialized, registrationOpen } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [mode, setMode] = useState<"login" | "register">("login");
 
   const isSetup = !initialized;
+  const isRegister = mode === "register" && !isSetup;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
-    if (isSetup) {
+    if (isSetup || isRegister) {
       if (password.length < 6) {
         setError("密码至少需要6个字符");
         return;
@@ -33,11 +36,13 @@ export default function Login() {
     try {
       if (isSetup) {
         await setup(username, password);
+      } else if (isRegister) {
+        await register(username, password, displayName || undefined);
       } else {
         await login(username, password);
       }
     } catch (err: any) {
-      setError(err?.toString?.() || (isSetup ? "初始化失败" : "登录失败"));
+      setError(err?.toString?.() || (isSetup ? "初始化失败" : isRegister ? "注册失败" : "登录失败"));
     } finally {
       setLoading(false);
     }
@@ -53,7 +58,7 @@ export default function Login() {
             </div>
             <h1 className="text-2xl font-bold">ClamAI</h1>
             <p className="text-muted-foreground mt-1">
-              {isSetup ? "初始管理员设置" : "管理员登录"}
+              {isSetup ? "初始管理员设置" : isRegister ? "注册新账号" : "登录"}
             </p>
           </div>
 
@@ -90,6 +95,23 @@ export default function Login() {
               </div>
             </div>
 
+            {isRegister && (
+              <div>
+                <label className="block text-sm font-medium mb-1.5">显示名称</label>
+                <div className="relative">
+                  <UserPlus className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    className="w-full pl-10 pr-3 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    placeholder="可选"
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium mb-1.5">密码</label>
               <div className="relative">
@@ -99,7 +121,7 @@ export default function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-10 pr-10 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                  placeholder={isSetup ? "至少6个字符" : "输入密码"}
+                  placeholder={isSetup || isRegister ? "至少6个字符" : "输入密码"}
                   autoComplete="new-password"
                   data-1p-ignore
                   data-lpignore="true"
@@ -119,7 +141,7 @@ export default function Login() {
               </div>
             </div>
 
-            {isSetup && (
+            {(isSetup || isRegister) && (
               <div>
                 <label className="block text-sm font-medium mb-1.5">
                   确认密码
@@ -163,9 +185,35 @@ export default function Login() {
               disabled={loading || !username || !password}
               className="w-full py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {loading ? "处理中..." : isSetup ? "创建管理员" : "登录"}
+              {loading ? "处理中..." : isSetup ? "创建管理员" : isRegister ? "注册" : "登录"}
             </button>
           </form>
+
+          {!isSetup && registrationOpen && (
+            <div className="mt-4 text-center text-sm">
+              {isRegister ? (
+                <span className="text-muted-foreground">
+                  已有账号？{" "}
+                  <button
+                    onClick={() => { setMode("login"); setError(""); }}
+                    className="text-primary hover:underline"
+                  >
+                    去登录
+                  </button>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">
+                  没有账号？{" "}
+                  <button
+                    onClick={() => { setMode("register"); setError(""); }}
+                    className="text-primary hover:underline"
+                  >
+                    注册新账号
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-4">

@@ -5,6 +5,8 @@ use tokio::process::Command;
 #[derive(Debug)]
 pub struct ProxyStartConfig {
     pub port: u16,
+    pub admin_port: u16,
+    pub use_tls: bool,
     pub host: String,
     pub api_key: String,
     pub log_level: String,
@@ -29,15 +31,20 @@ impl ProxyService {
             return Err(ClamAIError::ProxyService(format!("代理二进制文件不存在: {}", proxy_binary.display())));
         }
 
-        tracing::info!("[ProxyService] 构建Command，启动参数: port={}, host={}, api_key={}, log_level={}, proxy={}, mode=pc",
-            config.port, config.host, if config.api_key.is_empty() { "(empty)" } else { "(set)" }, config.log_level, config.proxy_url.as_deref().unwrap_or("(none)"));
+        tracing::info!("[ProxyService] 构建Command，启动参数: port={}, admin_port={}, host={}, api_key={}, log_level={}, proxy={}, mode=pc",
+            config.port, config.admin_port, config.host, if config.api_key.is_empty() { "(empty)" } else { "(set)" }, config.log_level, config.proxy_url.as_deref().unwrap_or("(none)"));
 
         let mut cmd = Command::new(&proxy_binary);
         cmd.arg("--port").arg(config.port.to_string())
+           .arg("--admin-port").arg(config.admin_port.to_string())
            .arg("--host").arg(&config.host)
            .arg("--api-key").arg(&config.api_key)
            .arg("--log-level").arg(&config.log_level)
            .arg("--mode").arg("pc");
+
+        if !config.use_tls {
+            cmd.arg("--no-ssl");
+        }
 
         if let Some(ref proxy_url) = config.proxy_url {
             if !proxy_url.is_empty() {

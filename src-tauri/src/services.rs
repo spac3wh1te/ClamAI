@@ -3,6 +3,7 @@ use crate::error::{ClamAIError, Result};
 use crate::proxy::ProxyService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::process::Child;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
@@ -13,6 +14,7 @@ type ConfigManagerHandle = Arc<Mutex<ConfigManager>>;
 pub struct ServiceStatus {
     pub proxy_running: bool,
     pub proxy_port: u16,
+    pub admin_port: u16,
     pub uptime_seconds: u64,
     pub active_connections: u32,
     pub total_requests: u64,
@@ -49,11 +51,30 @@ impl ServiceManager {
         match self.config_manager.try_lock() {
             Ok(mgr) => {
                 let config = mgr.get_config();
+                let scheme = if config.gateway.use_tls { "https" } else { "http" };
                 match config.service.deploy_mode {
-                    DeployMode::PC => format!("https://127.0.0.1:{}", config.gateway.port),
+                    DeployMode::PC => format!("{}://127.0.0.1:{}", scheme, config.gateway.admin_port),
                     DeployMode::Server => {
                         config.service.remote_service_url.clone()
-                            .unwrap_or_else(|| format!("https://127.0.0.1:{}", config.gateway.port))
+                            .unwrap_or_else(|| format!("{}://127.0.0.1:{}", scheme, config.gateway.admin_port))
+                    }
+                }
+            }
+            Err(_) => "https://127.0.0.1:8081".to_string(),
+        }
+    }
+
+    pub fn get_proxy_url(&self) -> String {
+        match self.config_manager.try_lock() {
+            Ok(mgr) => {
+                let config = mgr.get_config();
+                let scheme = if config.gateway.use_tls { "https" } else { "http" };
+                match config.service.deploy_mode {
+                    DeployMode::PC => format!("{}://127.0.0.1:{}", scheme, config.gateway.port),
+                    DeployMode::Server => {
+                        config.service.remote_proxy_url.clone()
+                            .or_else(|| config.service.remote_service_url.clone())
+                            .unwrap_or_else(|| format!("{}://127.0.0.1:{}", scheme, config.gateway.port))
                     }
                 }
             }
@@ -106,8 +127,9 @@ impl ServiceManager {
 
     async fn start_local_service(&mut self, config: &crate::config::AppConfig) -> Result<()> {
         tracing::info!("[ServiceManager] PC模式：启动本地代理服务...");
-        let gateway = &config.gateway;
-        tracing::info!("[ServiceManager] 获取网关配置: port={}, host={}", gateway.port, gateway.host);
+        let mut gateway = config.gateway.clone();
+        let proxy_url = config.advanced.proxy_url.clone();
+        tracing::info!("[ServiceManager] 获取网关配置: port={}, admin_port={}, host={}", gateway.port, gateway.admin_port, gateway.host);
 
         {
             let process_guard = self.proxy_process.lock().await;
@@ -117,14 +139,35 @@ impl ServiceManager {
             }
         }
 
+        let original_port = gateway.port;
+        let original_admin = gateway.admin_port;
+
+        gateway.port = Self::find_available_port(gateway.port, "模型服务").await;
+        gateway.admin_port = Self::find_available_port(gateway.admin_port, "管理").await;
+
+        let port_changed = gateway.port != original_port || gateway.admin_port != original_admin;
+        if port_changed {
+            tracing::warn!(
+                "[ServiceManager] 端口冲突，已自动调整: 模型 {}→{}, 管理 {}→{}",
+                original_port, gateway.port, original_admin, gateway.admin_port
+            );
+            let mut mgr = self.config_manager.lock().await;
+            let mut cfg = mgr.get_config();
+            cfg.gateway.port = gateway.port;
+            cfg.gateway.admin_port = gateway.admin_port;
+            mgr.update_config(cfg).await.map_err(|e| ClamAIError::ProxyService(format!("保存端口配置失败: {}", e)))?;
+        }
+
         tracing::info!("[ServiceManager] 启动Go代理进程...");
 
         let start_config = crate::proxy::ProxyStartConfig {
             port: gateway.port,
+            admin_port: gateway.admin_port,
+            use_tls: gateway.use_tls,
             host: gateway.host.clone(),
             api_key: gateway.api_key.clone(),
             log_level: gateway.log_level.clone(),
-            proxy_url: config.advanced.proxy_url.clone(),
+            proxy_url,
         };
         let mut proxy_service = self.proxy_service.lock().await;
         let child = proxy_service.start(&start_config).await?;
@@ -134,9 +177,10 @@ impl ServiceManager {
         *process_guard = Some(child);
         tracing::info!("[ServiceManager] 进程句柄已保存");
 
-        let service_url = format!("https://127.0.0.1:{}", gateway.port);
+        let scheme = if gateway.use_tls { "https" } else { "http" };
+        let service_url = format!("{}://127.0.0.1:{}", scheme, gateway.admin_port);
         let health_url = format!("{}/health", service_url);
-        tracing::info!("[ServiceManager] 等待代理服务健康检查: {}", health_url);
+        tracing::info!("[ServiceManager] 等待代理服务健康检查(admin port): {}", health_url);
 
         let client = crate::commands::https_client_for_url(&service_url)
             .map_err(|e| ClamAIError::ProxyService(format!("创建HTTP客户端失败: {}", e)))?;
@@ -169,8 +213,29 @@ impl ServiceManager {
         let mut stats = self.stats.lock().await;
         stats.start_time = Some(chrono::Utc::now());
 
-        tracing::info!("✅ 本地代理服务启动成功，监听端口: {}", start_config.port);
+        tracing::info!("✅ 本地代理服务启动成功，模型端口: {}, 管理端口: {}", start_config.port, start_config.admin_port);
+        if port_changed {
+            tracing::info!("⚠️ 端口已自动调整(原 模型:{}, 管理:{})", original_port, original_admin);
+        }
         Ok(())
+    }
+
+    async fn find_available_port(start: u16, label: &str) -> u16 {
+        let mut port = start;
+        for _ in 0..100 {
+            match TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+                Ok(_) => {
+                    tracing::info!("[ServiceManager] {}端口 {} 可用", label, port);
+                    return port;
+                }
+                Err(_) => {
+                    tracing::warn!("[ServiceManager] {}端口 {} 已被占用，尝试 {}", label, port, port + 1);
+                    port += 1;
+                }
+            }
+        }
+        tracing::error!("[ServiceManager] 100个端口范围内均无法找到可用的{}端口", label);
+        start
     }
 
     pub async fn stop_proxy_service(&mut self) -> Result<()> {
@@ -247,8 +312,9 @@ impl ServiceManager {
             })
             .unwrap_or(0);
 
+        let scheme = if config.gateway.use_tls { "https" } else { "http" };
         let service_url = match config.service.deploy_mode {
-            DeployMode::PC => format!("https://127.0.0.1:{}", config.gateway.port),
+            DeployMode::PC => format!("{}://127.0.0.1:{}", scheme, config.gateway.admin_port),
             DeployMode::Server => config.service.remote_service_url.clone()
                 .unwrap_or_default(),
         };
@@ -256,6 +322,7 @@ impl ServiceManager {
         ServiceStatus {
             proxy_running: is_running,
             proxy_port: config.gateway.port,
+            admin_port: config.gateway.admin_port,
             uptime_seconds: uptime,
             active_connections: stats.active_connections,
             total_requests: stats.total_requests,

@@ -7,6 +7,7 @@ import { useSetup } from "../context/SetupContext";
 interface ServiceStatus {
   proxy_running: boolean;
   proxy_port: number;
+  admin_port: number;
   uptime_seconds: number;
   active_connections: number;
   total_requests: number;
@@ -66,10 +67,10 @@ export default function StatusBar() {
           </div>
 
           {/* 服务地址 */}
-          {status?.service_url && (
+          {status && (
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">地址:</span>
-              <span className="font-mono text-xs">{status.service_url}</span>
+              <span className="text-muted-foreground">代理端口:</span>
+              <span className="font-mono text-xs">:{status.proxy_port}</span>
             </div>
           )}
 

@@ -59,6 +59,7 @@ func initLogging() *os.File {
 
 type Config struct {
 	Port       string
+	AdminPort  string
 	Host       string
 	APIKey     string
 	LogLevel   string
@@ -312,14 +313,15 @@ func (w *capturingResponseWriter) Flush() {
 }
 
 type ProxyServer struct {
-	config     *Config
-	router     *mux.Router
-	providers  map[string]Provider
-	stats      *RequestStats
-	logBuffer  *LogBuffer
-	mu         sync.RWMutex
-	listenAddr string
-	useTLS     bool
+	config       *Config
+	router       *mux.Router
+	adminRouter  *mux.Router
+	providers    map[string]Provider
+	stats        *RequestStats
+	logBuffer    *LogBuffer
+	mu           sync.RWMutex
+	listenAddr   string
+	useTLS       bool
 }
 
 type OpenAIChatRequest struct {
@@ -417,9 +419,11 @@ func main() {
 	log.Printf("[MAIN] ProxyServer created successfully")
 
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
+	adminAddr := fmt.Sprintf("%s:%s", config.Host, config.AdminPort)
 	log.Printf("[MAIN] ========== Proxy Server Starting ==========")
 	log.Printf("[MAIN] Server mode: %s", config.DeployMode)
-	log.Printf("[MAIN] Listen address: %s", addr)
+	log.Printf("[MAIN] Proxy port (model API): %s", addr)
+	log.Printf("[MAIN] Admin port (management API): %s", adminAddr)
 	externalAccess := "no"
 	if config.Host == "0.0.0.0" {
 		externalAccess = "yes"
@@ -438,9 +442,10 @@ func main() {
 		log.Printf("[MAIN]   Provider: %s, BaseURL: %s", name, provider.GetBaseURL())
 	}
 
-	log.Printf("[MAIN] Starting HTTP server on %s...", addr)
+	log.Printf("[MAIN] Starting proxy server on %s...", addr)
+	log.Printf("[MAIN] Starting admin server on %s...", adminAddr)
 
-	proxy.listenAddr = "127.0.0.1:" + config.Port
+	proxy.listenAddr = "127.0.0.1:" + config.AdminPort
 	proxy.useTLS = !config.NoSSL
 	log.Printf("[MAIN] Internal callback: %s (TLS=%v)", proxy.listenAddr, proxy.useTLS)
 
@@ -448,6 +453,7 @@ func main() {
 	if !config.NoSSL {
 		if config.TLSCert == "" || config.TLSKey == "" {
 			hosts := detectListenHosts(addr)
+			hosts = append(hosts, detectListenHosts(adminAddr)...)
 			certFile, keyFile, err := ensureSelfSignedTLSCert(getDataDir(), hosts)
 			if err != nil {
 				log.Fatalf("[MAIN] Failed to generate TLS cert: %v", err)
@@ -465,6 +471,25 @@ func main() {
 		log.Printf("[MAIN] TLS disabled (plain HTTP)")
 	}
 
+	// Start admin server (management API) in a goroutine
+	go func() {
+		if !config.NoSSL && tlsConfig != nil {
+			srv := &http.Server{
+				Addr:      adminAddr,
+				Handler:   proxy.adminRouter,
+				TLSConfig: tlsConfig.Clone(),
+			}
+			if err := srv.ListenAndServeTLS("", ""); err != nil {
+				log.Fatalf("[MAIN] Admin server error: %v", err)
+			}
+		} else {
+			if err := http.ListenAndServe(adminAddr, proxy.adminRouter); err != nil {
+				log.Fatalf("[MAIN] Admin server error: %v", err)
+			}
+		}
+	}()
+
+	// Start proxy server (model API) on main goroutine
 	if !config.NoSSL && tlsConfig != nil {
 		server := &http.Server{
 			Addr:      addr,
@@ -472,11 +497,11 @@ func main() {
 			TLSConfig: tlsConfig,
 		}
 		if err := server.ListenAndServeTLS("", ""); err != nil {
-			log.Fatalf("[MAIN] Server error: %v", err)
+			log.Fatalf("[MAIN] Proxy server error: %v", err)
 		}
 	} else {
 		if err := http.ListenAndServe(addr, proxy.router); err != nil {
-			log.Fatalf("[MAIN] Server error: %v", err)
+			log.Fatalf("[MAIN] Proxy server error: %v", err)
 		}
 	}
 }
@@ -491,7 +516,8 @@ func getWorkingDir() string {
 
 func parseFlags() *Config {
 	config := &Config{}
-	flag.StringVar(&config.Port, "port", "8080", "proxy port")
+	flag.StringVar(&config.Port, "port", "8080", "proxy port (model API)")
+	flag.StringVar(&config.AdminPort, "admin-port", "", "admin port (management API), defaults to port+1")
 	flag.StringVar(&config.Host, "host", "127.0.0.1", "listen address")
 	flag.StringVar(&config.APIKey, "api-key", "", "API key")
 	flag.StringVar(&config.LogLevel, "log-level", "info", "log level")
@@ -512,16 +538,21 @@ func parseFlags() *Config {
 	if config.APIKey == "" {
 		config.APIKey = os.Getenv("CLAMAI_API_KEY")
 	}
+	if config.AdminPort == "" {
+		p, _ := strconv.Atoi(config.Port)
+		config.AdminPort = strconv.Itoa(p + 1)
+	}
 	return config
 }
 
 func NewProxyServer(config *Config) (*ProxyServer, error) {
 	proxy := &ProxyServer{
-		config:    config,
-		router:    mux.NewRouter(),
-		providers: make(map[string]Provider),
-		stats:     NewRequestStats(),
-		logBuffer: NewLogBuffer(maxLogEntries),
+		config:      config,
+		router:      mux.NewRouter(),
+		adminRouter: mux.NewRouter(),
+		providers:   make(map[string]Provider),
+		stats:       NewRequestStats(),
+		logBuffer:   NewLogBuffer(maxLogEntries),
 	}
 
 	if err := proxy.initProviders(); err != nil {
@@ -630,9 +661,7 @@ func (p *ProxyServer) initProviders() error {
 }
 
 func (p *ProxyServer) setupRoutes() {
-	p.router.HandleFunc("/health", p.handleHealth).Methods("GET")
-	p.router.HandleFunc("/oauth/callback", p.handleOAuthCallback).Methods("GET")
-
+	// === Proxy router (port): /v1/* model API ===
 	p.router.HandleFunc("/v1/chat/completions", p.handleOpenAIChatCompletions).Methods("POST")
 	p.router.HandleFunc("/v1/completions", p.handleOpenAICompletions).Methods("POST")
 	p.router.HandleFunc("/v1/embeddings", p.handleOpenAIEmbeddings).Methods("POST")
@@ -640,7 +669,18 @@ func (p *ProxyServer) setupRoutes() {
 	p.router.HandleFunc("/v1/messages", p.handleAnthropicMessages).Methods("POST")
 	p.router.HandleFunc("/v1/messages/count_tokens", p.handleAnthropicCountTokens).Methods("POST")
 
-	api := p.router.PathPrefix("/api/v1").Subrouter()
+	p.router.Use(p.corsMiddleware)
+	p.router.Use(p.apiLoggingMiddleware)
+	p.router.Use(p.rateLimitMiddleware)
+	p.router.Use(p.securityMiddleware)
+	p.router.Use(p.requestTrackingMiddleware)
+	p.router.Use(p.authMiddleware)
+
+	// === Admin router (admin-port): management API + health ===
+	p.adminRouter.HandleFunc("/health", p.handleHealth).Methods("GET")
+	p.adminRouter.HandleFunc("/oauth/callback", p.handleOAuthCallback).Methods("GET")
+
+	api := p.adminRouter.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/providers", p.handleListProviders).Methods("GET")
 	api.HandleFunc("/providers/test", p.handleTestProvider).Methods("POST")
 	api.HandleFunc("/providers/{name}/key", p.handleSetProviderKey).Methods("PUT")
@@ -676,21 +716,22 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/agent/discover", p.handleAgentDiscover).Methods("GET")
 	api.HandleFunc("/agent/deep-check", p.handleAgentDeepCheck).Methods("POST")
 
-	p.router.HandleFunc("/analysis/v1/chat/completions", p.handleAnalysisChat).Methods("POST")
+	p.adminRouter.HandleFunc("/analysis/v1/chat/completions", p.handleAnalysisChat).Methods("POST")
 
 	p.setupSecurityRoutes(api)
 	p.setupVectorRoutes(api)
 	p.setupRateLimitRoutes(api)
-	p.setupAuthRoutes(p.router)
+	p.setupAuthRoutes(p.adminRouter)
+	p.setupUserRoutes(api)
 	p.setupFrontendRoutes()
 
-	p.router.Use(p.corsMiddleware)
-	p.router.Use(p.apiLoggingMiddleware)
-	p.router.Use(p.rateLimitMiddleware)
-	p.router.Use(p.adminAuthMiddleware)
-	p.router.Use(p.securityMiddleware)
-	p.router.Use(p.requestTrackingMiddleware)
-	p.router.Use(p.authMiddleware)
+	p.adminRouter.Use(p.corsMiddleware)
+	p.adminRouter.Use(p.apiLoggingMiddleware)
+	p.adminRouter.Use(p.rateLimitMiddleware)
+	p.adminRouter.Use(p.adminAuthMiddleware)
+	p.adminRouter.Use(p.securityMiddleware)
+	p.adminRouter.Use(p.requestTrackingMiddleware)
+	p.adminRouter.Use(p.authMiddleware)
 }
 
 func (p *ProxyServer) periodicSave() {
@@ -2945,9 +2986,9 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 		return nil
 	})
 	checks = append(checks, CheckItem{"system", "存储使用", "info",
-		fmt.Sprintf("%d 个文件，共 %s", fileCount, formatSize(totalSize))})
+		fmt.Sprintf("%d 个文件，共 %s", fileCount, formatSize(totalSize)), nil})
 	checks = append(checks, CheckItem{"system", "会话记录", "info",
-		fmt.Sprintf("发现 %d 个会话/日志文件", len(sessionFiles))})
+		fmt.Sprintf("发现 %d 个会话/日志文件", len(sessionFiles)), nil})
 
 	if len(skillsFiles) > 0 {
 		relSkills := make([]string, len(skillsFiles))
