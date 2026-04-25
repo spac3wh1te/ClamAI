@@ -2252,13 +2252,10 @@ pub async fn create_analysis_task(
         "schedule_type": schedule_type.unwrap_or_else(|| "once".to_string()),
         "interval_minutes": interval_minutes.unwrap_or(60),
     });
-    let mut req = client.post(&url)
+    let req = client.post(&url)
         .timeout(std::time::Duration::from_secs(10))
         .header("Content-Type", "application/json")
-        .json(&body);
-    if let Some(key) = auth {
-        req = req.header("Authorization", format!("Bearer {}", key));
-    }
+        .body(body.to_string());
     let (status, resp_body) = send_and_log_full("POST", &url, req).await?;
     if status >= 400 {
         return Err(format!("API error {}: {}", status, resp_body));
@@ -2967,20 +2964,18 @@ pub async fn register_user(
     password: String,
     display_name: Option<String>,
 ) -> Result<String, String> {
-    let (url, auth) = get_proxy_url(&state, "auth/register").await?;
-    let client = https_client()?;
+    let base_url = get_service_base_url(&state).await;
+    let url = format!("{}/api/v1/auth/register", base_url.trim_end_matches('/'));
+    let client = https_client_for_url(&url)?;
     let body = serde_json::json!({
         "username": username,
         "password": password,
         "display_name": display_name.unwrap_or_default(),
     });
-    let mut req = client.post(&url)
+    let req = client.post(&url)
         .timeout(std::time::Duration::from_secs(10))
         .header("Content-Type", "application/json")
         .body(body.to_string());
-    if let Some(key) = auth {
-        req = req.header("Authorization", format!("Bearer {}", key));
-    }
     let (status, resp_body) = send_and_log_full("POST", &url, req).await?;
     if status >= 400 {
         return Err(format!("注册失败: {}", resp_body));
