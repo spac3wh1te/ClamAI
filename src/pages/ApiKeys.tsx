@@ -56,14 +56,27 @@ function formatTestResult(data: TestResultData): {
 
   if (data.success) {
     lines.push(data.message);
+    const msg = data.response?.choices?.[0]?.message;
     const content =
-      data.response?.choices?.[0]?.message?.content ||
-      data.response?.choices?.[0]?.message?.reasoning_content ||
+      msg?.content ||
+      msg?.reasoning_content ||
       data.response?.content?.[0]?.text ||
+      data.response?.choices?.[0]?.text ||
+      data.response?.output?.text ||
       "";
     if (content) {
       lines.push("");
-      lines.push(content);
+      lines.push(typeof content === "string" ? content : JSON.stringify(content, null, 2));
+    } else if (data.response && typeof data.response === "object") {
+      const respKeys = Object.keys(data.response);
+      if (respKeys.length === 0 || (respKeys.length === 1 && respKeys[0] === "id")) {
+        lines.push("");
+        lines.push("(模型返回了空响应)");
+      } else {
+        const dump = data.response?.choices?.[0] || data.response;
+        lines.push("");
+        lines.push(JSON.stringify(dump, null, 2));
+      }
     }
     if (data.input_tokens > 0 || data.output_tokens > 0) {
       lines.push("");

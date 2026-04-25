@@ -261,6 +261,31 @@ func createTables() error {
 			result_dimensions TEXT DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_skills_tasks_status ON skills_tasks(status)`,
+		`CREATE TABLE IF NOT EXISTS skills_task_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			risk_level TEXT DEFAULT '',
+			summary TEXT DEFAULT '',
+			detail TEXT DEFAULT '',
+			dimensions TEXT DEFAULT '',
+			status TEXT DEFAULT '',
+			duration_ms INTEGER DEFAULT 0,
+			run_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_skills_task_history_task ON skills_task_history(task_id)`,
+		`CREATE TABLE IF NOT EXISTS analysis_task_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			risk_level TEXT DEFAULT '',
+			summary TEXT DEFAULT '',
+			detail TEXT DEFAULT '',
+			dimensions TEXT DEFAULT '',
+			logs_analyzed INTEGER DEFAULT 0,
+			status TEXT DEFAULT '',
+			duration_ms INTEGER DEFAULT 0,
+			run_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_task_history_task ON analysis_task_history(task_id)`,
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
@@ -533,9 +558,9 @@ func dbLoadStats(stats *RequestStats) {
 		COALESCE(SUM(input_tokens), 0) as input_tokens,
 		COALESCE(SUM(output_tokens), 0) as output_tokens,
 		COALESCE(SUM(latency_ms), 0) as total_latency,
-		provider, model, DATE(timestamp) as date
+		provider, model, DATE(timestamp, 'localtime') as date
 		FROM request_logs
-		GROUP BY provider, model, DATE(timestamp)`)
+		GROUP BY provider, model, DATE(timestamp, 'localtime')`)
 	if err != nil {
 		log.Printf("[ERROR] dbLoadStats: failed to load from request_logs: %v", err)
 		return
@@ -1343,4 +1368,67 @@ func dbSetRegistrationOpen(open bool) {
 		val = "true"
 	}
 	dbSetSystemSetting("registration_open", val)
+}
+
+func dbUpdateSkillsTask(id, name, model, sourceType, sourceInfo string) error {
+	_, err := db.Exec(`UPDATE skills_tasks SET name=?, model=?, source_type=?, source_info=? WHERE id=?`,
+		name, model, sourceType, sourceInfo, id)
+	return err
+}
+
+func dbInsertSkillsTaskHistory(taskID, riskLevel, summary, detail, dimensions, status string, durationMs int64) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	db.Exec(`INSERT INTO skills_task_history (task_id, risk_level, summary, detail, dimensions, status, duration_ms, run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, riskLevel, summary, detail, dimensions, status, durationMs, now)
+}
+
+func dbGetSkillsTaskHistory(taskID string) ([]map[string]interface{}, error) {
+	rows, err := db.Query(`SELECT id, risk_level, summary, detail, dimensions, status, duration_ms, run_at FROM skills_task_history WHERE task_id=? ORDER BY run_at DESC LIMIT 50`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var riskLevel, summary, detail, dimensions, status, runAt string
+		var durationMs int64
+		if err := rows.Scan(&id, &riskLevel, &summary, &detail, &dimensions, &status, &durationMs, &runAt); err != nil {
+			continue
+		}
+		results = append(results, map[string]interface{}{
+			"id": id, "risk_level": riskLevel, "summary": summary, "detail": detail,
+			"dimensions": dimensions, "status": status, "duration_ms": durationMs, "run_at": runAt,
+		})
+	}
+	return results, nil
+}
+
+func dbInsertAnalysisTaskHistory(taskID, riskLevel, summary, detail, dimensions, status string, logsAnalyzed int, durationMs int64) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	db.Exec(`INSERT INTO analysis_task_history (task_id, risk_level, summary, detail, dimensions, logs_analyzed, status, duration_ms, run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, riskLevel, summary, detail, dimensions, logsAnalyzed, status, durationMs, now)
+}
+
+func dbGetAnalysisTaskHistory(taskID string) ([]map[string]interface{}, error) {
+	rows, err := db.Query(`SELECT id, risk_level, summary, detail, dimensions, logs_analyzed, status, duration_ms, run_at FROM analysis_task_history WHERE task_id=? ORDER BY run_at DESC LIMIT 50`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var riskLevel, summary, detail, dimensions, status, runAt string
+		var logsAnalyzed int
+		var durationMs int64
+		if err := rows.Scan(&id, &riskLevel, &summary, &detail, &dimensions, &logsAnalyzed, &status, &durationMs, &runAt); err != nil {
+			continue
+		}
+		results = append(results, map[string]interface{}{
+			"id": id, "risk_level": riskLevel, "summary": summary, "detail": detail,
+			"dimensions": dimensions, "logs_analyzed": logsAnalyzed, "status": status, "duration_ms": durationMs, "run_at": runAt,
+		})
+	}
+	return results, nil
 }

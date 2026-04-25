@@ -155,7 +155,7 @@ func generateRefreshTokenString() string {
 }
 
 func storeRefreshToken(username, token string) error {
-	expiresAt := time.Now().Add(refreshTokenExpiry).Format("2006-01-02 15:04:05")
+	expiresAt := time.Now().Add(refreshTokenExpiry).UTC().Format(time.RFC3339)
 	_, err := db.Exec(`INSERT OR REPLACE INTO refresh_tokens (token, username, expires_at) VALUES (?, ?, ?)`,
 		token, username, expiresAt)
 	return err
@@ -169,7 +169,7 @@ func consumeRefreshToken(token string) (string, error) {
 		return "", fmt.Errorf("invalid refresh token")
 	}
 
-	exp, err := time.Parse("2006-01-02 15:04:05", expiresAt)
+	exp, err := time.Parse(time.RFC3339, expiresAt)
 	if err != nil || time.Now().After(exp) {
 		db.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
 		return "", fmt.Errorf("refresh token expired")

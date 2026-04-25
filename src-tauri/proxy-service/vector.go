@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -301,27 +302,40 @@ func getEmbeddingFromAPI(content string) ([]float32, error) {
 		return nil, fmt.Errorf("no embedding model configured (semantic_model is empty)")
 	}
 
-	var provider Provider
-	var modelName string
 	p := getProxyServer()
-	if p != nil {
-		provider, modelName = p.resolveProvider(embModel)
+	if p == nil {
+		return nil, fmt.Errorf("proxy server not available")
 	}
+
+	provider, _ := p.resolveProvider(embModel)
 	if provider == nil {
 		return nil, fmt.Errorf("no provider found for embedding model: %s", embModel)
 	}
 
 	reqBody := map[string]interface{}{
-		"model": modelName,
+		"model": embModel,
 		"input": content,
 	}
 	body, _ := json.Marshal(reqBody)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	reqURL := provider.GetBaseURL() + "/v1/embeddings"
-	httpReq, _ := http.NewRequest("POST", reqURL, bytes.NewReader(body))
+	scheme := "http"
+	var client *http.Client
+	if p.useTLS {
+		scheme = "https"
+		client = &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+	} else {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	url := fmt.Sprintf("%s://%s/v1/embeddings", scheme, p.proxyAddr)
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+provider.GetAPIKey())
+	httpReq.Header.Set("X-Internal-Analysis", "true")
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
