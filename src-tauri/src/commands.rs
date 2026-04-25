@@ -1862,8 +1862,7 @@ pub async fn get_security_token_stats(state: tauri::State<'_, AppState>, period:
     Ok(body)
 }
 
-#[tauri::command]
-pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
+async fn get_admin_base_url(state: &tauri::State<'_, AppState>) -> Result<String, String> {
     let config = state.config_manager.lock().await.get_config();
     let scheme = if config.gateway.use_tls { "https" } else { "http" };
     let base_url = match config.service.deploy_mode {
@@ -1871,24 +1870,23 @@ pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String
         DeployMode::Server => config.service.remote_service_url.clone()
             .unwrap_or_default().trim_end_matches('/').to_string(),
     };
+    Ok(base_url)
+}
+
+#[tauri::command]
+pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/status", base_url);
-    drop(config);
-    let client = https_client()?;
+    let client = https_client_for_url(&url)?;
     let (_, body) = send_and_log_full("GET", &url, client.get(&url).timeout(std::time::Duration::from_secs(5))).await?;
     Ok(body)
 }
 
 #[tauri::command]
 pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
-    let config = state.config_manager.lock().await.get_config();
-    let scheme = if config.gateway.use_tls { "https" } else { "http" };
-    let base_url = match config.service.deploy_mode {
-        DeployMode::PC => format!("{}://127.0.0.1:{}", scheme, config.gateway.admin_port),
-        DeployMode::Server => config.service.remote_service_url.clone()
-            .unwrap_or_default().trim_end_matches('/').to_string(),
-    };
+    let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/setup", base_url);
-    let client = https_client()?;
+    let client = https_client_for_url(&url)?;
     let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password}))).await?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -1912,15 +1910,9 @@ pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, pa
 
 #[tauri::command]
 pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
-    let config = state.config_manager.lock().await.get_config();
-    let scheme = if config.gateway.use_tls { "https" } else { "http" };
-    let base_url = match config.service.deploy_mode {
-        DeployMode::PC => format!("{}://127.0.0.1:{}", scheme, config.gateway.admin_port),
-        DeployMode::Server => config.service.remote_service_url.clone()
-            .unwrap_or_default().trim_end_matches('/').to_string(),
-    };
+    let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/login", base_url);
-    let client = https_client()?;
+    let client = https_client_for_url(&url)?;
     let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password}))).await?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -1944,16 +1936,18 @@ pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, pa
 
 #[tauri::command]
 pub async fn change_admin_password(state: tauri::State<'_, AppState>, old_password: String, new_password: String) -> Result<String, String> {
-    let (url, _auth) = get_proxy_url(&state, "auth/change-password").await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/auth/change-password", base_url);
+    let client = https_client_for_url(&url)?;
     let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"old_password": old_password, "new_password": new_password}))).await?;
     Ok(body)
 }
 
 #[tauri::command]
 pub async fn get_admin_token(state: tauri::State<'_, AppState>, password: String) -> Result<String, String> {
-    let (url, _auth) = get_proxy_url(&state, "auth/token").await?;
-    let client = https_client()?;
+    let base_url = get_admin_base_url(&state).await?;
+    let url = format!("{}/api/v1/auth/token", base_url);
+    let client = https_client_for_url(&url)?;
     let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"password": password}))).await?;
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
