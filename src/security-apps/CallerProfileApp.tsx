@@ -22,7 +22,7 @@ import {
   Globe,
   Cpu,
   Zap,
-  Eye,
+  Pencil,
 } from "lucide-react";
 import { registerSecurityApp } from "./registry";
 
@@ -55,17 +55,7 @@ interface AnalysisTask {
   result_logs_analyzed?: number;
 }
 
-interface ProfileHistoryRecord {
-  id: number;
-  analyzed_at: string;
-  api_key_id: string;
-  time_range: string;
-  risk_level: string;
-  summary: string;
-  result: string;
-  model_used: string;
-  logs_analyzed: number;
-}
+
 
 const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
   idle: { bg: "bg-muted", text: "text-muted-foreground", label: "空闲" },
@@ -73,12 +63,7 @@ const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }>
   error: { bg: "bg-red-500/10", text: "text-red-500", label: "错误" },
 };
 
-const RISK_BADGE: Record<string, { bg: string; text: string }> = {
-  极高: { bg: "bg-red-500/20", text: "text-red-400" },
-  高: { bg: "bg-red-500/20", text: "text-red-400" },
-  中: { bg: "bg-orange-500/20", text: "text-orange-400" },
-  低: { bg: "bg-green-500/20", text: "text-green-400" },
-};
+
 
 const RISK_CARD: Record<string, { bg: string; border: string; text: string; icon: typeof XCircle }> = {
   极高: { bg: "bg-red-500/10", border: "border-red-500/30", text: "text-red-500", icon: XCircle },
@@ -138,10 +123,115 @@ function DimensionCards({ dimensionsJson }: { dimensionsJson: string }) {
   );
 }
 
+function AnalysisEditForm({ task, apiKeys, models, onSave, onCancel }: {
+  task: any; apiKeys: any[]; models: string[]; onSave: (name: string, apiKeyId: string, model: string, timeRange: string) => void; onCancel: () => void;
+}) {
+  const [name, setName] = useState(task.name);
+  const [apiKeyId, setApiKeyId] = useState(task.api_key_id);
+  const [model, setModel] = useState(task.model);
+  const [timeRange, setTimeRange] = useState(task.time_range || "7d");
+  return (
+    <div className="px-4 py-3 border-t border-border space-y-3">
+      <h4 className="text-sm font-medium">编辑任务</h4>
+      <div className="grid grid-cols-2 gap-3">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="任务名称" className="px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+        <select value={apiKeyId} onChange={(e) => setApiKeyId(e.target.value)} className="px-3 py-2 bg-background border border-border rounded-lg text-sm">
+          <option value="">选择 API Key...</option>
+          {apiKeys.map((k: any) => <option key={k.id} value={k.id}>{k.name}</option>)}
+        </select>
+        <select value={model} onChange={(e) => setModel(e.target.value)} className="px-3 py-2 bg-background border border-border rounded-lg text-sm">
+          <option value="">选择模型...</option>
+          {models.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} className="px-3 py-2 bg-background border border-border rounded-lg text-sm">
+          <option value="1d">1天</option><option value="3d">3天</option><option value="7d">7天</option><option value="30d">30天</option>
+        </select>
+      </div>
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">取消</button>
+        <button onClick={() => onSave(name, apiKeyId, model, timeRange)} disabled={!name || !apiKeyId || !model} className="px-4 py-1.5 bg-primary text-primary-foreground rounded-lg text-sm disabled:opacity-50">保存</button>
+      </div>
+    </div>
+  );
+}
+
+function callerRiskColor(level: string) {
+  switch (level) {
+    case "极高": return "bg-red-500/20 text-red-400 border-red-500/30";
+    case "高": return "bg-orange-500/20 text-orange-400 border-orange-500/30";
+    case "中": return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+    case "低": return "bg-green-500/20 text-green-400 border-green-500/30";
+    default: return "bg-muted text-muted-foreground border-border";
+  }
+}
+
+function callerRiskIcon(level: string) {
+  switch (level) {
+    case "极高": return <XCircle className="w-4 h-4 text-red-500" />;
+    case "高": return <AlertTriangle className="w-4 h-4 text-orange-500" />;
+    case "中": return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
+    case "低": return <CheckCircle className="w-4 h-4 text-green-500" />;
+    default: return <Shield className="w-4 h-4 text-muted-foreground" />;
+  }
+}
+
+function AnalysisTaskHistory({ taskId }: { taskId: string }) {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const { data, isLoading } = useQuery({
+    queryKey: ["analysis-task-history", taskId],
+    queryFn: async () => {
+      const raw = await invoke<string>("list_analysis_task_history", { taskId });
+      const parsed = JSON.parse(raw);
+      return (parsed.history || []) as any[];
+    },
+  });
+  const records = data || [];
+  if (isLoading) return <div className="text-center"><Loader2 className="w-4 h-4 animate-spin mx-auto" /></div>;
+  if (records.length === 0) return <p className="text-xs text-muted-foreground text-center">暂无历史记录</p>;
+  return (
+    <div className="space-y-2 max-h-64 overflow-y-auto">
+      {records.map((r: any) => {
+        const hasDetail = (r.detail && r.detail !== "{}" && r.detail !== "") || (r.dimensions && r.dimensions !== "{}" && r.dimensions !== "");
+        return (
+          <div key={r.id} className="rounded bg-muted/30 text-xs">
+            <div className="flex items-start gap-2 p-2">
+              <div className="flex-shrink-0 mt-0.5">{callerRiskIcon(r.risk_level)}</div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`px-1.5 py-0.5 rounded ${callerRiskColor(r.risk_level)}`}>{r.risk_level || "未知"}风险</span>
+                  <span className="text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" />{new Date(r.run_at).toLocaleString()}</span>
+                  {r.duration_ms > 0 && <span className="text-muted-foreground">{(r.duration_ms / 1000).toFixed(1)}s</span>}
+                  {(r.logs_analyzed ?? 0) > 0 && <span className="text-muted-foreground">{r.logs_analyzed}条日志</span>}
+                  {hasDetail && (
+                    <button onClick={() => setExpandedId(expandedId === r.id ? null : r.id)} className="text-primary hover:underline flex items-center gap-0.5">
+                      <FileText className="w-3 h-3" />{expandedId === r.id ? "收起" : "详情"}
+                    </button>
+                  )}
+                </div>
+                {r.summary && <p className="mt-1 text-muted-foreground">{r.summary}</p>}
+              </div>
+            </div>
+            {expandedId === r.id && hasDetail && (
+              <div className="px-2 pb-2 border-t border-border/50">
+                {r.dimensions && r.dimensions !== "{}" && r.dimensions !== "" && <DimensionCards dimensionsJson={r.dimensions} />}
+                {r.detail && r.detail !== "{}" && r.detail !== "" && (
+                  <details className="mt-2" open>
+                    <summary className="text-muted-foreground cursor-pointer hover:text-foreground">详细分析报告</summary>
+                    <div className="mt-1 p-2 bg-muted/30 rounded whitespace-pre-wrap max-h-48 overflow-y-auto">{r.detail}</div>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CallerProfileAnalysis() {
   const queryClient = useQueryClient();
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [newTask, setNewTask] = useState({
     name: "",
@@ -172,19 +262,14 @@ function CallerProfileAnalysis() {
     refetchInterval: 3000,
   });
 
-  const { data: historyData, refetch: refetchHistory } = useQuery({
-    queryKey: ["profile-history"],
-    queryFn: () =>
-      invoke<{ records: ProfileHistoryRecord[]; total: number }>(
-        "get_profile_analysis_history",
-        { limit: 20, offset: 0 },
-      ),
-    enabled: showHistory,
-  });
-
   const apiKeys = (apiKeysData?.keys || []).filter((k) => k.active);
   const allModels = proxyModels || [];
   const tasks = tasksData || [];
+
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ msg: string; fn: () => void } | null>(null);
+
+  const clearError = () => setErrorMsg(null);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -201,26 +286,36 @@ function CallerProfileAnalysis() {
       setNewTask({ name: "", api_key_id: "", model: "", time_range: "7d", schedule_type: "once", interval_minutes: 60 });
       refetchTasks();
     },
-    onError: (e: any) => alert("创建失败: " + e),
+    onError: (e: any) => { console.error("创建失败:", e); setErrorMsg("创建失败: " + e); },
   });
 
   const startMutation = useMutation({
     mutationFn: (taskId: string) => invoke("start_analysis_task", { taskId }),
     onSuccess: () => refetchTasks(),
-    onError: (e: any) => alert("启动失败: " + e),
+    onError: (e: any) => { console.error("启动失败:", e); setErrorMsg("启动失败: " + e); },
   });
 
   const stopMutation = useMutation({
     mutationFn: (taskId: string) => invoke("stop_analysis_task", { taskId }),
     onSuccess: () => refetchTasks(),
-    onError: (e: any) => alert("停止失败: " + e),
+    onError: (e: any) => { console.error("停止失败:", e); setErrorMsg("停止失败: " + e); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (taskId: string) => invoke("delete_analysis_task", { taskId }),
     onSuccess: () => refetchTasks(),
-    onError: (e: any) => alert("删除失败: " + e),
+    onError: (e: any) => { console.error("删除失败:", e); setErrorMsg("删除失败: " + e); },
   });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ taskId, name, apiKeyId, model, timeRange }: { taskId: string; name: string; apiKeyId: string; model: string; timeRange: string }) =>
+      invoke("update_analysis_task", { taskId, name, apiKeyId, model, timeRange }),
+    onSuccess: () => { refetchTasks(); setEditingTaskId(null); },
+    onError: (e: any) => { console.error("更新失败:", e); setErrorMsg("更新失败: " + e); },
+  });
+
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
 
   const getApiKeyName = (id: string) => apiKeys.find((k) => k.id === id)?.name || id;
 
@@ -230,13 +325,6 @@ function CallerProfileAnalysis() {
         <User className="w-6 h-6 text-primary" />
         <h2 className="text-xl font-bold">调用者行为分析</h2>
         <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center gap-1 px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <History className="w-4 h-4" />
-            {showHistory ? "隐藏历史" : "历史记录"}
-          </button>
           <button
             onClick={() => refetchTasks()}
             className="flex items-center gap-1 px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
@@ -348,37 +436,6 @@ function CallerProfileAnalysis() {
         </div>
       )}
 
-      {showHistory && (
-        <div className="bg-card rounded-lg border border-border overflow-hidden">
-          <div className="px-4 py-3 border-b border-border">
-            <h4 className="text-sm font-medium">分析历史</h4>
-          </div>
-          <div className="divide-y divide-border max-h-72 overflow-y-auto">
-            {historyData?.records?.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-muted-foreground">暂无记录</div>
-            )}
-            {historyData?.records?.map((r) => (
-              <div key={r.id} className="px-4 py-3">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs px-2 py-0.5 rounded ${(RISK_BADGE[r.risk_level] || { bg: "bg-muted", text: "text-muted-foreground" }).bg} ${(RISK_BADGE[r.risk_level] || { bg: "", text: "text-muted-foreground" }).text}`}>
-                      {r.risk_level || "未知"}
-                    </span>
-                    <span className="text-xs text-muted-foreground">{r.model_used}</span>
-                    <span className="text-xs text-muted-foreground">{r.time_range}</span>
-                    <span className="text-xs text-muted-foreground">{r.logs_analyzed} 条日志</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(r.analyzed_at).toLocaleString("zh-CN")}
-                  </span>
-                </div>
-                {r.summary && <p className="text-xs text-muted-foreground mt-1">{r.summary}</p>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="space-y-3">
         {tasks.length === 0 && (
           <div className="text-center py-8 text-muted-foreground text-sm">
@@ -388,7 +445,7 @@ function CallerProfileAnalysis() {
         {tasks.map((task) => {
           const statusCfg = STATUS_CONFIG[task.status] || STATUS_CONFIG.idle;
           const isRunning = task.status === "running";
-          const riskBadge = RISK_BADGE[task.result_risk_level || ""];
+          const riskCard = RISK_CARD[task.result_risk_level || ""];
           const hasDimensions = !!task.result_dimensions;
           const isExpanded = expandedTaskId === task.id;
 
@@ -402,8 +459,8 @@ function CallerProfileAnalysis() {
                     {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
                     {statusCfg.label}
                   </span>
-                  {task.result_risk_level && riskBadge && (
-                    <span className={`text-xs px-2 py-0.5 rounded ${riskBadge.bg} ${riskBadge.text}`}>
+                  {task.result_risk_level && riskCard && (
+                    <span className={`text-xs px-2 py-0.5 rounded ${riskCard.bg} ${riskCard.text}`}>
                       {task.result_risk_level}风险
                     </span>
                   )}
@@ -418,13 +475,15 @@ function CallerProfileAnalysis() {
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}
-                    className="text-xs text-primary hover:underline px-2 flex items-center gap-1"
-                  >
-                    <Eye className="w-3 h-3" />
-                    {isExpanded ? "收起" : hasDimensions ? "维度详情" : "详情"}
-                  </button>
+                  {(task.result_detail || hasDimensions) && (
+                    <button onClick={() => { setExpandedTaskId(isExpanded ? null : task.id); setEditingTaskId(null); setHistoryTaskId(null); }} className="p-1.5 hover:bg-muted rounded" title="查看详情"><FileText className="w-4 h-4" /></button>
+                  )}
+                  {!isRunning && (
+                    <button onClick={() => { setHistoryTaskId(historyTaskId === task.id ? null : task.id); setEditingTaskId(null); setExpandedTaskId(null); }} className="p-1.5 text-muted-foreground hover:text-foreground" title="历史记录"><History className="w-4 h-4" /></button>
+                  )}
+                  {!isRunning && task.schedule_type === "once" && (
+                    <button onClick={() => { setEditingTaskId(editingTaskId === task.id ? null : task.id); setHistoryTaskId(null); setExpandedTaskId(null); }} className="p-1.5 text-muted-foreground hover:text-foreground" title="编辑"><Pencil className="w-4 h-4" /></button>
+                  )}
                   {!isRunning && task.schedule_type === "once" && (
                     <button
                       onClick={() => startMutation.mutate(task.id)}
@@ -454,7 +513,7 @@ function CallerProfileAnalysis() {
                   )}
                   {!isRunning && (
                     <button
-                      onClick={() => { if (confirm("确定要删除此任务吗？")) deleteMutation.mutate(task.id); }}
+                      onClick={() => setConfirmAction({ msg: `确定要删除任务「${task.name}」吗？`, fn: () => deleteMutation.mutate(task.id) })}
                       className="p-1.5 text-muted-foreground hover:text-red-500"
                       title="删除"
                     >
@@ -509,10 +568,41 @@ function CallerProfileAnalysis() {
                   </div>
                 </div>
               )}
+
+              {editingTaskId === task.id && (
+                <AnalysisEditForm task={task} apiKeys={apiKeys} models={proxyModels || []} onSave={(n, a, m, t) => updateMutation.mutate({ taskId: task.id, name: n, apiKeyId: a, model: m, timeRange: t })} onCancel={() => setEditingTaskId(null)} />
+              )}
+
+              {historyTaskId === task.id && (
+                <div className="px-4 py-3 border-t border-border">
+                  <h4 className="text-sm font-medium mb-2 flex items-center gap-1"><History className="w-4 h-4" />执行历史</h4>
+                  <AnalysisTaskHistory taskId={task.id} />
+                </div>
+              )}
             </div>
           );
         })}
       </div>
+
+      {errorMsg && (
+        <div className="fixed bottom-4 right-4 z-50 max-w-md bg-red-500/90 text-white px-4 py-3 rounded-lg shadow-lg flex items-start gap-2">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <p className="text-sm flex-1 break-all">{errorMsg}</p>
+          <button onClick={clearError} className="text-white/70 hover:text-white text-lg leading-none">&times;</button>
+        </div>
+      )}
+
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center" onClick={() => setConfirmAction(null)}>
+          <div className="bg-card border border-border rounded-lg p-5 max-w-sm mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm mb-4">{confirmAction.msg}</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmAction(null)} className="px-4 py-1.5 text-sm text-muted-foreground hover:text-foreground rounded-lg border border-border">取消</button>
+              <button onClick={() => { confirmAction.fn(); setConfirmAction(null); }} className="px-4 py-1.5 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600">确定</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

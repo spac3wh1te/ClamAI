@@ -313,15 +313,17 @@ func (w *capturingResponseWriter) Flush() {
 }
 
 type ProxyServer struct {
-	config       *Config
-	router       *mux.Router
-	adminRouter  *mux.Router
-	providers    map[string]Provider
-	stats        *RequestStats
-	logBuffer    *LogBuffer
-	mu           sync.RWMutex
-	listenAddr   string
-	useTLS       bool
+	config           *Config
+	router           *mux.Router
+	adminRouter      *mux.Router
+	providers        map[string]Provider
+	stats            *RequestStats
+	logBuffer        *LogBuffer
+	mu               sync.RWMutex
+	listenAddr       string
+	proxyAddr        string
+	useTLS           bool
+	internalClient   *http.Client
 }
 
 type OpenAIChatRequest struct {
@@ -446,8 +448,10 @@ func main() {
 	log.Printf("[MAIN] Starting admin server on %s...", adminAddr)
 
 	proxy.listenAddr = "127.0.0.1:" + config.AdminPort
+	proxy.proxyAddr = "127.0.0.1:" + config.Port
 	proxy.useTLS = !config.NoSSL
-	log.Printf("[MAIN] Internal callback: %s (TLS=%v)", proxy.listenAddr, proxy.useTLS)
+	log.Printf("[MAIN] Internal callback (admin): %s (TLS=%v)", proxy.listenAddr, proxy.useTLS)
+	log.Printf("[MAIN] Internal callback (proxy): %s (TLS=%v)", proxy.proxyAddr, proxy.useTLS)
 
 	var tlsConfig *tls.Config
 	if !config.NoSSL {
@@ -553,6 +557,15 @@ func NewProxyServer(config *Config) (*ProxyServer, error) {
 		providers:   make(map[string]Provider),
 		stats:       NewRequestStats(),
 		logBuffer:   NewLogBuffer(maxLogEntries),
+		internalClient: &http.Client{
+			Timeout: 120 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				MaxConnsPerHost:     100,
+				IdleConnTimeout:     120 * time.Second,
+				MaxResponseHeaderBytes: 1 << 16,
+			},
+		},
 	}
 
 	if err := proxy.initProviders(); err != nil {
@@ -704,13 +717,16 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/analysis/tasks", p.handleCreateAnalysisTask).Methods("POST")
 	api.HandleFunc("/analysis/tasks", p.handleListAnalysisTasks).Methods("GET")
 	api.HandleFunc("/analysis/tasks/{id}", p.handleDeleteAnalysisTask).Methods("DELETE")
+	api.HandleFunc("/analysis/tasks/{id}", p.handleUpdateAnalysisTask).Methods("PUT")
 	api.HandleFunc("/analysis/tasks/{id}/start", p.handleStartAnalysisTask).Methods("POST")
 	api.HandleFunc("/analysis/tasks/{id}/stop", p.handleStopAnalysisTask).Methods("POST")
+	api.HandleFunc("/analysis/tasks/{id}/history", p.handleAnalysisTaskHistory).Methods("GET")
 	api.HandleFunc("/skills/tasks", p.handleCreateSkillsTask).Methods("POST")
 	api.HandleFunc("/skills/tasks", p.handleListSkillsTasks).Methods("GET")
 	api.HandleFunc("/skills/tasks/{id}", p.handleDeleteSkillsTask).Methods("DELETE")
+	api.HandleFunc("/skills/tasks/{id}", p.handleUpdateSkillsTask).Methods("PUT")
 	api.HandleFunc("/skills/tasks/{id}/start", p.handleStartSkillsTask).Methods("POST")
-	api.HandleFunc("/analysis/tasks/{id}", p.handleUpdateAnalysisTask).Methods("PUT")
+	api.HandleFunc("/skills/tasks/{id}/history", p.handleSkillsTaskHistory).Methods("GET")
 	api.HandleFunc("/agent/scan-logs", p.handleAgentLogScan).Methods("POST")
 	api.HandleFunc("/agent/env-check", p.handleAgentEnvCheck).Methods("POST")
 	api.HandleFunc("/agent/discover", p.handleAgentDiscover).Methods("GET")
@@ -1624,10 +1640,19 @@ func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request)
 func (p *ProxyServer) internalChatCompletion(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, []byte, error) {
 	provider, _ := p.resolveProvider(model)
 	if provider == nil {
+		p.mu.RLock()
+		available := make([]string, 0, len(p.providers))
+		for name := range p.providers {
+			available = append(available, name)
+		}
+		p.mu.RUnlock()
+		log.Printf("[INTERNAL] resolveProvider FAILED for model=%s, available=%v", model, available)
 		return 0, nil, fmt.Errorf("no provider for model: %s", model)
 	}
+		log.Printf("[INTERNAL] resolved provider for model=%s", model)
 
 	_, isAnthropic := provider.(*AnthropicProvider)
+	log.Printf("[INTERNAL] model=%s isAnthropic=%v", model, isAnthropic)
 
 	var reqBody map[string]interface{}
 	if isAnthropic {
@@ -1666,35 +1691,29 @@ func (p *ProxyServer) internalChatCompletion(model string, messages []map[string
 	body, _ := json.Marshal(reqBody)
 
 	scheme := "http"
-	var client *http.Client
 	if p.useTLS {
 		scheme = "https"
-		client = &http.Client{
-			Timeout: 120 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
-	} else {
-		client = &http.Client{Timeout: 120 * time.Second}
 	}
 
 	targetPath := "/v1/chat/completions"
 	if isAnthropic {
 		targetPath = "/v1/messages"
 	}
-	url := fmt.Sprintf("%s://%s%s", scheme, p.listenAddr, targetPath)
+	url := fmt.Sprintf("%s://%s%s", scheme, p.proxyAddr, targetPath)
+	log.Printf("[INTERNAL] calling url=%s model=%s bodyLen=%d", url, model, len(body))
 	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-Internal-Analysis", "true")
 
-	resp, err := client.Do(httpReq)
+	resp, err := p.internalClient.Do(httpReq)
 	if err != nil {
+		log.Printf("[INTERNAL] ERROR call to %s failed: %v", url, err)
 		return 0, nil, fmt.Errorf("internal call to %s failed: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("[INTERNAL] response status=%d bodyLen=%d preview=%.200s", resp.StatusCode, len(respBody), string(respBody[:min(200, len(respBody))]))
 	return resp.StatusCode, respBody, nil
 }
 
@@ -2239,6 +2258,42 @@ func (p *ProxyServer) handleDeleteSkillsTask(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
 
+func (p *ProxyServer) handleUpdateSkillsTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	var req struct {
+		Name       string `json:"name"`
+		Model      string `json:"model"`
+		SourceType string `json:"source_type"`
+		SourceInfo string `json:"source_info"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := dbUpdateSkillsTask(id, req.Name, req.Model, req.SourceType, req.SourceInfo); err != nil {
+		http.Error(w, "Failed to update task: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (p *ProxyServer) handleSkillsTaskHistory(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	history, err := dbGetSkillsTaskHistory(id)
+	if err != nil {
+		http.Error(w, "Failed to get history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if history == nil {
+		history = []map[string]interface{}{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"history": history})
+}
+
 func (p *ProxyServer) handleStartSkillsTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -2254,6 +2309,15 @@ func (p *ProxyServer) handleStartSkillsTask(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
+	model, _ := task["model"].(string)
+	log.Printf("[SKILLS] Starting task id=%s model=%s", id, model)
+	p.mu.RLock()
+	providerNames := make([]string, 0, len(p.providers))
+	for name := range p.providers {
+		providerNames = append(providerNames, name)
+	}
+	p.mu.RUnlock()
+	log.Printf("[SKILLS] Available providers: %v", providerNames)
 	dbUpdateSkillsTaskStatus(id, "running")
 	go p.executeSkillsTask(id, task)
 	w.Header().Set("Content-Type", "application/json")
@@ -2261,9 +2325,11 @@ func (p *ProxyServer) handleStartSkillsTask(w http.ResponseWriter, r *http.Reque
 }
 
 func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface{}) {
+	taskStart := time.Now()
 	model, _ := task["model"].(string)
 	sourceType, _ := task["source_type"].(string)
 	sourceInfo, _ := task["source_info"].(string)
+	log.Printf("[SKILLS] executeSkillsTask START id=%s model=%s sourceType=%s contentLen=%d", taskID, model, sourceType, len(sourceInfo))
 
 	var content string
 	switch sourceType {
@@ -2272,6 +2338,7 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 	case "url":
 		resp, err := http.Get(sourceInfo)
 		if err != nil {
+			log.Printf("[SKILLS] ERROR id=%s fetch URL failed: %v", taskID, err)
 			dbUpdateSkillsTaskResult(taskID, "error", "获取URL失败: "+err.Error(), "", "")
 			return
 		}
@@ -2281,19 +2348,23 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 	case "file":
 		data, err := os.ReadFile(sourceInfo)
 		if err != nil {
+			log.Printf("[SKILLS] ERROR id=%s read file failed: %v", taskID, err)
 			dbUpdateSkillsTaskResult(taskID, "error", "读取文件失败: "+err.Error(), "", "")
 			return
 		}
 		content = string(data)
 	default:
+		log.Printf("[SKILLS] ERROR id=%s unknown source type: %s", taskID, sourceType)
 		dbUpdateSkillsTaskResult(taskID, "error", "未知的来源类型", "", "")
 		return
 	}
 
 	if content == "" {
+		log.Printf("[SKILLS] ERROR id=%s content is empty", taskID)
 		dbUpdateSkillsTaskResult(taskID, "error", "内容为空", "", "")
 		return
 	}
+	log.Printf("[SKILLS] id=%s content prepared, len=%d, calling internalChatCompletion...", taskID, len(content))
 
 	systemPrompt := `你是一个专业的AI网关安全分析师，专注于检测AI智能体Skills文档中的安全威胁。请对以下Skills文档进行安全检测，覆盖以下6个维度：
 1. 恶意指令注入
@@ -2312,9 +2383,11 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 
 	statusCode, respBody, err := p.internalChatCompletion(model, messages, 0.2, 2000)
 	if err != nil {
+		log.Printf("[SKILLS] ERROR id=%s internalChatCompletion failed: %v", taskID, err)
 		dbUpdateSkillsTaskResult(taskID, "error", "检测失败: "+err.Error(), "", "")
 		return
 	}
+	log.Printf("[SKILLS] id=%s internalChatCompletion response: status=%d bodyLen=%d", taskID, statusCode, len(respBody))
 
 	riskLevel := "unknown"
 	summary := ""
@@ -2328,6 +2401,7 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 					if msg, ok := choice["message"].(map[string]interface{}); ok {
 						if c, ok := msg["content"].(string); ok {
 							detail = c
+							log.Printf("[SKILLS] id=%s AI content len=%d preview=%.200s", taskID, len(c), c)
 							parsed := extractJSON(c)
 							if parsed != nil {
 								if rl, ok := parsed["risk_level"].(string); ok {
@@ -2341,15 +2415,37 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 										dimensions = string(dimBytes)
 									}
 								}
+								log.Printf("[SKILLS] id=%s parsed: risk=%s summary=%.100s dims=%d", taskID, riskLevel, summary, len(dimensions))
+							} else {
+								log.Printf("[SKILLS] WARN id=%s extractJSON returned nil, content preview=%.300s", taskID, c)
 							}
+						} else {
+							log.Printf("[SKILLS] WARN id=%s msg.content is not a string, type=%T, msg keys=%v", taskID, msg["content"], msg)
 						}
+					} else {
+						log.Printf("[SKILLS] WARN id=%s choice.message is not a map", taskID)
 					}
+				} else {
+					log.Printf("[SKILLS] WARN id=%s choices[0] is not a map", taskID)
 				}
+			} else {
+				log.Printf("[SKILLS] WARN id=%s no choices in response, resp keys=%v", taskID, func() []string {
+					keys := make([]string, 0)
+					for k := range resp { keys = append(keys, k) }
+					return keys
+				}())
 			}
+		} else {
+			log.Printf("[SKILLS] WARN id=%s response body is not valid JSON: %.200s", taskID, string(respBody[:min(200, len(respBody))]))
 		}
+	} else {
+		log.Printf("[SKILLS] WARN id=%s non-success status %d, body=%.200s", taskID, statusCode, string(respBody[:min(200, len(respBody))]))
 	}
 
+	log.Printf("[SKILLS] DONE id=%s risk=%s summary=%.100s detailLen=%d dimsLen=%d", taskID, riskLevel, summary, len(detail), len(dimensions))
+	durationMs := time.Since(taskStart).Milliseconds()
 	dbUpdateSkillsTaskResult(taskID, riskLevel, summary, detail, dimensions)
+	dbInsertSkillsTaskHistory(taskID, riskLevel, summary, detail, dimensions, riskLevel, durationMs)
 }
 
 func (p *ProxyServer) handleStartAnalysisTask(w http.ResponseWriter, r *http.Request) {
@@ -2387,14 +2483,32 @@ func (p *ProxyServer) handleStopAnalysisTask(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": "idle"})
 }
 
+func (p *ProxyServer) handleAnalysisTaskHistory(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	history, err := dbGetAnalysisTaskHistory(id)
+	if err != nil {
+		http.Error(w, "Failed to get history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if history == nil {
+		history = []map[string]interface{}{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"history": history})
+}
+
 func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interface{}) {
+	taskStart := time.Now()
 	apiKeyID, _ := task["api_key_id"].(string)
 	model, _ := task["model"].(string)
+	log.Printf("[ANALYSIS] executeAnalysisTask START id=%s model=%s apiKeyID=%s", taskID, model, apiKeyID)
 
 	apiKeysMu.Lock()
 	gatewayKey, exists := apiKeysByID[apiKeyID]
 	apiKeysMu.Unlock()
 	if !exists {
+		log.Printf("[ANALYSIS] ERROR id=%s API Key not found: %s", taskID, apiKeyID)
 		dbUpdateAnalysisTaskResult(taskID, "error", "API Key not found", "", "", 0)
 		tasks, _ := dbGetAnalysisTasks()
 		for _, t := range tasks {
@@ -2412,6 +2526,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 			modelForGateway = provider.GetName() + ":" + modelForGateway
 		}
 	}
+	log.Printf("[ANALYSIS] id=%s modelForGateway=%s", taskID, modelForGateway)
 
 	logs, total := dbGetLogsByAPIKey(maskAPIKeyForLog(gatewayKey.Key), 500)
 
@@ -2430,8 +2545,10 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 		{"role": "user", "content": conversationSummary.String()},
 	}
 
+	log.Printf("[ANALYSIS] id=%s fetched %d logs, calling internalChatCompletion...", taskID, len(logs))
 	statusCode, respBody, err := p.internalChatCompletion(modelForGateway, messages, 0.3, 1500)
 	if err != nil {
+		log.Printf("[ANALYSIS] ERROR id=%s internalChatCompletion failed: %v", taskID, err)
 		dbUpdateAnalysisTaskResult(taskID, "error", "Analysis failed: "+err.Error(), "", "", 0)
 		tasks, _ := dbGetAnalysisTasks()
 		for _, t := range tasks {
@@ -2441,6 +2558,8 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 		}
 		return
 	}
+
+	log.Printf("[ANALYSIS] id=%s response: status=%d bodyLen=%d", taskID, statusCode, len(respBody))
 
 	riskLevel := "unknown"
 	summary := ""
@@ -2454,6 +2573,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 					if msg, ok := choice["message"].(map[string]interface{}); ok {
 						if contentStr, ok := msg["content"].(string); ok {
 							detail = contentStr
+							log.Printf("[ANALYSIS] id=%s AI content len=%d preview=%.200s", taskID, len(contentStr), contentStr)
 							parsed := extractJSON(contentStr)
 							if parsed != nil {
 								if rl, ok := parsed["risk_level"].(string); ok {
@@ -2467,15 +2587,24 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 										dimensions = string(dimBytes)
 									}
 								}
+								log.Printf("[ANALYSIS] id=%s parsed: risk=%s summary=%.100s dims=%d", taskID, riskLevel, summary, len(dimensions))
+							} else {
+								log.Printf("[ANALYSIS] WARN id=%s extractJSON returned nil", taskID)
 							}
 						}
 					}
 				}
 			}
 		}
+	} else {
+		log.Printf("[ANALYSIS] WARN id=%s non-success status %d", taskID, statusCode)
 	}
 
+	log.Printf("[ANALYSIS] DONE id=%s risk=%s summary=%.100s", taskID, riskLevel, summary)
+
 	dbUpdateAnalysisTaskResult(taskID, riskLevel, summary, detail, dimensions, total)
+	durationMs := time.Since(taskStart).Milliseconds()
+	dbInsertAnalysisTaskHistory(taskID, riskLevel, summary, detail, dimensions, riskLevel, total, durationMs)
 
 	inputTokens, outputTokens := extractTokensFromBody(respBody)
 	prov, resolvedModel := p.resolveProvider(modelForGateway)

@@ -981,6 +981,21 @@ async fn sync_provider_key_internal(state: &tauri::State<'_, AppState>, provider
     }
 }
 
+async fn sync_all_provider_keys(state: &tauri::State<'_, AppState>) {
+    let providers = state.config_manager.lock().await.get_providers();
+    for provider in &providers {
+        if !provider.enabled {
+            continue;
+        }
+        if let Some(k) = provider.api_keys.iter().find(|k| k.is_active) {
+            let provider_name = format!("{:?}", provider.provider_type).to_lowercase();
+            if let Err(e) = sync_provider_key_internal(state, &provider_name, &k.key_value).await {
+                tracing::warn!("sync_all_provider_keys: {} failed: {}", provider_name, e);
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 async fn proxy_request(state: &tauri::State<'_, AppState>, method: &str, path: &str) -> Result<reqwest::Response, String> {
     let (url, auth) = get_proxy_url(state, path).await?;
@@ -1349,6 +1364,9 @@ pub async fn test_chat_request(
                         let status = r.status();
                         let resp_body: serde_json::Value = r.json().await.unwrap_or(serde_json::json!({}));
                         let (input_tokens, output_tokens) = extract_tokens(&resp_body);
+                        tracing::info!("[TEST] proxy test response: status={}, tokens={}/{}, body_preview={}",
+                            status.as_u16(), input_tokens, output_tokens,
+                            serde_json::to_string(&resp_body).unwrap_or_default().chars().take(500).collect::<String>());
                         if status.is_success() {
                             return Ok(TestResult {
                                 success: true,
@@ -2315,6 +2333,7 @@ pub async fn update_analysis_task(
 
 #[tauri::command]
 pub async fn start_analysis_task(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    sync_all_provider_keys(&state).await;
     let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}/start", task_id)).await?;
     let client = https_client()?;
     let mut req = client.post(&url).timeout(std::time::Duration::from_secs(10));
@@ -2428,6 +2447,7 @@ pub async fn delete_skills_task(state: tauri::State<'_, AppState>, id: String) -
 
 #[tauri::command]
 pub async fn start_skills_task(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    sync_all_provider_keys(&state).await;
     let (url, auth) = get_proxy_url(&state, &format!("skills/tasks/{}/start", id)).await?;
     let client = https_client()?;
     let mut req = client.post(&url)
@@ -2471,6 +2491,55 @@ pub async fn deep_check_agent(state: tauri::State<'_, AppState>, agent: String, 
         req = req.header("Authorization", format!("Bearer {}", key));
     }
     let (_, resp_body) = send_and_log_full("POST", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn update_skills_task(state: tauri::State<'_, AppState>, id: String, name: String, model: String, source_type: String, source_info: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("skills/tasks/{}", id)).await?;
+    let client = https_client()?;
+    let body = serde_json::json!({
+        "name": name,
+        "model": model,
+        "source_type": source_type,
+        "source_info": source_info,
+    });
+    let mut req = client.put(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json")
+        .body(body.to_string());
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("PUT", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn list_skills_task_history(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("skills/tasks/{}/history", task_id)).await?;
+    let client = https_client()?;
+    let mut req = client.get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json");
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("GET", &url, req).await?;
+    Ok(resp_body)
+}
+
+#[tauri::command]
+pub async fn list_analysis_task_history(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}/history", task_id)).await?;
+    let client = https_client()?;
+    let mut req = client.get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json");
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    let (_, resp_body) = send_and_log_full("GET", &url, req).await?;
     Ok(resp_body)
 }
 

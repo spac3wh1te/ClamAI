@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bytedance/sonic"
+	"github.com/cloudflare/ahocorasick"
 	"github.com/gorilla/mux"
 )
 
@@ -30,7 +32,9 @@ type SecurityConfig struct {
 	Enabled           bool            `json:"enabled"`
 	Input             DirectionConfig `json:"input"`
 	Output            DirectionConfig `json:"output"`
-	Keywords          []string        `json:"keywords"`
+	Keywords          []string        `json:"keywords"`           // backward compat: flat keyword list
+	KeywordByLevel    map[string][]string `json:"keyword_by_level"` // {"critical": [...], "high": [...], "medium": [...], "low": [...]}
+	KeywordLevels     []string        `json:"keyword_levels"`      // enabled levels, e.g. ["critical","high"]
 	BlockMessage      string          `json:"block_message"`
 	SemanticModel     string          `json:"semantic_model"`
 	SemanticThreshold float64         `json:"semantic_threshold"`
@@ -56,6 +60,10 @@ var (
 	secConfigMu     sync.Mutex
 	compiledRegexps []*regexp.Regexp
 	regexpsMu       sync.Mutex
+
+	acMatchers  map[string]*ahocorasick.Matcher // level -> matcher
+	acDicts     map[string][]string              // level -> keyword list (parallel with matcher)
+	acBuildMu   sync.Mutex
 )
 
 var securityCategories = []string{"sensitive_data", "pornography", "violence", "politics", "terrorism"}
@@ -78,11 +86,12 @@ var defaultSemanticSystemPrompt = `你是一个内容安全分类引擎。你的
 
 只输出JSON，不要输出任何解释或额外文本。`
 
-func rebuildRegexps(keywords []string) {
+func rebuildMatchers(cfg *SecurityConfig) {
 	regexpsMu.Lock()
 	defer regexpsMu.Unlock()
-	compiledRegexps = make([]*regexp.Regexp, 0, len(keywords))
-	for _, kw := range keywords {
+
+	compiledRegexps = make([]*regexp.Regexp, 0, len(cfg.Keywords))
+	for _, kw := range cfg.Keywords {
 		if kw == "" {
 			continue
 		}
@@ -104,6 +113,58 @@ func rebuildRegexps(keywords []string) {
 			}
 		}
 	}
+
+	acBuildMu.Lock()
+	defer acBuildMu.Unlock()
+	acMatchers = make(map[string]*ahocorasick.Matcher)
+	acDicts = make(map[string][]string)
+
+	if cfg.KeywordByLevel == nil || len(cfg.KeywordLevels) == 0 {
+		return
+	}
+
+	enabledLevels := make(map[string]bool)
+	for _, lvl := range cfg.KeywordLevels {
+		enabledLevels[lvl] = true
+	}
+
+	for level, kws := range cfg.KeywordByLevel {
+		if !enabledLevels[level] {
+			continue
+		}
+		if len(kws) == 0 {
+			continue
+		}
+
+		cleaned := make([]string, 0, len(kws))
+		for _, kw := range kws {
+			if kw == "" {
+				continue
+			}
+			var buf strings.Builder
+			for _, ch := range kw {
+				if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch > 127 {
+					buf.WriteRune(ch)
+				}
+			}
+			if buf.Len() > 0 {
+				cleaned = append(cleaned, buf.String())
+			}
+		}
+		if len(cleaned) == 0 {
+			continue
+		}
+
+		matcher := ahocorasick.NewStringMatcher(cleaned)
+		acMatchers[level] = matcher
+		acDicts[level] = cleaned
+		log.Printf("[INFO] AC matcher built for level=%s with %d keywords", level, len(cleaned))
+	}
+}
+
+func rebuildRegexps(keywords []string) {
+	cfg := &SecurityConfig{Keywords: keywords}
+	rebuildMatchers(cfg)
 }
 
 func defaultSecurityConfig() SecurityConfig {
@@ -141,7 +202,7 @@ func dbLoadSecurityConfig() SecurityConfig {
 		return cfg
 	}
 
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+	if err := sonic.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		log.Printf("[WARN] dbLoadSecurityConfig: parse error: %v", err)
 		return defaultSecurityConfig()
 	}
@@ -153,18 +214,27 @@ func dbLoadSecurityConfig() SecurityConfig {
 		cfg.BlockMessage = "抱歉，您的内容涉及敏感信息，已被安全策略拦截。"
 	}
 
-	rebuildRegexps(cfg.Keywords)
-	log.Printf("[INFO] dbLoadSecurityConfig: enabled=%v, keywords=%d", cfg.Enabled, len(cfg.Keywords))
+	if (cfg.KeywordByLevel == nil || len(cfg.KeywordByLevel) == 0) && len(cfg.Keywords) > 0 {
+		cfg.KeywordByLevel = map[string][]string{
+			"high": cfg.Keywords,
+		}
+		cfg.KeywordLevels = []string{"high"}
+		log.Printf("[INFO] dbLoadSecurityConfig: migrated %d flat keywords to KeywordByLevel[\"high\"]", len(cfg.Keywords))
+	}
+
+	rebuildMatchers(&cfg)
+	log.Printf("[INFO] dbLoadSecurityConfig: enabled=%v, flat_kw=%d, levels=%v",
+		cfg.Enabled, len(cfg.Keywords), cfg.KeywordLevels)
 	return cfg
 }
 
 func dbSaveSecurityConfig(cfg *SecurityConfig) {
-	configJSON, _ := json.Marshal(cfg)
+	configJSON, _ := sonic.Marshal(cfg)
 	_, err := db.Exec(`INSERT OR REPLACE INTO security_config (id, config_json) VALUES (1, ?)`, string(configJSON))
 	if err != nil {
 		log.Printf("[ERROR] dbSaveSecurityConfig: %v", err)
 	}
-	rebuildRegexps(cfg.Keywords)
+	rebuildMatchers(cfg)
 }
 
 func dbInsertAlert(alert *SecurityAlert) {
@@ -247,7 +317,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 
 		var reqMap map[string]interface{}
 		isStream := false
-		json.Unmarshal(bodyBytes, &reqMap)
+		sonic.Unmarshal(bodyBytes, &reqMap)
 		if reqMap != nil {
 			if s, ok := reqMap["stream"].(bool); ok && s {
 				isStream = true
@@ -358,7 +428,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 					w.Write(bw.Bytes())
 					if bw.statusCode == http.StatusOK && bw.Len() > 0 && (cfg.Output.KeywordEnabled || cfg.Output.SemanticEnabled || cfg.Output.VectorEnabled) {
 						var resp map[string]interface{}
-						if json.Unmarshal(bw.Bytes(), &resp) == nil {
+						if sonic.Unmarshal(bw.Bytes(), &resp) == nil {
 							outputContent := extractContentFromResponse(resp)
 							if outputContent != "" {
 								go p.asyncOutputCheck(outputContent, reqModel, apiKey, clientIP, cfg)
@@ -394,7 +464,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 						return
 					}
 					var resp map[string]interface{}
-					if json.Unmarshal(bw.Bytes(), &resp) == nil {
+					if sonic.Unmarshal(bw.Bytes(), &resp) == nil {
 						outputContent := extractContentFromResponse(resp)
 						if outputContent != "" {
 							blocked := false
@@ -819,7 +889,7 @@ func extractStreamText(data []byte) string {
 			continue
 		}
 		var chunk map[string]interface{}
-		if json.Unmarshal([]byte(payload), &chunk) != nil {
+		if sonic.Unmarshal([]byte(payload), &chunk) != nil {
 			continue
 		}
 		choices, ok := chunk["choices"].([]interface{})
@@ -844,6 +914,24 @@ func extractStreamText(data []byte) string {
 // ==================== Keyword Matching ====================
 
 func checkKeywordsRegex(content string) (bool, string) {
+	acBuildMu.Lock()
+	hasAC := len(acMatchers) > 0
+	matcherMap := acMatchers
+	dictMap := acDicts
+	acBuildMu.Unlock()
+
+	if hasAC {
+		for level, matcher := range matcherMap {
+			dict := dictMap[level]
+			hits := matcher.Match([]byte(content))
+			if len(hits) > 0 {
+				kw := dict[hits[0]]
+				return true, kw
+			}
+		}
+		return false, ""
+	}
+
 	regexpsMu.Lock()
 	regexps := compiledRegexps
 	regexpsMu.Unlock()
@@ -880,7 +968,7 @@ func banAPIKey(fullKey string) bool {
 }
 
 func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*SemanticCheckResult, error) {
-	provider, modelName := p.resolveProvider(cfg.SemanticModel)
+	provider, _ := p.resolveProvider(cfg.SemanticModel)
 	if provider == nil {
 		return nil, fmt.Errorf("no provider for semantic model: %s", cfg.SemanticModel)
 	}
@@ -890,35 +978,32 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 		systemPrompt = defaultSemanticSystemPrompt
 	}
 
-	checkReq := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]interface{}{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": content},
-		},
-		"max_tokens":      200,
-		"temperature":     0.0,
-		"response_format": map[string]interface{}{"type": "json_object"},
+	messages := []map[string]interface{}{
+		{"role": "system", "content": systemPrompt},
+		{"role": "user", "content": content},
 	}
 
-	body, _ := json.Marshal(checkReq)
-	client := &http.Client{Timeout: 15 * time.Second}
-	reqURL := provider.GetBaseURL() + "/v1/chat/completions"
-	httpReq, _ := http.NewRequest("POST", reqURL, bytes.NewReader(body))
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+provider.GetAPIKey())
-
-	resp, err := client.Do(httpReq)
+	statusCode, respBody, err := p.internalChatCompletion(cfg.SemanticModel, messages, 0.0, 200)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
 	var respData map[string]interface{}
-	if json.Unmarshal(respBody, &respData) != nil {
+	if sonic.Unmarshal(respBody, &respData) != nil {
 		return nil, nil
 	}
+
+	provider2, modelName := p.resolveProvider(cfg.SemanticModel)
+	providerName := ""
+	if provider2 != nil {
+		providerName = provider2.GetName()
+	}
+
+	if statusCode < 200 || statusCode >= 300 {
+		log.Printf("[WARN] semanticCheck: non-success status %d", statusCode)
+		return nil, nil
+	}
+
 	choices, ok := respData["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
 		return nil, nil
@@ -959,14 +1044,14 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 	inTok, outTok := extractTokensFromSecurityResp(respData)
 	entry := &RequestLog{
 		Timestamp:       time.Now(),
-		Provider:        provider.GetName(),
+		Provider:        providerName,
 		Model:           modelName,
 		InputTokens:     inTok,
 		OutputTokens:    outTok,
 		Success:         true,
 		ClientIP:        "security",
 		APIKeyUsed:      "security-semantic",
-		StatusCode:      200,
+		StatusCode:      statusCode,
 		Path:            "/security/semantic-check",
 		Method:          "POST",
 		RequestContent:  truncateStr(content, 500),
@@ -992,12 +1077,12 @@ func extractTokensFromSecurityResp(respData map[string]interface{}) (int, int) {
 
 func extractJSON(s string) map[string]interface{} {
 	var result map[string]interface{}
-	if json.Unmarshal([]byte(s), &result) == nil {
+	if sonic.Unmarshal([]byte(s), &result) == nil {
 		return result
 	}
 	re := regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(\\{.*?\\})\\s*```")
 	if matches := re.FindStringSubmatch(s); len(matches) > 1 {
-		if json.Unmarshal([]byte(matches[1]), &result) == nil {
+		if sonic.Unmarshal([]byte(matches[1]), &result) == nil {
 			return result
 		}
 	}
@@ -1005,11 +1090,11 @@ func extractJSON(s string) map[string]interface{} {
 	end := strings.LastIndex(s, "}")
 	if start >= 0 && end > start {
 		candidate := s[start : end+1]
-		if json.Unmarshal([]byte(candidate), &result) == nil {
+		if sonic.Unmarshal([]byte(candidate), &result) == nil {
 			return result
 		}
 		cleaned := regexp.MustCompile(`,\s*([}\]])`).ReplaceAllString(candidate, "$1")
-		if json.Unmarshal([]byte(cleaned), &result) == nil {
+		if sonic.Unmarshal([]byte(cleaned), &result) == nil {
 			return result
 		}
 	}

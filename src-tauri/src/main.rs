@@ -240,6 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             update_analysis_task,
             start_analysis_task,
             stop_analysis_task,
+            list_analysis_task_history,
 
             // 智能体安全命令
             scan_agent_logs,
@@ -247,7 +248,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             create_skills_task,
             list_skills_tasks,
             delete_skills_task,
+            update_skills_task,
             start_skills_task,
+            list_skills_task_history,
             discover_agents,
             deep_check_agent,
 

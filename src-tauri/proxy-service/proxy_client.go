@@ -63,7 +63,10 @@ func testProxyConnectivity(proxyURL string) (bool, string) {
 
 func newHTTPClient(proxyURL string) *http.Client {
 	transport := &http.Transport{
-		IdleConnTimeout: 60 * time.Second,
+		MaxIdleConns:        200,
+		MaxConnsPerHost:     100,
+		IdleConnTimeout:     90 * time.Second,
+		MaxResponseHeaderBytes: 1 << 16,
 	}
 
 	if proxyURL != "" {
@@ -80,8 +83,11 @@ func newHTTPClient(proxyURL string) *http.Client {
 
 func newHTTPSClient(proxyURL string, skipVerify bool) *http.Client {
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify},
-		IdleConnTimeout: 60 * time.Second,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: skipVerify},
+		MaxIdleConns:         200,
+		MaxConnsPerHost:      100,
+		IdleConnTimeout:      90 * time.Second,
+		MaxResponseHeaderBytes: 1 << 16,
 	}
 
 	if proxyURL != "" {
