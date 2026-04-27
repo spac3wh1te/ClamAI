@@ -62,7 +62,7 @@ function UserManagement() {
       invoke("create_user", {
         username: newUser.username,
         password: newUser.password,
-        displayName: newUser.display_name || undefined,
+        display_name: newUser.display_name || undefined,
         role: newUser.role,
       }),
     onSuccess: () => {
@@ -77,7 +77,7 @@ function UserManagement() {
     mutationFn: (u: UserInfo) =>
       invoke("update_user", {
         id: u.id,
-        displayName: u.display_name,
+        display_name: u.display_name,
         role: u.role,
         status: u.status,
       }),

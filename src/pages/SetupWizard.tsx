@@ -93,24 +93,31 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setCompleteError("");
     try {
       if (deployMode === "pc") {
+        console.log("[SetupWizard] PC mode: calling complete_setup_with_config", { proxyPort, protocol, host });
         await invoke("complete_setup_with_config", {
           deployMode: "pc", port: proxyPort, useTls: protocol === "https", host,
           remoteUrl: null, remoteProxyUrl: null,
         });
+        console.log("[SetupWizard] complete_setup_with_config OK, calling setup_admin");
         await invoke("setup_admin", { username, password });
+        console.log("[SetupWizard] setup_admin OK");
       } else {
         const adminUrl = ensureProtocol(remoteAdminUrl);
         const proxyUrl = remoteProxyUrl.trim() ? ensureProtocol(remoteProxyUrl) : null;
+        console.log("[SetupWizard] Server mode: calling complete_setup_with_config", { adminUrl, proxyUrl });
         await invoke("complete_setup_with_config", {
           deployMode: "server", remoteUrl: adminUrl, remoteProxyUrl: proxyUrl,
           port: null, useTls: true, host: "127.0.0.1",
         });
+        console.log("[SetupWizard] complete_setup_with_config OK");
         if (remoteTestResult?.initialized === false) {
+          console.log("[SetupWizard] Remote not initialized, calling init_remote_server");
           await invoke("init_remote_server", { username, password });
         }
       }
+      console.log("[SetupWizard] All setup steps succeeded, calling onComplete -> checkSetup");
       onComplete();
-    } catch (e: any) { setCompleteError(e?.toString() || "配置失败"); }
+    } catch (e: any) { console.error("[SetupWizard] Setup FAILED:", e); setCompleteError(e?.toString() || "配置失败"); }
     finally { setCompleting(false); }
   };
 

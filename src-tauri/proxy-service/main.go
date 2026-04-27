@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/gorilla/mux"
 )
 
@@ -183,6 +186,8 @@ type RequestLog struct {
 	Method          string    `json:"method"`
 	RequestContent  string    `json:"request_content"`
 	ResponseContent string    `json:"response_content"`
+	UserID          string    `json:"user_id"`
+	APIKeyID        string    `json:"api_key_id"`
 }
 
 type LogBuffer struct {
@@ -247,6 +252,7 @@ type APIKeyInfo struct {
 	ID            string            `json:"id"`
 	Key           string            `json:"key,omitempty"`
 	Name          string            `json:"name"`
+	UserID        string            `json:"user_id"`         // 创建者的用户ID，用于数据隔离
 	AllowedModels []string          `json:"allowed_models"` // 空=允许所有模型
 	ProviderKeys  map[string]string `json:"provider_keys"`  // 关联的外部Provider Key，格式: {"siliconflow": "sk_xxx"}
 	CreatedAt     time.Time         `json:"created_at"`
@@ -256,14 +262,30 @@ type APIKeyInfo struct {
 }
 
 var (
-	apiKeys      = make(map[string]*APIKeyInfo)
-	apiKeysByID  = make(map[string]*APIKeyInfo)
-	apiKeysMu    sync.Mutex
-	globalConfig *Config
+	apiKeys              = make(map[string]*APIKeyInfo)
+	apiKeysByID          = make(map[string]*APIKeyInfo)
+	apiKeysMu            sync.Mutex
+	globalConfig         *Config
+	internalAnalysisKey  = generateRandomKey(32)
 )
 
 func getGlobalConfig() *Config {
 	return globalConfig
+}
+
+func generateRandomKey(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (p *ProxyServer) stripInternalHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Analysis") != internalAnalysisKey {
+			r.Header.Del("X-Internal-Analysis")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func saveAPIKeys() {
@@ -682,6 +704,7 @@ func (p *ProxyServer) setupRoutes() {
 	p.router.HandleFunc("/v1/messages", p.handleAnthropicMessages).Methods("POST")
 	p.router.HandleFunc("/v1/messages/count_tokens", p.handleAnthropicCountTokens).Methods("POST")
 
+	p.router.Use(p.stripInternalHeaders)
 	p.router.Use(p.corsMiddleware)
 	p.router.Use(p.apiLoggingMiddleware)
 	p.router.Use(p.rateLimitMiddleware)
@@ -741,6 +764,7 @@ func (p *ProxyServer) setupRoutes() {
 	p.setupUserRoutes(api)
 	p.setupFrontendRoutes()
 
+	p.adminRouter.Use(p.stripInternalHeaders)
 	p.adminRouter.Use(p.corsMiddleware)
 	p.adminRouter.Use(p.apiLoggingMiddleware)
 	p.adminRouter.Use(p.rateLimitMiddleware)
@@ -1040,7 +1064,37 @@ func (p *ProxyServer) handleOpenAICompletions(w http.ResponseWriter, r *http.Req
 }
 
 func (p *ProxyServer) handleOpenAIEmbeddings(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Embeddings endpoint not yet implemented", http.StatusNotImplemented)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	var rawReq map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &rawReq); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	model, _ := rawReq["model"].(string)
+	log.Printf("[DEBUG] handleOpenAIEmbeddings: model=%s", model)
+	provider, modelName := p.resolveProvider(model)
+	if provider == nil {
+		log.Printf("[ERROR] handleOpenAIEmbeddings: Unknown provider for model: %s", model)
+		http.Error(w, "Unknown provider for model: "+model, http.StatusNotFound)
+		return
+	}
+
+	rawReq["model"] = modelName
+	newBody, err := json.Marshal(rawReq)
+	if err != nil {
+		http.Error(w, "Failed to create request body", http.StatusInternalServerError)
+		return
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(newBody))
+	r.ContentLength = int64(len(newBody))
+	provider.ProxyRequest(w, r)
 }
 
 func (p *ProxyServer) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
@@ -1174,16 +1228,23 @@ func (p *ProxyServer) GetProvider(name string) (Provider, bool) {
 
 func (p *ProxyServer) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[DEBUG] handleListAPIKeys called")
+	userID := userIDForQuery(r)
+	isAdmin := false
+	if claims := getUserFromContext(r); claims != nil {
+		isAdmin = claims.Role == "admin"
+	}
 	apiKeysMu.Lock()
 	keys := make([]map[string]interface{}, 0, len(apiKeys))
 	for _, info := range apiKeys {
+		if !isAdmin && userID != "" && info.UserID != userID {
+			continue
+		}
 		entry := map[string]interface{}{
 			"id":             info.ID,
 			"name":           info.Name,
 			"created_at":     info.CreatedAt,
 			"active":         info.Active,
 			"request_count":  info.RequestCount,
-			"key":            info.Key,
 			"key_preview":    maskAPIKey(info.Key),
 			"allowed_models": info.AllowedModels,
 			"provider_keys":  info.ProviderKeys,
@@ -1194,7 +1255,7 @@ func (p *ProxyServer) handleListAPIKeys(w http.ResponseWriter, r *http.Request) 
 		keys = append(keys, entry)
 	}
 	apiKeysMu.Unlock()
-	log.Printf("[DEBUG] handleListAPIKeys: returning %d keys", len(keys))
+	log.Printf("[DEBUG] handleListAPIKeys: returning %d keys (userID=%s, isAdmin=%v)", len(keys), userID, isAdmin)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1220,6 +1281,7 @@ func (p *ProxyServer) handleCreateAPIKey(w http.ResponseWriter, r *http.Request)
 		ID:            id,
 		Key:           key,
 		Name:          req.Name,
+		UserID:        userIDForQuery(r), // 记录创建者用户ID，用于数据隔离
 		AllowedModels: req.AllowedModels,
 		ProviderKeys:  req.ProviderKeys,
 		CreatedAt:     time.Now(),
@@ -1257,12 +1319,23 @@ func (p *ProxyServer) handleUpdateAPIKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	userID := userIDForQuery(r)
+	isAdmin := false
+	if claims := getUserFromContext(r); claims != nil {
+		isAdmin = claims.Role == "admin"
+	}
+
 	apiKeysMu.Lock()
 	defer apiKeysMu.Unlock()
 
 	info, exists := apiKeysByID[id]
 	if !exists {
 		http.Error(w, "API key not found", http.StatusNotFound)
+		return
+	}
+
+	if !isAdmin && userID != "" && info.UserID != userID {
+		http.Error(w, "Forbidden: not your API key", http.StatusForbidden)
 		return
 	}
 
@@ -1283,10 +1356,20 @@ func (p *ProxyServer) handleUpdateAPIKey(w http.ResponseWriter, r *http.Request)
 func (p *ProxyServer) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	userID := userIDForQuery(r)
+	isAdmin := false
+	if claims := getUserFromContext(r); claims != nil {
+		isAdmin = claims.Role == "admin"
+	}
 
 	apiKeysMu.Lock()
+	defer apiKeysMu.Unlock()
 
 	if info, exists := apiKeysByID[id]; exists {
+		if !isAdmin && userID != "" && info.UserID != userID {
+			http.Error(w, "Forbidden: not your API key", http.StatusForbidden)
+			return
+		}
 		delete(apiKeys, info.Key)
 		delete(apiKeysByID, id)
 		apiKeysMu.Unlock()
@@ -1297,6 +1380,10 @@ func (p *ProxyServer) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request)
 	}
 
 	if info, exists := apiKeys[id]; exists {
+		if !isAdmin && userID != "" && info.UserID != userID {
+			http.Error(w, "Forbidden: not your API key", http.StatusForbidden)
+			return
+		}
 		delete(apiKeysByID, info.ID)
 		delete(apiKeys, id)
 		apiKeysMu.Unlock()
@@ -1306,7 +1393,6 @@ func (p *ProxyServer) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	apiKeysMu.Unlock()
 	http.Error(w, "API key not found", http.StatusNotFound)
 }
 
@@ -1315,10 +1401,20 @@ func (p *ProxyServer) handleRevealAPIKey(w http.ResponseWriter, r *http.Request)
 	id := vars["id"]
 	log.Printf("[DEBUG] handleRevealAPIKey called, id=%s", id)
 
+	userID := userIDForQuery(r)
+	isAdmin := false
+	if claims := getUserFromContext(r); claims != nil {
+		isAdmin = claims.Role == "admin"
+	}
+
 	apiKeysMu.Lock()
 	defer apiKeysMu.Unlock()
 
 	if info, exists := apiKeysByID[id]; exists {
+		if !isAdmin && userID != "" && info.UserID != userID {
+			http.Error(w, "Forbidden: not your API key", http.StatusForbidden)
+			return
+		}
 		log.Printf("[DEBUG] handleRevealAPIKey: found key, id=%s, key=%s...", id, info.Key[:min(8, len(info.Key))])
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1703,7 +1799,7 @@ func (p *ProxyServer) internalChatCompletion(model string, messages []map[string
 	log.Printf("[INTERNAL] calling url=%s model=%s bodyLen=%d", url, model, len(body))
 	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Internal-Analysis", "true")
+	httpReq.Header.Set("X-Internal-Analysis", internalAnalysisKey)
 
 	resp, err := p.internalClient.Do(httpReq)
 	if err != nil {
@@ -1820,6 +1916,12 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"user_profile","model":"%s"}`, modelName), 10000),
 		ResponseContent: truncateStr(string(respBody), 10000),
 	}
+	claims := getUserFromContext(r)
+	if claims != nil {
+		entry.UserID = claims.UserID
+	} else {
+		entry.UserID = userIDForQuery(r)
+	}
 	p.logBuffer.Add(entry)
 	dbInsertLog(entry)
 
@@ -1852,7 +1954,7 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 								}
 							}
 
-							dbInsertProfileAnalysis(apiKeyID, timeRange, riskLevel, summary, contentStr, modelName, total)
+							dbInsertProfileAnalysis(apiKeyID, timeRange, riskLevel, summary, contentStr, modelName, total, userIDForQuery(r))
 						}
 					}
 				}
@@ -1941,7 +2043,7 @@ func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Reque
 						if len(sourceInfo) > 200 {
 							sourceInfo = sourceInfo[:200] + "..."
 						}
-						dbInsertSkillsDetection(sourceType, sourceInfo, contentStr, riskLevel, modelName, apiKeyID)
+						dbInsertSkillsDetection(sourceType, sourceInfo, contentStr, riskLevel, modelName, apiKeyID, userIDForQuery(r))
 					}
 				}
 			}
@@ -1969,12 +2071,18 @@ func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Reque
 		LatencyMs:       time.Since(start).Milliseconds(),
 		Success:         statusCode >= 200 && statusCode < 300,
 		ClientIP:        getClientIP(r),
-		APIKeyUsed:      "analysis",
+		APIKeyUsed:      "skills_detection",
 		StatusCode:      statusCode,
 		Path:            "/analysis/v1/chat/completions",
 		Method:          "POST",
 		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"skills_detection","model":"%s"}`, modelName), 10000),
 		ResponseContent: truncateStr(string(respBody), 10000),
+	}
+	claims := getUserFromContext(r)
+	if claims != nil {
+		entry.UserID = claims.UserID
+	} else {
+		entry.UserID = userIDForQuery(r)
 	}
 	p.logBuffer.Add(entry)
 	dbInsertLog(entry)
@@ -2008,10 +2116,15 @@ func (p *ProxyServer) handleContentCheck(w http.ResponseWriter, r *http.Request)
 	var confidence float64
 
 	if cfg.Enabled && cfg.Input.Enabled && cfg.Input.KeywordEnabled {
-		matched, kw := checkKeywordsRegex(req.Content)
+		matched, cat, level, kw := checkKeywords(req.Content)
 		if matched {
 			blocked = true
 			keywordsFound = append(keywordsFound, kw)
+			catLabel := keywordCategoryLabels[cat]
+			if catLabel == "" {
+				catLabel = cat
+			}
+			categoriesFound = append(categoriesFound, fmt.Sprintf("%s/%s", catLabel, level))
 			blockMessage = cfg.BlockMessage
 		}
 	}
@@ -2066,8 +2179,12 @@ func (p *ProxyServer) handleStatsLogs(w http.ResponseWriter, r *http.Request) {
 			limit = l
 		}
 	}
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = userIDForQuery(r)
+	}
 
-	logs, totalCount := dbGetRecentLogs(limit)
+	logs, totalCount := dbGetRecentLogs(limit, userID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2089,7 +2206,7 @@ func (p *ProxyServer) handleSkillsHistory(w http.ResponseWriter, r *http.Request
 		offset = o
 	}
 
-	records, total := dbGetSkillsDetectionHistory(limit, offset)
+	records, total := dbGetSkillsDetectionHistory(limit, offset, userIDForQuery(r))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"records": records,
@@ -2109,7 +2226,7 @@ func (p *ProxyServer) handleProfileAnalysisHistory(w http.ResponseWriter, r *htt
 		offset = o
 	}
 
-	records, total := dbGetProfileAnalysisHistory(limit, offset)
+	records, total := dbGetProfileAnalysisHistory(limit, offset, userIDForQuery(r))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"records": records,
@@ -2153,7 +2270,7 @@ func (p *ProxyServer) handleCreateAnalysisTask(w http.ResponseWriter, r *http.Re
 
 	id := fmt.Sprintf("task_%d", time.Now().UnixNano())
 	taskNo := nextTaskNo()
-	if err := dbCreateAnalysisTask(id, taskNo, req.Name, req.APIKeyID, req.Model, req.TimeRange, req.ScheduleType, req.IntervalMinutes); err != nil {
+	if err := dbCreateAnalysisTask(id, taskNo, req.Name, req.APIKeyID, req.Model, req.TimeRange, req.ScheduleType, req.IntervalMinutes, userIDForQuery(r)); err != nil {
 		http.Error(w, "Failed to create task: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2163,7 +2280,7 @@ func (p *ProxyServer) handleCreateAnalysisTask(w http.ResponseWriter, r *http.Re
 }
 
 func (p *ProxyServer) handleListAnalysisTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := dbGetAnalysisTasks()
+	tasks, err := dbGetAnalysisTasks(userIDForQuery(r))
 	if err != nil {
 		http.Error(w, "Failed to list tasks: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -2178,7 +2295,7 @@ func (p *ProxyServer) handleListAnalysisTasks(w http.ResponseWriter, r *http.Req
 func (p *ProxyServer) handleDeleteAnalysisTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
-	if err := dbDeleteAnalysisTask(id); err != nil {
+	if err := dbDeleteAnalysisTask(id, userIDForQuery(r)); err != nil {
 		http.Error(w, "Failed to delete task: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2189,6 +2306,9 @@ func (p *ProxyServer) handleDeleteAnalysisTask(w http.ResponseWriter, r *http.Re
 func (p *ProxyServer) handleUpdateAnalysisTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	if !requireTaskOwnership(w, r, id, "analysis_tasks") {
+		return
+	}
 	var req struct {
 		Name            string `json:"name"`
 		APIKeyID        string `json:"api_key_id"`
@@ -2226,7 +2346,7 @@ func (p *ProxyServer) handleCreateSkillsTask(w http.ResponseWriter, r *http.Requ
 	}
 	id := fmt.Sprintf("stask_%d", time.Now().UnixNano())
 	taskNo := nextSkillsTaskNo()
-	if err := dbCreateSkillsTask(id, taskNo, req.Name, req.Model, req.SourceType, req.SourceInfo, "once"); err != nil {
+	if err := dbCreateSkillsTask(id, taskNo, req.Name, req.Model, req.SourceType, req.SourceInfo, "once", userIDForQuery(r)); err != nil {
 		http.Error(w, "Failed to create task: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2235,7 +2355,7 @@ func (p *ProxyServer) handleCreateSkillsTask(w http.ResponseWriter, r *http.Requ
 }
 
 func (p *ProxyServer) handleListSkillsTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := dbGetSkillsTasks()
+	tasks, err := dbGetSkillsTasks(userIDForQuery(r))
 	if err != nil {
 		http.Error(w, "Failed to list tasks: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -2250,7 +2370,7 @@ func (p *ProxyServer) handleListSkillsTasks(w http.ResponseWriter, r *http.Reque
 func (p *ProxyServer) handleDeleteSkillsTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
-	if err := dbDeleteSkillsTask(id); err != nil {
+	if err := dbDeleteSkillsTask(id, userIDForQuery(r)); err != nil {
 		http.Error(w, "Failed to delete task: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2261,6 +2381,9 @@ func (p *ProxyServer) handleDeleteSkillsTask(w http.ResponseWriter, r *http.Requ
 func (p *ProxyServer) handleUpdateSkillsTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	if !requireTaskOwnership(w, r, id, "skills_tasks") {
+		return
+	}
 	var req struct {
 		Name       string `json:"name"`
 		Model      string `json:"model"`
@@ -2282,6 +2405,9 @@ func (p *ProxyServer) handleUpdateSkillsTask(w http.ResponseWriter, r *http.Requ
 func (p *ProxyServer) handleSkillsTaskHistory(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	if !requireTaskOwnership(w, r, id, "skills_tasks") {
+		return
+	}
 	history, err := dbGetSkillsTaskHistory(id)
 	if err != nil {
 		http.Error(w, "Failed to get history: "+err.Error(), http.StatusInternalServerError)
@@ -2297,7 +2423,7 @@ func (p *ProxyServer) handleSkillsTaskHistory(w http.ResponseWriter, r *http.Req
 func (p *ProxyServer) handleStartSkillsTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
-	tasks, _ := dbGetSkillsTasks()
+	tasks, _ := dbGetSkillsTasks(userIDForQuery(r))
 	var task map[string]interface{}
 	for _, t := range tasks {
 		if t["id"] == id {
@@ -2336,17 +2462,43 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 	case "text":
 		content = sourceInfo
 	case "url":
-		resp, err := http.Get(sourceInfo)
+		parsedURL, err := url.Parse(sourceInfo)
+		if err != nil {
+			dbUpdateSkillsTaskResult(taskID, "error", "无效的URL", "", "")
+			return
+		}
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			dbUpdateSkillsTaskResult(taskID, "error", "仅支持http/https协议", "", "")
+			return
+		}
+		if ip := net.ParseIP(parsedURL.Hostname()); ip != nil {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+				dbUpdateSkillsTaskResult(taskID, "error", "不允许访问内网/本地地址", "", "")
+				return
+			}
+		}
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Get(sourceInfo)
 		if err != nil {
 			log.Printf("[SKILLS] ERROR id=%s fetch URL failed: %v", taskID, err)
 			dbUpdateSkillsTaskResult(taskID, "error", "获取URL失败: "+err.Error(), "", "")
 			return
 		}
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
 		content = string(body)
 	case "file":
-		data, err := os.ReadFile(sourceInfo)
+		absPath, err := filepath.Abs(sourceInfo)
+		if err != nil {
+			dbUpdateSkillsTaskResult(taskID, "error", "无效的文件路径", "", "")
+			return
+		}
+		dataDir := getDataDir()
+		if !strings.HasPrefix(absPath, dataDir) {
+			dbUpdateSkillsTaskResult(taskID, "error", "仅允许读取应用数据目录下的文件", "", "")
+			return
+		}
+		data, err := os.ReadFile(absPath)
 		if err != nil {
 			log.Printf("[SKILLS] ERROR id=%s read file failed: %v", taskID, err)
 			dbUpdateSkillsTaskResult(taskID, "error", "读取文件失败: "+err.Error(), "", "")
@@ -2446,13 +2598,46 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 	durationMs := time.Since(taskStart).Milliseconds()
 	dbUpdateSkillsTaskResult(taskID, riskLevel, summary, detail, dimensions)
 	dbInsertSkillsTaskHistory(taskID, riskLevel, summary, detail, dimensions, riskLevel, durationMs)
+
+	createdBy, _ := task["created_by"].(string)
+	inputTokens, outputTokens := extractTokensFromBody(respBody)
+	provider, resolvedName := p.resolveProvider(model)
+	providerName := ""
+	if provider != nil {
+		providerName = provider.GetName()
+	} else {
+		providerName = model
+		if idx := strings.Index(providerName, ":"); idx > 0 {
+			providerName = providerName[:idx]
+		}
+	}
+	logEntry := &RequestLog{
+		Timestamp:     time.Now(),
+		Provider:     providerName,
+		Model:        resolvedName,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		LatencyMs:    time.Since(taskStart).Milliseconds(),
+		Success:      statusCode >= 200 && statusCode < 300,
+		ClientIP:     "internal",
+		APIKeyUsed:   "analysis",
+		StatusCode:   statusCode,
+		Path:         "/analysis/v1/chat/completions",
+		Method:       "POST",
+		RequestContent: truncateStr(fmt.Sprintf(`{"analysis_type":"skills_detection_task","model":"%s"}`, model), 10000),
+		ResponseContent: truncateStr(string(respBody), 10000),
+		UserID:    createdBy,
+		APIKeyID:  "",
+	}
+	p.logBuffer.Add(logEntry)
+	dbInsertLog(logEntry)
 }
 
 func (p *ProxyServer) handleStartAnalysisTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	tasks, _ := dbGetAnalysisTasks()
+	tasks, _ := dbGetAnalysisTasks(userIDForQuery(r))
 	var task map[string]interface{}
 	for _, t := range tasks {
 		if t["id"] == id {
@@ -2478,6 +2663,9 @@ func (p *ProxyServer) handleStartAnalysisTask(w http.ResponseWriter, r *http.Req
 func (p *ProxyServer) handleStopAnalysisTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	if !requireTaskOwnership(w, r, id, "analysis_tasks") {
+		return
+	}
 	dbUpdateAnalysisTaskStatus(id, "idle")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": "idle"})
@@ -2486,6 +2674,9 @@ func (p *ProxyServer) handleStopAnalysisTask(w http.ResponseWriter, r *http.Requ
 func (p *ProxyServer) handleAnalysisTaskHistory(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	if !requireTaskOwnership(w, r, id, "analysis_tasks") {
+		return
+	}
 	history, err := dbGetAnalysisTaskHistory(id)
 	if err != nil {
 		http.Error(w, "Failed to get history: "+err.Error(), http.StatusInternalServerError)
@@ -2510,7 +2701,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 	if !exists {
 		log.Printf("[ANALYSIS] ERROR id=%s API Key not found: %s", taskID, apiKeyID)
 		dbUpdateAnalysisTaskResult(taskID, "error", "API Key not found", "", "", 0)
-		tasks, _ := dbGetAnalysisTasks()
+		tasks, _ := dbGetAnalysisTasks("")
 		for _, t := range tasks {
 			if t["id"] == taskID && t["schedule_type"] == "once" {
 				dbUpdateAnalysisTaskStatus(taskID, "idle")
@@ -2550,7 +2741,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 	if err != nil {
 		log.Printf("[ANALYSIS] ERROR id=%s internalChatCompletion failed: %v", taskID, err)
 		dbUpdateAnalysisTaskResult(taskID, "error", "Analysis failed: "+err.Error(), "", "", 0)
-		tasks, _ := dbGetAnalysisTasks()
+		tasks, _ := dbGetAnalysisTasks("")
 		for _, t := range tasks {
 			if t["id"] == taskID && t["schedule_type"] == "once" {
 				dbUpdateAnalysisTaskStatus(taskID, "idle")
@@ -2622,18 +2813,19 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 		LatencyMs:       0,
 		Success:         statusCode >= 200 && statusCode < 300,
 		ClientIP:        "internal",
-		APIKeyUsed:      "analysis-task",
+		APIKeyUsed:      "behavior_analysis",
 		StatusCode:      statusCode,
 		Path:            "/analysis/v1/chat/completions",
 		Method:          "POST",
 		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"user_profile_task","task_id":"%s","model":"%s"}`, taskID, modelForGateway), 10000),
 		ResponseContent: truncateStr(string(respBody), 10000),
 	}
+	logEntry.UserID, _ = task["created_by"].(string)
 	p.logBuffer.Add(logEntry)
 	dbInsertLog(logEntry)
 	_ = taskName
 
-	tasks, _ := dbGetAnalysisTasks()
+	tasks, _ := dbGetAnalysisTasks("")
 	for _, t := range tasks {
 		if t["id"] == taskID && t["schedule_type"] == "once" {
 			dbUpdateAnalysisTaskStatus(taskID, "idle")
@@ -2669,7 +2861,24 @@ func (p *ProxyServer) handleAgentLogScan(w http.ResponseWriter, r *http.Request)
 	homeDir, _ := os.UserHomeDir()
 	scanPaths := []string{}
 	if req.Path != "" {
-		scanPaths = []string{req.Path}
+		absPath, err := filepath.Abs(req.Path)
+		if err != nil {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+		allowedDirs := []string{homeDir, getDataDir()}
+		allowed := false
+		for _, d := range allowedDirs {
+			if strings.HasPrefix(absPath, d) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			http.Error(w, "Path not allowed, must be under home or data directory", http.StatusForbidden)
+			return
+		}
+		scanPaths = []string{absPath}
 	} else {
 		scanPaths = []string{
 			filepath.Join(homeDir, ".claude"),
@@ -3002,7 +3211,14 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 	}
 	agentDir, ok := agentDirs[strings.ToLower(req.AgentName)]
 	if !ok {
-		agentDir = req.AgentName
+		http.Error(w, "Unknown agent. Supported: "+strings.Join(func() []string {
+			var names []string
+			for k := range agentDirs {
+				names = append(names, k)
+			}
+			return names
+		}(), ", "), http.StatusBadRequest)
+		return
 	}
 
 	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
@@ -3792,10 +4008,13 @@ func (p *ProxyServer) apiLoggingMiddleware(next http.Handler) http.Handler {
 		}
 
 		log.Printf("[API] --> %s %s from %s", r.Method, path, getClientIP(r))
-		if len(bodyBytes) > 0 {
-			log.Printf("[API] --> Request Body: %s", string(bodyBytes))
+		if len(bodyBytes) > 0 && len(bodyBytes) <= 4096 {
+			sanitized := sanitizeLogBody(bodyBytes)
+			log.Printf("[API] --> Request Body: %s", sanitized)
+		} else if len(bodyBytes) > 4096 {
+			log.Printf("[API] --> Request Body: [%d bytes, too large to log]", len(bodyBytes))
 		}
-		log.Printf("[API] --> Headers: %v", r.Header)
+		log.Printf("[API] --> Headers: %v", sanitizeLogHeaders(r.Header))
 
 		cw := &capturingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(cw, r)
@@ -3978,6 +4197,17 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 			respContent = respContent[:10000]
 		}
 		entry.ResponseContent = respContent
+		uid := userIDForQuery(r)
+		if uid == "" {
+			// Look up the API key's UserID for proper data isolation
+			apiKeysMu.Lock()
+			if info, exists := apiKeys[apiKeyUsed]; exists {
+				uid = info.UserID
+			}
+			apiKeysMu.Unlock()
+		}
+		entry.UserID = uid
+		entry.APIKeyID = apiKeyUsed
 		p.logBuffer.Add(entry)
 		dbInsertLog(entry)
 
@@ -4222,4 +4452,45 @@ func generateAPIKey() string {
 	b := make([]byte, 24)
 	rand.Read(b)
 	return fmt.Sprintf("sk-%x", b)
+}
+
+var sensitiveLogKeys = map[string]bool{
+	"password": true, "secret": true, "token": true, "api_key": true,
+	"apikey": true, "key": true, "authorization": true, "cookie": true,
+	"refresh_token": true, "access_token": true, "password_hash": true,
+}
+
+func sanitizeLogBody(body []byte) string {
+	var m map[string]interface{}
+	if sonic.Unmarshal(body, &m) != nil {
+		return "[binary data]"
+	}
+	return string(sanitizeJSONMap(m))
+}
+
+func sanitizeJSONMap(m map[string]interface{}) []byte {
+	sanitized := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		if sensitiveLogKeys[strings.ToLower(k)] {
+			sanitized[k] = "***"
+		} else if sub, ok := v.(map[string]interface{}); ok {
+			sanitized[k] = json.RawMessage(sanitizeJSONMap(sub))
+		} else {
+			sanitized[k] = v
+		}
+	}
+	b, _ := sonic.Marshal(sanitized)
+	return b
+}
+
+func sanitizeLogHeaders(h http.Header) http.Header {
+	sanitized := make(http.Header)
+	for k, vv := range h {
+		if sensitiveLogKeys[strings.ToLower(k)] {
+			sanitized[k] = []string{"***"}
+		} else {
+			sanitized[k] = vv
+		}
+	}
+	return sanitized
 }

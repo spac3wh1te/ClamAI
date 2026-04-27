@@ -21,6 +21,7 @@ import { useAuth } from "../context/AuthContext";
 import { useApp } from "../context/AppContext";
 import { useSetup } from "../context/SetupContext";
 import { User, Lock } from "lucide-react";
+import { logInfo, logError } from "../utils/log";
 
 interface AppConfig {
   gateway: {
@@ -122,8 +123,10 @@ export default function Settings() {
   }, [currentConfig]);
 
   const saveMutation = useMutation({
-    mutationFn: (newConfig: AppConfig) =>
-      invoke("save_config", { config: newConfig }),
+    mutationFn: (newConfig: AppConfig) => {
+      logInfo("Settings", "save_config");
+      return invoke("save_config", { config: newConfig });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["config"] });
       setHasChanges(false);
@@ -131,10 +134,14 @@ export default function Settings() {
       if (config?.ui.language) setLocale(config.ui.language as any);
       if (config?.ui.timezone) setTimezone(config.ui.timezone);
     },
+    onError: (error) => { logError("Settings", "save_config failed", error); },
   });
 
   const resetMutation = useMutation({
-    mutationFn: () => invoke("reset_config"),
+    mutationFn: () => {
+      logInfo("Settings", "reset_config");
+      return invoke("reset_config");
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["config"] });
       setHasChanges(false);
@@ -142,6 +149,7 @@ export default function Settings() {
       setLocale("zh-CN");
       setTimezone("Asia/Shanghai");
     },
+    onError: (error) => { logError("Settings", "reset_config failed", error); },
   });
 
   const updateConfig = (section: keyof AppConfig, key: string, value: any) => {

@@ -16,11 +16,13 @@ import {
   Settings,
 } from "lucide-react";
 import { useApiKeySecrets } from "../context/ApiKeySecretsContext";
+import { logInfo, logError } from "../utils/log";
 
 interface ApiKey {
   id: string;
   name: string;
-  key: string;
+  key?: string;
+  key_preview?: string;
   created_at: string;
   active: boolean;
   request_count: number;
@@ -189,7 +191,10 @@ export default function ApiKeys() {
     }: {
       name: string;
       allowedModels: string[];
-    }) => invoke("create_api_key", { name, allowedModels }),
+    }) => {
+      logInfo("ApiKeys", "create_api_key", { name, allowedModels });
+      return invoke("create_api_key", { name, allowedModels });
+    },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["api-keys"] });
       setCreatedKey(data.key);
@@ -199,6 +204,7 @@ export default function ApiKeys() {
       setShowCreate(false);
     },
     onError: (err: any) => {
+      logError("ApiKeys", "create_api_key failed", err);
       alert("创建密钥失败: " + String(err));
     },
   });
@@ -210,27 +216,36 @@ export default function ApiKeys() {
     }: {
       id: string;
       allowedModels: string[];
-    }) => invoke("update_api_key", { id, allowedModels }),
+    }) => {
+      logInfo("ApiKeys", "update_api_key", { id, allowedModels });
+      return invoke("update_api_key", { id, allowedModels });
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["api-keys"] });
       setEditingKeyId(null);
       setEditingAllowedModels([]);
     },
     onError: (err: any) => {
+      logError("ApiKeys", "update_api_key failed", err);
       alert("更新密钥失败: " + String(err));
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => invoke("delete_api_key", { id }),
+    mutationFn: (id: string) => {
+      logInfo("ApiKeys", "delete_api_key", { id });
+      return invoke("delete_api_key", { id });
+    },
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ["api-keys"] });
       clearSecret(id);
     },
+    onError: (error) => { logError("ApiKeys", "delete_api_key failed", error); },
   });
 
   const testMutation = useMutation({
     mutationFn: async () => {
+      logInfo("ApiKeys", "test_chat_request", { testMode, testProviderId, testModel });
       if (testMode === "direct") {
         const provider = providers?.find((p) => p.id === testProviderId);
         if (!provider) throw new Error("请选择提供商");
@@ -290,6 +305,7 @@ export default function ApiKeys() {
       setTestResult(formatTestResult(data));
     },
     onError: (err: any) => {
+      logError("ApiKeys", "test_chat_request failed", err);
       setTestResult({ success: false, message: String(err) });
     },
   });
@@ -322,7 +338,8 @@ export default function ApiKeys() {
     }
   };
 
-  const maskKey = (key: string) => {
+  const maskKey = (key: string | undefined) => {
+    if (!key) return "****";
     if (key.length <= 8) return "****";
     return key.slice(0, 4) + "..." + key.slice(-4);
   };
@@ -686,7 +703,7 @@ export default function ApiKeys() {
                     <code className="text-xs font-mono bg-background px-2 py-1 rounded">
                       {revealedKeys.has(key.id) && apiKeySecrets[key.id]
                         ? apiKeySecrets[key.id]
-                        : maskKey(key.key)}
+                        : maskKey(key.key || key.key_preview)}
                     </code>
                     <button
                       onClick={() => toggleReveal(key.id)}
@@ -701,7 +718,7 @@ export default function ApiKeys() {
                     {revealedKeys.has(key.id) && (
                       <button
                         onClick={() =>
-                          copyToClipboard(apiKeySecrets[key.id] || key.key)
+                          copyToClipboard(apiKeySecrets[key.id] || key.key || key.key_preview || "")
                         }
                         className="p-1 hover:bg-secondary rounded"
                       >

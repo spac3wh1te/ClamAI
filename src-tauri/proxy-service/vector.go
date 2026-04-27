@@ -190,7 +190,7 @@ func (s *SQLiteVecDB) Search(queryVec []float32, topK int, threshold float64) ([
 		return nil, nil
 	}
 
-	rows, err := db.Query("SELECT id, content, category, embedding FROM vector_samples WHERE embedding IS NOT NULL")
+	rows, err := db.Query("SELECT id, content, category, embedding FROM vector_samples WHERE embedding IS NOT NULL LIMIT 10000")
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +335,7 @@ func getEmbeddingFromAPI(content string) ([]float32, error) {
 	url := fmt.Sprintf("%s://%s/v1/embeddings", scheme, p.proxyAddr)
 	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Internal-Analysis", "true")
+	httpReq.Header.Set("X-Internal-Analysis", internalAnalysisKey)
 
 	resp, err := client.Do(httpReq)
 	if err != nil {

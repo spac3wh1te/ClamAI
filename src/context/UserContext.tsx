@@ -12,12 +12,14 @@ interface UserContextType {
   currentUser: CurrentUser | null;
   isAdmin: boolean;
   loading: boolean;
+  authMode: "none" | "token" | "unknown";
 }
 
 const UserContext = createContext<UserContextType>({
   currentUser: null,
-  isAdmin: false,
+  isAdmin: true,
   loading: true,
+  authMode: "unknown",
 });
 
 function decodeJwtPayload(token: string): Record<string, any> | null {
@@ -59,12 +61,16 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setLoading(false);
   }, [isAuthenticated, token]);
 
+  const authMode = isAuthenticated && token ? "token" : "none";
+  const isAdmin = authMode === "none" ? false : currentUser?.role === "admin";
+
   return (
     <UserContext.Provider
       value={{
         currentUser,
-        isAdmin: currentUser?.role === "admin",
+        isAdmin,
         loading,
+        authMode,
       }}
     >
       {children}

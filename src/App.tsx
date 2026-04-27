@@ -1,4 +1,4 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Component, type ReactNode, useCallback, useEffect } from "react";
 
@@ -20,7 +20,7 @@ import StatusBar from "./components/StatusBar";
 import ConnectBanner from "./components/ConnectBanner";
 import { ApiKeySecretsProvider } from "./context/ApiKeySecretsContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
-import { UserProvider } from "./context/UserContext";
+import { UserProvider, useCurrentUser } from "./context/UserContext";
 import { AppProvider } from "./context/AppContext";
 import { SetupProvider, useSetup } from "./context/SetupContext";
 
@@ -34,6 +34,12 @@ const queryClient = new QueryClient({
   },
 });
 
+function AdminRoute({ children }: { children: ReactNode }) {
+  const { isAdmin } = useCurrentUser();
+  if (!isAdmin) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 const mainRoutes = (
   <Routes>
     <Route path="/" element={<Dashboard />} />
@@ -42,10 +48,10 @@ const mainRoutes = (
     <Route path="/api-keys" element={<ApiKeys />} />
     <Route path="/settings" element={<Settings />} />
     <Route path="/logs" element={<Logs />} />
-    <Route path="/security" element={<Security />} />
-    <Route path="/security-square" element={<SecuritySquare />} />
-    <Route path="/rate-limit" element={<RateLimit />} />
-    <Route path="/users" element={<UserManagement />} />
+    <Route path="/security" element={<AdminRoute><Security /></AdminRoute>} />
+    <Route path="/security-square" element={<AdminRoute><SecuritySquare /></AdminRoute>} />
+    <Route path="/rate-limit" element={<AdminRoute><RateLimit /></AdminRoute>} />
+    <Route path="/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
   </Routes>
 );
 
@@ -123,8 +129,15 @@ function AuthExpiredGuard({ children }: { children: ReactNode }) {
 }
 
 function AppContent() {
-  const { isAuthenticated, isInitialized, initialized } = useAuth();
+  const { isAuthenticated, isInitialized, initialized, refreshAuth } = useAuth();
   const { setupComplete, setupChecked, connected, checkSetup } = useSetup();
+
+  console.log("[AppContent] render:", { setupComplete, setupChecked, connected, isAuthenticated, isInitialized, initialized });
+
+  const handleSetupComplete = async () => {
+    await checkSetup();
+    await refreshAuth();
+  };
 
   if (!isInitialized || !setupChecked) {
     return (
@@ -135,7 +148,7 @@ function AppContent() {
   }
 
   if (!setupComplete) {
-    return <SetupWizard onComplete={checkSetup} />;
+    return <SetupWizard onComplete={handleSetupComplete} />;
   }
 
   if (isAuthenticated) {
@@ -152,6 +165,22 @@ function AppContent() {
 
   if (connected && (!initialized || !isAuthenticated)) {
     return <Login />;
+  }
+
+  if (!connected && !isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-muted-foreground mb-4">服务未连接</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-primary text-primary-foreground rounded-lg"
+          >
+            重新加载
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

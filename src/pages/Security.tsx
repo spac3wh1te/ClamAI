@@ -18,6 +18,7 @@ interface DirectionConfig {
   enabled: boolean;
   mode: "block" | "detect";
   keyword_enabled: boolean;
+  keyword_categories: string[];
   semantic_enabled: boolean;
   vector_enabled: boolean;
 }
@@ -27,12 +28,30 @@ interface SecurityConfig {
   input: DirectionConfig;
   output: DirectionConfig;
   keywords: string[];
+  keyword_by_level: Record<string, string[]>;
+  keyword_by_category: Record<string, Record<string, string[]>>;
+  keyword_levels: string[];
   block_message: string;
   semantic_model: string;
   semantic_threshold: number;
   semantic_prompt: string;
   auto_ban_key: boolean;
 }
+
+const CATEGORIES = [
+  { id: "pornography", label: "涉黄", color: "text-pink-400", bg: "bg-pink-500/10", border: "border-pink-500/30" },
+  { id: "violence", label: "涉暴", color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30" },
+  { id: "politics", label: "涉政", color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30" },
+  { id: "terrorism", label: "涉恐", color: "text-amber-500", bg: "bg-amber-500/10", border: "border-amber-500/30" },
+  { id: "sensitive_data", label: "敏感数据", color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/30" },
+] as const;
+
+const LEVELS = [
+  { id: "critical", label: "严重", color: "text-red-400" },
+  { id: "high", label: "高危", color: "text-orange-400" },
+  { id: "medium", label: "中危", color: "text-yellow-400" },
+  { id: "low", label: "低危", color: "text-green-400" },
+] as const;
 
 interface Alert {
   id: number;
@@ -55,6 +74,7 @@ const defaultConfig: SecurityConfig = {
     enabled: true,
     mode: "block",
     keyword_enabled: true,
+    keyword_categories: ["pornography", "violence", "politics", "terrorism", "sensitive_data"],
     semantic_enabled: false,
     vector_enabled: false,
   },
@@ -62,10 +82,20 @@ const defaultConfig: SecurityConfig = {
     enabled: true,
     mode: "block",
     keyword_enabled: true,
+    keyword_categories: ["pornography", "violence", "politics", "terrorism", "sensitive_data"],
     semantic_enabled: false,
     vector_enabled: false,
   },
   keywords: [],
+  keyword_by_level: {},
+  keyword_by_category: {
+    pornography: { critical: [], high: [], medium: [], low: [] },
+    violence: { critical: [], high: [], medium: [], low: [] },
+    politics: { critical: [], high: [], medium: [], low: [] },
+    terrorism: { critical: [], high: [], medium: [], low: [] },
+    sensitive_data: { critical: [], high: [], medium: [], low: [] },
+  },
+  keyword_levels: ["critical", "high", "medium", "low"],
   block_message: "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
   semantic_model: "",
   semantic_threshold: 0.8,
@@ -76,22 +106,24 @@ const defaultConfig: SecurityConfig = {
 export default function Security() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<"config" | "alerts" | "vector">("config");
-  const [newKeyword, setNewKeyword] = useState("");
   const [draft, setDraft] = useState<SecurityConfig | null>(null);
   const [saved, setSaved] = useState(false);
+  const [kwTab, setKwTab] = useState<string>("pornography");
   const [newSample, setNewSample] = useState({
     content: "",
     category: "general",
   });
   const [newSampleSource, setNewSampleSource] = useState("manual");
 
-  const { data: remoteConfig, isLoading } = useQuery({
+  const { data: remoteConfig, isLoading, isError, error } = useQuery({
     queryKey: ["security-config"],
     queryFn: async () => {
       const raw = await invoke<string>("get_security_config");
       return JSON.parse(raw) as SecurityConfig;
     },
     staleTime: 0,
+    retry: 1,
+    retryDelay: 1000,
   });
 
   const { data: proxyModels } = useQuery({
@@ -140,8 +172,15 @@ export default function Security() {
   });
 
   if (isLoading) return <div className="p-6">加载安全配置中...</div>;
+  if (isError) return <div className="p-6 text-red-500">加载安全配置失败: {String(error)}</div>;
 
   const cfg = draft || remoteConfig || defaultConfig;
+
+  const getKCat = () => {
+    if (!cfg.keyword_by_category) return {};
+    return cfg.keyword_by_category[kwTab] || {};
+  };
+
   const updateDraft = (patch: Partial<SecurityConfig>) => {
     setSaved(false);
     setDraft({ ...cfg, ...patch });
@@ -153,13 +192,36 @@ export default function Security() {
     updateDraft({ output: { ...cfg.output, ...patch } });
   };
 
-  const addKeyword = () => {
-    if (!newKeyword.trim()) return;
-    updateDraft({ keywords: [...cfg.keywords, newKeyword.trim()] });
-    setNewKeyword("");
+  const toggleCategory = (cat: string, direction: "input" | "output") => {
+    const current = direction === "input" ? cfg.input.keyword_categories : cfg.output.keyword_categories;
+    const next = current.includes(cat) ? current.filter((c) => c !== cat) : [...current, cat];
+    if (direction === "input") {
+      updateInput({ keyword_categories: next });
+    } else {
+      updateOutput({ keyword_categories: next });
+    }
   };
-  const removeKeyword = (kw: string) => {
-    updateDraft({ keywords: cfg.keywords.filter((k) => k !== kw) });
+
+  const addKeywordToCat = (level: string, kw: string) => {
+    if (!kw.trim()) return;
+    const kcat = { ...getKCat() };
+    const existing = kcat[level] || [];
+    if (existing.includes(kw.trim())) return;
+    kcat[level] = [...existing, kw.trim()];
+    const newKBC = { ...cfg.keyword_by_category, [kwTab]: kcat };
+    updateDraft({ keyword_by_category: newKBC });
+  };
+
+  const removeKeywordFromCat = (level: string, kw: string) => {
+    const kcat = { ...getKCat() };
+    kcat[level] = (kcat[level] || []).filter((k: string) => k !== kw);
+    const newKBC = { ...cfg.keyword_by_category, [kwTab]: kcat };
+    updateDraft({ keyword_by_category: newKBC });
+  };
+
+  const getCatKwCount = (cat: string) => {
+    const catMap = cfg.keyword_by_category?.[cat] || {};
+    return Object.values(catMap).reduce((s: number, v: any) => s + (v?.length || 0), 0);
   };
 
   const alerts = alertsData?.alerts || [];
@@ -456,43 +518,123 @@ export default function Security() {
             )}
           </div>
 
-          {/* ===== 关键词词库 ===== */}
+          {/* ===== 关键词词库（分类分级） ===== */}
           <div className="bg-card rounded-lg p-6 border border-border">
             <h3 className="text-lg font-semibold mb-4">关键词词库</h3>
-            <div className="flex gap-2 mb-4">
-              <input
-                type="text"
-                value={newKeyword}
-                onChange={(e) => setNewKeyword(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addKeyword()}
-                placeholder="输入关键词后回车添加"
-                className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-              <button
-                onClick={addKeyword}
-                className="px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90"
-              >
-                <Plus size={16} />
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {cfg.keywords.length === 0 && (
-                <p className="text-sm text-muted-foreground">暂未配置关键词</p>
-              )}
-              {cfg.keywords.map((kw) => (
-                <span
-                  key={kw}
-                  className="flex items-center gap-1 px-3 py-1 bg-red-500/10 border border-red-500/30 text-red-400 rounded-full text-sm"
-                >
-                  {kw}
+
+            {/* 分类 Tab */}
+            <div className="flex flex-wrap gap-2 mb-4 border-b border-border pb-3">
+              {CATEGORIES.map((cat) => {
+                const count = getCatKwCount(cat.id);
+                const active = kwTab === cat.id;
+                return (
                   <button
-                    onClick={() => removeKeyword(kw)}
-                    className="hover:text-red-300"
+                    key={cat.id}
+                    onClick={() => setKwTab(cat.id)}
+                    className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${active ? `${cat.bg} ${cat.color} border-current` : "bg-secondary text-secondary-foreground border-border hover:bg-secondary/80"}`}
                   >
-                    <X size={14} />
+                    {cat.label}
+                    {count > 0 && <span className={`text-xs ${active ? "opacity-70" : "text-muted-foreground"}`}>({count})</span>}
                   </button>
-                </span>
-              ))}
+                );
+              })}
+            </div>
+
+            {/* 当前分类的级别列表 */}
+            <div className="space-y-3">
+              {(() => {
+                const curCat = CATEGORIES.find((c) => c.id === kwTab) || CATEGORIES[0];
+                return LEVELS.map((level) => {
+                const catMap = getKCat();
+                const kws: string[] = catMap[level.id] || [];
+                const levelEnabled = (cfg.keyword_levels || []).includes(level.id);
+                return (
+                  <div key={level.id} className={`border rounded-lg p-3 ${levelEnabled ? "border-border" : "border-border/50 opacity-60"}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`text-xs font-medium ${level.color}`}>[{level.label}]</span>
+                      <span className="text-xs text-muted-foreground">{kws.length} 个词</span>
+                    </div>
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="text"
+                        placeholder={`添加${level.label}级关键词...`}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            const input = e.currentTarget;
+                            addKeywordToCat(level.id, input.value);
+                            input.value = "";
+                          }
+                        }}
+                        className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {kws.map((kw) => (
+                        <span
+                          key={kw}
+                          className={`flex items-center gap-0.5 px-2 py-0.5 rounded text-xs border ${catMap[level.id]?.includes(kw) ? `${curCat.bg} ${curCat.color} border-current` : "bg-secondary text-secondary-foreground border-border"}`}
+                        >
+                          {kw}
+                          <button
+                            onClick={() => removeKeywordFromCat(level.id, kw)}
+                            className="hover:opacity-70 ml-0.5"
+                          >
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                      {kws.length === 0 && (
+                        <span className="text-xs text-muted-foreground">暂无</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              });
+              })()}
+            </div>
+
+            <p className="text-xs text-muted-foreground mt-3">
+              分类分级说明：严重级匹配最严格，低危级最宽松。请求进来时根据输入/输出检测配置中启用的分类进行检查。
+            </p>
+          </div>
+
+          {/* 分类启用配置 */}
+          <div className="bg-card rounded-lg p-6 border border-border">
+            <h3 className="text-lg font-semibold mb-3">分类启用配置</h3>
+            <p className="text-xs text-muted-foreground mb-3">控制哪些分类在输入检测和输出检测中被启用</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-muted-foreground border-b border-border">
+                    <th className="pb-2 pr-4">分类</th>
+                    <th className="pb-2 px-2">输入检测</th>
+                    <th className="pb-2 px-2">输出检测</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {CATEGORIES.map((cat) => (
+                    <tr key={cat.id} className="border-b border-border/50">
+                      <td className={`py-2 pr-4 font-medium ${cat.color}`}>{cat.label}</td>
+                      <td className="px-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={(cfg.input.keyword_categories || []).includes(cat.id)}
+                          onChange={() => toggleCategory(cat.id, "input")}
+                          className="w-4 h-4"
+                        />
+                      </td>
+                      <td className="px-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={(cfg.output.keyword_categories || []).includes(cat.id)}
+                          onChange={() => toggleCategory(cat.id, "output")}
+                          className="w-4 h-4"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -610,9 +752,9 @@ export default function Security() {
                             {alert.mode === "block" ? "拦截" : "检测"}
                           </span>
                           <span
-                            className={`px-1.5 py-0.5 rounded text-xs font-medium ${alert.trigger_type === "keyword" ? "bg-orange-500/10 text-orange-400" : alert.trigger_type === "vector" ? "bg-teal-500/10 text-teal-400" : "bg-red-500/10 text-red-400"}`}
+                            className={`px-1.5 py-0.5 rounded text-xs font-medium ${alert.trigger_type?.startsWith("keyword") ? "bg-orange-500/10 text-orange-400" : alert.trigger_type === "vector" ? "bg-teal-500/10 text-teal-400" : "bg-red-500/10 text-red-400"}`}
                           >
-                            {alert.trigger_type === "keyword"
+                            {alert.trigger_type?.startsWith("keyword")
                               ? "关键词"
                               : alert.trigger_type === "vector"
                                 ? "向量检测"

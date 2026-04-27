@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -22,6 +23,52 @@ const accessTokenExpiry = 2 * time.Hour
 const refreshTokenExpiry = 30 * 24 * time.Hour
 
 var jwtSecret []byte
+
+var (
+	loginAttempts   = make(map[string]*loginAttemptInfo)
+	loginAttemptsMu sync.Mutex
+)
+
+type loginAttemptInfo struct {
+	count    int
+	lastTime time.Time
+}
+
+const maxLoginAttempts = 10
+const loginAttemptWindow = 15 * time.Minute
+
+func checkLoginRateLimit(ip string) bool {
+	loginAttemptsMu.Lock()
+	defer loginAttemptsMu.Unlock()
+	now := time.Now()
+	info, exists := loginAttempts[ip]
+	if !exists || now.Sub(info.lastTime) > loginAttemptWindow {
+		loginAttempts[ip] = &loginAttemptInfo{count: 1, lastTime: now}
+		return true
+	}
+	info.count++
+	info.lastTime = now
+	if info.count > maxLoginAttempts {
+		return false
+	}
+	return true
+}
+
+func init() {
+	go func() {
+		for {
+			time.Sleep(10 * time.Minute)
+			loginAttemptsMu.Lock()
+			now := time.Now()
+			for ip, info := range loginAttempts {
+				if now.Sub(info.lastTime) > loginAttemptWindow {
+					delete(loginAttempts, ip)
+				}
+			}
+			loginAttemptsMu.Unlock()
+		}
+	}()
+}
 
 type UserClaims struct {
 	UserID   string `json:"user_id"`
@@ -162,20 +209,38 @@ func storeRefreshToken(username, token string) error {
 }
 
 func consumeRefreshToken(token string) (string, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("internal error")
+	}
+	defer tx.Rollback()
+
 	var username string
 	var expiresAt string
-	err := db.QueryRow(`SELECT username, expires_at FROM refresh_tokens WHERE token = ?`, token).Scan(&username, &expiresAt)
+	err = tx.QueryRow(`SELECT username, expires_at FROM refresh_tokens WHERE token = ?`, token).Scan(&username, &expiresAt)
 	if err != nil {
 		return "", fmt.Errorf("invalid refresh token")
 	}
 
 	exp, err := time.Parse(time.RFC3339, expiresAt)
 	if err != nil || time.Now().After(exp) {
-		db.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
+		tx.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
+		tx.Commit()
 		return "", fmt.Errorf("refresh token expired")
 	}
 
-	db.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
+	result, err := tx.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
+	if err != nil {
+		return "", fmt.Errorf("internal error")
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return "", fmt.Errorf("refresh token already consumed")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("internal error")
+	}
 	return username, nil
 }
 
@@ -204,17 +269,10 @@ func issueTokenPairForUser(user map[string]interface{}) map[string]interface{} {
 func issueTokenPair(username string) map[string]interface{} {
 	user, err := dbGetUserByUsername(username)
 	if err != nil {
-		role := "admin"
-		accessToken, _ := generateToken("unknown", username, role, accessTokenExpiry)
-		refreshToken := generateRefreshTokenString()
-		storeRefreshToken(username, refreshToken)
+		log.Printf("[WARN] issueTokenPair: user %q not found, refusing token issuance", username)
 		return map[string]interface{}{
-			"success":       true,
-			"access_token":  accessToken,
-			"refresh_token": refreshToken,
-			"expires_in":    int(accessTokenExpiry.Seconds()),
-			"username":      username,
-			"role":          role,
+			"success": false,
+			"error":   "user not found",
 		}
 	}
 	return issueTokenPairForUser(user)
@@ -249,7 +307,28 @@ var noAuthPaths = map[string]bool{
 }
 
 func isAdminPath(path string) bool {
-	return strings.HasPrefix(path, "/api/v1/users")
+	adminPrefixes := []string{
+		"/api/v1/providers",
+		"/api/v1/api-keys",
+		"/api/v1/keys",
+		"/api/v1/stats/usage",
+		"/api/v1/stats/alerts",
+		"/api/v1/stats/callers",
+		"/api/v1/stats/security-tokens",
+		"/api/v1/users",
+		"/api/v1/security/config",
+		"/api/v1/security/alerts",
+		"/api/v1/security/vectors",
+		"/api/v1/ratelimit/",
+		"/api/v1/proxy/test",
+		"/api/v1/agent/",
+	}
+	for _, prefix := range adminPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isLocalhost(r *http.Request) bool {
@@ -282,7 +361,7 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 			if tokenStr != "" {
 				claims, err := validateToken(tokenStr)
 				if err == nil && claims != nil {
-					if isAdminPath(r.URL.Path) && !isAdmin(claims) && r.Method != "GET" {
+					if isAdminPath(r.URL.Path) && !isAdmin(claims) {
 						http.Error(w, "Forbidden: admin only", http.StatusForbidden)
 						return
 					}
@@ -297,6 +376,10 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 				authHeader := r.Header.Get("Authorization")
 				expectedAuth := "Bearer " + p.config.APIKey
 				if authHeader == expectedAuth {
+					if isAdminPath(r.URL.Path) {
+						http.Error(w, "Forbidden: admin only", http.StatusForbidden)
+						return
+					}
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -323,6 +406,32 @@ func getUserFromContext(r *http.Request) *UserClaims {
 		return val
 	}
 	return getUserFromRequest(r)
+}
+
+func userIDForQuery(r *http.Request) string {
+	claims := getUserFromContext(r)
+	if claims == nil || isAdmin(claims) {
+		return ""
+	}
+	return claims.UserID
+}
+
+func requireTaskOwnership(w http.ResponseWriter, r *http.Request, taskID string, taskTable string) bool {
+	uid := userIDForQuery(r)
+	if uid == "" {
+		return true
+	}
+	var owner string
+	err := db.QueryRow("SELECT created_by FROM "+taskTable+" WHERE id = ?", taskID).Scan(&owner)
+	if err != nil {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return false
+	}
+	if owner != "" && owner != uid {
+		http.Error(w, "Forbidden: not your task", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func extractBearerToken(r *http.Request) string {
@@ -385,6 +494,11 @@ func (p *ProxyServer) handleAuthSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *ProxyServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if !checkLoginRateLimit(host) {
+		http.Error(w, "Too many login attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -522,6 +636,7 @@ func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 	newHash, _ := hashPassword(req.NewPassword)
 	dbUpdateUserPassword(claims.UserID, newHash)
+	db.Exec(`DELETE FROM refresh_tokens WHERE username = ?`, claims.Username)
 	w.Header().Set("Content-Type", "application/json")
 	user2, _ := dbGetUserByID(claims.UserID)
 	json.NewEncoder(w).Encode(issueTokenPairForUser(user2))
@@ -656,9 +771,18 @@ func (p *ProxyServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "不能删除自己", http.StatusBadRequest)
 		return
 	}
+	user, err := dbGetUserByID(id)
+	if err != nil {
+		http.Error(w, "用户不存在", http.StatusNotFound)
+		return
+	}
+	username, _ := user["username"].(string)
 	if err := dbDeleteUser(id); err != nil {
 		http.Error(w, "删除失败", http.StatusInternalServerError)
 		return
+	}
+	if username != "" {
+		db.Exec(`DELETE FROM refresh_tokens WHERE username = ?`, username)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})

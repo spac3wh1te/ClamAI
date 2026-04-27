@@ -282,6 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             set_registration_open,
             register_user,
             get_current_user,
+            logout,
         ])
         .run(tauri::generate_context!())?;
 

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Activity, Lock, User, Shield, Eye, EyeOff, UserPlus } from "lucide-react";
+import { logInfo, logError } from "../utils/log";
 
 export default function Login() {
   const { login, setup, register, initialized, registrationOpen } = useAuth();
@@ -33,6 +34,7 @@ export default function Login() {
     }
 
     setLoading(true);
+    logInfo("Login", "attempting login/setup/register", { mode: isSetup ? "setup" : isRegister ? "register" : "login" });
     try {
       if (isSetup) {
         await setup(username, password);
@@ -42,6 +44,7 @@ export default function Login() {
         await login(username, password);
       }
     } catch (err: any) {
+      logError("Login", isSetup ? "setup failed" : isRegister ? "register failed" : "login failed", err);
       setError(err?.toString?.() || (isSetup ? "初始化失败" : isRegister ? "注册失败" : "登录失败"));
     } finally {
       setLoading(false);

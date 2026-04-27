@@ -75,6 +75,8 @@ pub struct ProviderConfig {
     pub priority: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub created_by: String,  // 创建者用户ID，用于数据隔离
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,62 +303,76 @@ impl ConfigManager {
     }
 
     pub fn get_config(&self) -> AppConfig {
+        tracing::debug!("[config] get_config: providers={}, mappings={}, setup_complete={}", self.config.providers.len(), self.config.mappings.len(), self.config.service.setup_complete);
         self.config.clone()
     }
 
     pub async fn update_config(&mut self, mut config: AppConfig) -> Result<()> {
         let active = &config.active_profile;
+        tracing::info!(
+            "[update_config] saving: setup_complete={}, active_profile='{}'",
+            config.service.setup_complete, active
+        );
         if !active.is_empty() {
             if let Some(profile) = config.profiles.get_mut(active) {
                 profile.providers = config.providers.clone();
                 profile.mappings = config.mappings.clone();
                 profile.gateway = config.gateway.clone();
-                profile.advanced = config.advanced.clone();
                 profile.service = config.service.clone();
+                profile.advanced = config.advanced.clone();
             }
         }
         Self::save_config(&self.config_path, &config).await?;
+        tracing::info!("[update_config] saved to disk: {:?}", self.config_path);
         self.config = config;
         Ok(())
     }
 
     pub fn get_providers(&self) -> Vec<ProviderConfig> {
+        tracing::debug!("[config] get_providers: count={}", self.config.providers.len());
         self.config.providers.values().cloned().collect()
     }
 
     pub fn get_provider(&self, id: &str) -> Option<ProviderConfig> {
+        tracing::debug!("[config] get_provider: id={}", id);
         self.config.providers.get(id).cloned()
     }
 
     pub async fn add_provider(&mut self, provider: ProviderConfig) -> Result<()> {
+        tracing::info!("[config] add_provider: id={}, name={}, type={:?}", provider.id, provider.name, provider.provider_type);
         self.config.providers.insert(provider.id.clone(), provider);
         self.update_config(self.config.clone()).await?;
         Ok(())
     }
 
     pub async fn remove_provider(&mut self, id: &str) -> Result<()> {
+        tracing::info!("[config] remove_provider: id={}", id);
         self.config.providers.remove(id);
         self.update_config(self.config.clone()).await?;
         Ok(())
     }
 
     pub async fn update_provider(&mut self, provider: ProviderConfig) -> Result<()> {
+        tracing::info!("[config] update_provider: id={}, name={}", provider.id, provider.name);
         self.config.providers.insert(provider.id.clone(), provider);
         self.update_config(self.config.clone()).await?;
         Ok(())
     }
 
     pub fn get_mappings(&self) -> Vec<ModelMapping> {
+        tracing::debug!("[config] get_model_mappings: count={}", self.config.mappings.len());
         self.config.mappings.values().cloned().collect()
     }
 
     pub async fn add_mapping(&mut self, mapping: ModelMapping) -> Result<()> {
+        tracing::info!("[config] add_model_mapping: alias={}", mapping.alias);
         self.config.mappings.insert(mapping.alias.clone(), mapping);
         self.update_config(self.config.clone()).await?;
         Ok(())
     }
 
     pub async fn remove_mapping(&mut self, alias: &str) -> Result<()> {
+        tracing::info!("[config] remove_model_mapping: alias={}", alias);
         self.config.mappings.remove(alias);
         self.update_config(self.config.clone()).await?;
         Ok(())
@@ -389,6 +405,7 @@ impl ConfigManager {
     }
 
     pub async fn save_current_as_profile(&mut self, profile_id: String, display_name: String) -> Result<()> {
+        tracing::info!("[config] save_current_as_profile: id={}", profile_id);
         let snapshot = ConfigProfile {
             name: display_name,
             providers: self.config.providers.clone(),
@@ -403,6 +420,7 @@ impl ConfigManager {
     }
 
     pub async fn load_profile(&mut self, profile_id: &str) -> Result<()> {
+        tracing::info!("[config] load_profile: id={}", profile_id);
         let snapshot = self
             .config
             .profiles
@@ -421,6 +439,7 @@ impl ConfigManager {
     }
 
     pub async fn delete_profile(&mut self, profile_id: &str) -> Result<()> {
+        tracing::info!("[config] delete_profile: id={}", profile_id);
         if profile_id == self.config.active_profile {
             return Err(ClamAIError::Config("不能删除当前正在使用的配置档案".to_string()));
         }
@@ -430,6 +449,7 @@ impl ConfigManager {
     }
 
     pub async fn rename_profile(&mut self, profile_id: &str, new_name: String) -> Result<()> {
+        tracing::info!("[config] rename_profile: id={}, new_name={}", profile_id, new_name);
         let profile = self
             .config
             .profiles

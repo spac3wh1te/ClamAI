@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
+import { logInfo, logError } from "../utils/log";
 import {
   Activity,
   Zap,
@@ -172,6 +173,14 @@ export default function Dashboard() {
     staleTime: 0,
     refetchInterval: 15000,
   });
+
+  const getCallerDisplayName = (apiKeyUsed: string): string => {
+    const mapping: Record<string, string> = {
+      "behavior_analysis": "安全广场(调用者行为分析)",
+      "skills_detection": "安全广场(skills分析)",
+    };
+    return mapping[apiKeyUsed] || apiKeyUsed;
+  };
 
   const { data: securityTokenStats } = useQuery({
     queryKey: ["security-token-stats", period],
@@ -585,7 +594,7 @@ export default function Dashboard() {
                     </span>
                     <div className="min-w-0">
                       <p className="font-mono text-sm truncate">
-                        {c.api_key_used}
+                        {getCallerDisplayName(c.api_key_used)}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {c.client_ip}

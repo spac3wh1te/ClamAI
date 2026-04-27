@@ -51,6 +51,10 @@ func initDB() error {
 		log.Printf("[WARN] initDB: migration provider_keys failed (non-fatal): %v", err)
 	}
 
+	if err := migrateAPIKeysUserID(); err != nil {
+		log.Printf("[WARN] initDB: migration api_keys_user_id failed (non-fatal): %v", err)
+	}
+
 	if err := migrateFromJSON(); err != nil {
 		log.Printf("[WARN] initDB: migration from JSON failed (non-fatal): %v", err)
 	}
@@ -88,6 +92,39 @@ func migrateProviderKeys() error {
 			return fmt.Errorf("failed to add provider_keys column: %w", err)
 		}
 		log.Printf("[INFO] migrateProviderKeys: added provider_keys column")
+	}
+	return nil
+}
+
+func migrateAPIKeysUserID() error {
+	rows, err := db.Query("PRAGMA table_info(api_keys)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasUserID := false
+	for rows.Next() {
+		var cid int
+		var cname string
+		var ctype string
+		var cnotnull int
+		var cdflt_value interface{}
+		var cpk int
+		if err := rows.Scan(&cid, &cname, &ctype, &cnotnull, &cdflt_value, &cpk); err != nil {
+			continue
+		}
+		if cname == "user_id" {
+			hasUserID = true
+			break
+		}
+	}
+	if !hasUserID {
+		_, err := db.Exec("ALTER TABLE api_keys ADD COLUMN user_id TEXT DEFAULT ''")
+		if err != nil {
+			return fmt.Errorf("failed to add user_id column: %w", err)
+		}
+		log.Printf("[INFO] migrateAPIKeysUserID: added user_id column")
 	}
 	return nil
 }
@@ -306,8 +343,17 @@ func createTables() error {
 	db.Exec("ALTER TABLE security_alerts ADD COLUMN client_ip TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE request_logs ADD COLUMN request_content TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE request_logs ADD COLUMN response_content TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE request_logs ADD COLUMN user_id TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE request_logs ADD COLUMN api_key_id TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE analysis_tasks ADD COLUMN result_dimensions TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE analysis_tasks ADD COLUMN progress TEXT DEFAULT ''")
+
+	db.Exec("ALTER TABLE analysis_tasks ADD COLUMN created_by TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE analysis_task_history ADD COLUMN created_by TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE skills_tasks ADD COLUMN created_by TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE skills_task_history ADD COLUMN created_by TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE skills_detection_history ADD COLUMN created_by TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE profile_analysis_history ADD COLUMN created_by TEXT DEFAULT ''")
 
 	migrateAdminToUsers()
 
@@ -445,9 +491,9 @@ func dbSaveAPIKey(info *APIKeyInfo) {
 	if info.LastUsed != nil {
 		lastUsed = info.LastUsed.UTC().Format(time.RFC3339)
 	}
-	_, err := db.Exec(`INSERT OR REPLACE INTO api_keys (id, key, name, allowed_models, provider_keys, created_at, active, request_count, last_used)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		info.ID, info.Key, info.Name, string(modelsJSON), string(providerKeysJSON),
+	_, err := db.Exec(`INSERT OR REPLACE INTO api_keys (id, key, name, user_id, allowed_models, provider_keys, created_at, active, request_count, last_used)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		info.ID, info.Key, info.Name, info.UserID, string(modelsJSON), string(providerKeysJSON),
 		info.CreatedAt.UTC().Format(time.RFC3339), boolToInt(info.Active),
 		info.RequestCount, lastUsed)
 	if err != nil {
@@ -468,7 +514,7 @@ func dbLoadAPIKeys() (map[string]*APIKeyInfo, map[string]*APIKeyInfo) {
 	keys := make(map[string]*APIKeyInfo)
 	byID := make(map[string]*APIKeyInfo)
 
-	rows, err := db.Query("SELECT id, key, name, allowed_models, provider_keys, created_at, active, request_count, last_used FROM api_keys")
+	rows, err := db.Query("SELECT id, key, name, COALESCE(user_id,'') as user_id, allowed_models, provider_keys, created_at, active, request_count, last_used FROM api_keys")
 	if err != nil {
 		log.Printf("[ERROR] dbLoadAPIKeys: %v", err)
 		return keys, byID
@@ -483,7 +529,7 @@ func dbLoadAPIKeys() (map[string]*APIKeyInfo, map[string]*APIKeyInfo) {
 		var active int
 		var lastUsed sql.NullString
 
-		if err := rows.Scan(&info.ID, &info.Key, &info.Name, &modelsJSON, &providerKeysJSON, &createdAt, &active, &info.RequestCount, &lastUsed); err != nil {
+		if err := rows.Scan(&info.ID, &info.Key, &info.Name, &info.UserID, &modelsJSON, &providerKeysJSON, &createdAt, &active, &info.RequestCount, &lastUsed); err != nil {
 			log.Printf("[ERROR] dbLoadAPIKeys scan: %v", err)
 			continue
 		}
@@ -603,13 +649,13 @@ func dbLoadStats(stats *RequestStats) {
 // ==================== Logs DB ====================
 
 func dbInsertLog(entry *RequestLog) {
-	_, err := db.Exec(`INSERT INTO request_logs (timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, request_content, response_content)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := db.Exec(`INSERT INTO request_logs (timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, request_content, response_content, user_id, api_key_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.UTC().Format(time.RFC3339), entry.Provider, entry.Model,
 		entry.InputTokens, entry.OutputTokens, entry.LatencyMs,
 		boolToInt(entry.Success), entry.ErrorMessage, entry.ClientIP,
 		entry.APIKeyUsed, entry.StatusCode, entry.Path, entry.Method,
-		entry.RequestContent, entry.ResponseContent)
+		entry.RequestContent, entry.ResponseContent, entry.UserID, entry.APIKeyID)
 	if err != nil {
 		log.Printf("[ERROR] dbInsertLog: %v", err)
 	}
@@ -683,11 +729,19 @@ func dbLoadLogs(lb *LogBuffer) {
 	log.Printf("[INFO] dbLoadLogs: loaded %d entries", count)
 }
 
-func dbGetRecentLogs(limit int) ([]*RequestLog, int) {
+func dbGetRecentLogs(limit int, userID string) ([]*RequestLog, int) {
 	var total int
-	db.QueryRow("SELECT COUNT(*) FROM request_logs").Scan(&total)
-
-	rows, err := db.Query("SELECT id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,'') FROM request_logs ORDER BY id DESC LIMIT ?", limit)
+	var rows *sql.Rows
+	var err error
+	if userID != "" {
+		// Normal user: only see their own logs (matched by user_id from JWT or API key's user_id)
+		db.QueryRow("SELECT COUNT(*) FROM request_logs WHERE user_id = ?", userID).Scan(&total)
+		rows, err = db.Query("SELECT id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,''), COALESCE(user_id,''), COALESCE(api_key_id,'') FROM request_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?", userID, limit)
+	} else {
+		// Admin or no auth: return all logs
+		db.QueryRow("SELECT COUNT(*) FROM request_logs").Scan(&total)
+		rows, err = db.Query("SELECT id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,''), COALESCE(user_id,''), COALESCE(api_key_id,'') FROM request_logs ORDER BY id DESC LIMIT ?", limit)
+	}
 	if err != nil {
 		log.Printf("[ERROR] dbGetRecentLogs: %v", err)
 		return nil, 0
@@ -702,7 +756,7 @@ func dbGetRecentLogs(limit int) ([]*RequestLog, int) {
 		if err := rows.Scan(&entry.ID, &ts, &entry.Provider, &entry.Model, &entry.InputTokens, &entry.OutputTokens,
 			&entry.LatencyMs, &success, &entry.ErrorMessage, &entry.ClientIP,
 			&entry.APIKeyUsed, &entry.StatusCode, &entry.Path, &entry.Method,
-			&entry.RequestContent, &entry.ResponseContent); err != nil {
+			&entry.RequestContent, &entry.ResponseContent, &entry.UserID, &entry.APIKeyID); err != nil {
 			continue
 		}
 		entry.Timestamp, _ = time.Parse(time.RFC3339, ts)
@@ -741,20 +795,30 @@ func dbGetLogsByAPIKey(apiKey string, limit int) ([]*RequestLog, int) {
 	return logs, total
 }
 
-func dbInsertSkillsDetection(sourceType, sourceInfo, result, riskLevel, modelUsed, apiKeyID string) {
-	_, err := db.Exec(`INSERT INTO skills_detection_history (checked_at, source_type, source_info, result, risk_level, model_used, api_key_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		time.Now().UTC().Format(time.RFC3339), sourceType, sourceInfo, result, riskLevel, modelUsed, apiKeyID)
+func dbInsertSkillsDetection(sourceType, sourceInfo, result, riskLevel, modelUsed, apiKeyID, createdBy string) {
+	_, err := db.Exec(`INSERT INTO skills_detection_history (checked_at, source_type, source_info, result, risk_level, model_used, api_key_id, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), sourceType, sourceInfo, result, riskLevel, modelUsed, apiKeyID, createdBy)
 	if err != nil {
 		log.Printf("[ERROR] dbInsertSkillsDetection: %v", err)
 	}
 }
 
-func dbGetSkillsDetectionHistory(limit, offset int) ([]map[string]interface{}, int) {
+func dbGetSkillsDetectionHistory(limit, offset int, userID string) ([]map[string]interface{}, int) {
 	var total int
-	db.QueryRow("SELECT COUNT(*) FROM skills_detection_history").Scan(&total)
+	if userID != "" {
+		db.QueryRow("SELECT COUNT(*) FROM skills_detection_history WHERE created_by = ? OR created_by = ''", userID).Scan(&total)
+	} else {
+		db.QueryRow("SELECT COUNT(*) FROM skills_detection_history").Scan(&total)
+	}
 
-	rows, err := db.Query("SELECT id, checked_at, source_type, source_info, result, risk_level, model_used, api_key_id FROM skills_detection_history ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
+	var rows *sql.Rows
+	var err error
+	if userID != "" {
+		rows, err = db.Query("SELECT id, checked_at, source_type, source_info, result, risk_level, model_used, api_key_id FROM skills_detection_history WHERE created_by = ? OR created_by = '' ORDER BY id DESC LIMIT ? OFFSET ?", userID, limit, offset)
+	} else {
+		rows, err = db.Query("SELECT id, checked_at, source_type, source_info, result, risk_level, model_used, api_key_id FROM skills_detection_history ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
+	}
 	if err != nil {
 		log.Printf("[ERROR] dbGetSkillsDetectionHistory: %v", err)
 		return nil, 0
@@ -781,20 +845,30 @@ func dbGetSkillsDetectionHistory(limit, offset int) ([]map[string]interface{}, i
 	return records, total
 }
 
-func dbInsertProfileAnalysis(apiKeyID, timeRange, riskLevel, summary, result, modelUsed string, logsAnalyzed int) {
-	_, err := db.Exec(`INSERT INTO profile_analysis_history (analyzed_at, api_key_id, time_range, risk_level, summary, result, model_used, logs_analyzed)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		time.Now().UTC().Format(time.RFC3339), apiKeyID, timeRange, riskLevel, summary, result, modelUsed, logsAnalyzed)
+func dbInsertProfileAnalysis(apiKeyID, timeRange, riskLevel, summary, result, modelUsed string, logsAnalyzed int, createdBy string) {
+	_, err := db.Exec(`INSERT INTO profile_analysis_history (analyzed_at, api_key_id, time_range, risk_level, summary, result, model_used, logs_analyzed, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), apiKeyID, timeRange, riskLevel, summary, result, modelUsed, logsAnalyzed, createdBy)
 	if err != nil {
 		log.Printf("[ERROR] dbInsertProfileAnalysis: %v", err)
 	}
 }
 
-func dbGetProfileAnalysisHistory(limit, offset int) ([]map[string]interface{}, int) {
+func dbGetProfileAnalysisHistory(limit, offset int, userID string) ([]map[string]interface{}, int) {
 	var total int
-	db.QueryRow("SELECT COUNT(*) FROM profile_analysis_history").Scan(&total)
+	if userID != "" {
+		db.QueryRow("SELECT COUNT(*) FROM profile_analysis_history WHERE created_by = ? OR created_by = ''", userID).Scan(&total)
+	} else {
+		db.QueryRow("SELECT COUNT(*) FROM profile_analysis_history").Scan(&total)
+	}
 
-	rows, err := db.Query("SELECT id, analyzed_at, api_key_id, time_range, risk_level, summary, result, model_used, logs_analyzed FROM profile_analysis_history ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
+	var rows *sql.Rows
+	var err error
+	if userID != "" {
+		rows, err = db.Query("SELECT id, analyzed_at, api_key_id, time_range, risk_level, summary, result, model_used, logs_analyzed FROM profile_analysis_history WHERE created_by = ? OR created_by = '' ORDER BY id DESC LIMIT ? OFFSET ?", userID, limit, offset)
+	} else {
+		rows, err = db.Query("SELECT id, analyzed_at, api_key_id, time_range, risk_level, summary, result, model_used, logs_analyzed FROM profile_analysis_history ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
+	}
 	if err != nil {
 		log.Printf("[ERROR] dbGetProfileAnalysisHistory: %v", err)
 		return nil, 0
@@ -1023,7 +1097,7 @@ func dbGetSecurityTokenStats(periodMinutes int) *SecurityTokenStats {
 	return stats
 }
 
-func dbCreateAnalysisTask(id, taskNo, name, apiKeyID, model, timeRange, scheduleType string, intervalMinutes int) error {
+func dbCreateAnalysisTask(id, taskNo, name, apiKeyID, model, timeRange, scheduleType string, intervalMinutes int, createdBy string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	status := "idle"
 	nextRun := ""
@@ -1031,14 +1105,21 @@ func dbCreateAnalysisTask(id, taskNo, name, apiKeyID, model, timeRange, schedule
 		nextRun = time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
 		status = "running"
 	}
-	_, err := db.Exec(`INSERT INTO analysis_tasks (id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, next_run_at, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, taskNo, name, apiKeyID, model, timeRange, scheduleType, intervalMinutes, status, nextRun, now)
+	_, err := db.Exec(`INSERT INTO analysis_tasks (id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, next_run_at, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, taskNo, name, apiKeyID, model, timeRange, scheduleType, intervalMinutes, status, nextRun, now, createdBy)
 	return err
 }
 
-func dbGetAnalysisTasks() ([]map[string]interface{}, error) {
-	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, last_run_at, next_run_at, created_at, result_summary, result_risk_level, result_detail, result_dimensions, result_logs_analyzed, progress FROM analysis_tasks ORDER BY created_at DESC")
+func dbGetAnalysisTasks(userID string) ([]map[string]interface{}, error) {
+	query := "SELECT id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, last_run_at, next_run_at, created_at, result_summary, result_risk_level, result_detail, result_dimensions, result_logs_analyzed, progress FROM analysis_tasks"
+	var rows *sql.Rows
+	var err error
+	if userID != "" {
+		rows, err = db.Query(query+" WHERE created_by = ? OR created_by = '' ORDER BY created_at DESC", userID)
+	} else {
+		rows, err = db.Query(query + " ORDER BY created_at DESC")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1121,7 +1202,11 @@ func dbUpdateAnalysisTaskResult(id, riskLevel, summary, detail, dimensions strin
 	return err
 }
 
-func dbDeleteAnalysisTask(id string) error {
+func dbDeleteAnalysisTask(id, userID string) error {
+	if userID != "" {
+		_, err := db.Exec("DELETE FROM analysis_tasks WHERE id=? AND (created_by=? OR created_by='')", id, userID)
+		return err
+	}
 	_, err := db.Exec("DELETE FROM analysis_tasks WHERE id=?", id)
 	return err
 }
@@ -1161,32 +1246,42 @@ func nextSkillsTaskNo() string {
 	return fmt.Sprintf("SK%04d", n)
 }
 
-func dbCreateSkillsTask(id, taskNo, name, model, sourceType, sourceInfo, scheduleType string) error {
+func dbCreateSkillsTask(id, taskNo, name, model, sourceType, sourceInfo, scheduleType string, createdBy string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`INSERT INTO skills_tasks (id, task_no, name, model, source_type, source_info, schedule_type, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?)`,
-		id, taskNo, name, model, sourceType, sourceInfo, scheduleType, now)
+	_, err := db.Exec(`INSERT INTO skills_tasks (id, task_no, name, model, source_type, source_info, schedule_type, status, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
+		id, taskNo, name, model, sourceType, sourceInfo, scheduleType, now, createdBy)
 	return err
 }
 
-func dbGetSkillsTasks() ([]map[string]interface{}, error) {
-	rows, err := db.Query("SELECT id, task_no, name, model, source_type, source_info, schedule_type, status, progress, last_run_at, created_at, result_risk_level, result_summary, result_detail, result_dimensions FROM skills_tasks ORDER BY created_at DESC")
+func dbGetSkillsTasks(userID string) ([]map[string]interface{}, error) {
+	query := "SELECT id, task_no, name, model, source_type, source_info, schedule_type, status, progress, last_run_at, created_at, result_risk_level, result_summary, result_detail, result_dimensions, created_by FROM skills_tasks"
+	var rows *sql.Rows
+	var err error
+	if userID != "" {
+		rows, err = db.Query(query+" WHERE created_by = ? OR created_by = '' ORDER BY created_at DESC", userID)
+	} else {
+		rows, err = db.Query(query + " ORDER BY created_at DESC")
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var tasks []map[string]interface{}
 	for rows.Next() {
-		var id, taskNo, name, model, sourceType, sourceInfo, scheduleType, status string
-		var lastRunAt, createdAt sql.NullString
-		var resultRiskLevel, resultSummary, resultDetail, resultDimensions, progress sql.NullString
-		if err := rows.Scan(&id, &taskNo, &name, &model, &sourceType, &sourceInfo, &scheduleType, &status, &progress, &lastRunAt, &createdAt, &resultRiskLevel, &resultSummary, &resultDetail, &resultDimensions); err != nil {
+var id, taskNo, name, model, sourceType, sourceInfo, scheduleType, status string
+	var lastRunAt, createdAt, createdBy sql.NullString
+	var resultRiskLevel, resultSummary, resultDetail, resultDimensions, progress sql.NullString
+	if err := rows.Scan(&id, &taskNo, &name, &model, &sourceType, &sourceInfo, &scheduleType, &status, &progress, &lastRunAt, &createdAt, &resultRiskLevel, &resultSummary, &resultDetail, &resultDimensions, &createdBy); err != nil {
 			continue
 		}
 		task := map[string]interface{}{
 			"id": id, "task_no": taskNo, "name": name, "model": model,
 			"source_type": sourceType, "source_info": sourceInfo,
 			"schedule_type": scheduleType, "status": status, "created_at": createdAt,
+		}
+		if createdBy.Valid {
+			task["created_by"] = createdBy.String
 		}
 		if lastRunAt.Valid {
 			task["last_run_at"] = lastRunAt.String
@@ -1223,7 +1318,11 @@ func dbUpdateSkillsTaskStatus(id, status string) error {
 	return err
 }
 
-func dbDeleteSkillsTask(id string) error {
+func dbDeleteSkillsTask(id, userID string) error {
+	if userID != "" {
+		_, err := db.Exec("DELETE FROM skills_tasks WHERE id=? AND (created_by=? OR created_by='')", id, userID)
+		return err
+	}
 	_, err := db.Exec("DELETE FROM skills_tasks WHERE id=?", id)
 	return err
 }

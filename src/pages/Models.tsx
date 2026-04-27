@@ -9,6 +9,7 @@ import {
   RefreshCw,
   AlertCircle,
 } from "lucide-react";
+import { logInfo, logError } from "../utils/log";
 
 interface ModelMapping {
   alias: string;
@@ -50,15 +51,21 @@ export default function Models() {
       providerId: string;
       modelName: string;
       enabled: boolean;
-    }) => invoke("toggle_model", { providerId, modelName, enabled }),
+    }) => {
+      logInfo("Models", "toggle_model", { providerId, modelName, enabled });
+      return invoke("toggle_model", { providerId, modelName, enabled });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
     },
+    onError: (error) => { logError("Models", "toggle_model failed", error); },
   });
 
   const fetchModelsMutation = useMutation({
-    mutationFn: (providerId: string) =>
-      invoke<string[]>("fetch_provider_models", { providerId }),
+    mutationFn: (providerId: string) => {
+      logInfo("Models", "fetch_provider_models", { providerId });
+      return invoke<string[]>("fetch_provider_models", { providerId });
+    },
     onSuccess: (_data, providerId) => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
       setFetchErrors((prev) => {
@@ -68,12 +75,14 @@ export default function Models() {
       });
     },
     onError: (error: Error, providerId: string) => {
+      logError("Models", "fetch_provider_models failed", error);
       setFetchErrors((prev) => ({ ...prev, [providerId]: error.message }));
     },
   });
 
   const refreshAllMutation = useMutation({
     mutationFn: async () => {
+      logInfo("Models", "refresh_all_models");
       if (!providers) return;
       for (const p of providers) {
         if (p.enabled) {
@@ -90,6 +99,7 @@ export default function Models() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
     },
+    onError: (error) => { logError("Models", "refresh_all_models failed", error); },
   });
 
   const allModels =

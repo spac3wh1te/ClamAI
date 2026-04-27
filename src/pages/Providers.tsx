@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
+import { logInfo, logError } from "../utils/log";
 import {
   Plus,
   Trash2,
@@ -57,6 +58,7 @@ export default function Providers() {
 
   const addMutation = useMutation({
     mutationFn: async (provider: ProviderConfig) => {
+      logInfo("Providers", "add_provider called", { name: provider.name, type: provider.provider_type });
       const result = await invoke("add_provider", { provider });
       try {
         const activeKey = provider.api_keys.find((k) => k.is_active);
@@ -80,10 +82,14 @@ export default function Providers() {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
       setShowAddDialog(false);
     },
+    onError: (error) => {
+      logError("Providers", "add_provider failed", error);
+    },
   });
 
   const updateMutation = useMutation({
     mutationFn: async (provider: ProviderConfig) => {
+      logInfo("Providers", "update_provider called", { id: provider.id, name: provider.name });
       const result = await invoke("update_provider", { provider });
       try {
         const activeKey = provider.api_keys.find((k) => k.is_active);
@@ -103,13 +109,22 @@ export default function Providers() {
       queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
       setEditProvider(null);
     },
+    onError: (error) => {
+      logError("Providers", "update_provider failed", error);
+    },
   });
 
   const removeMutation = useMutation({
-    mutationFn: (id: string) => invoke("remove_provider", { id }),
+    mutationFn: (id: string) => {
+      logInfo("Providers", "remove_provider called", { id });
+      return invoke("remove_provider", { id });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
       queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
+    },
+    onError: (error) => {
+      logError("Providers", "remove_provider failed", error);
     },
   });
 
@@ -342,6 +357,7 @@ function AddProviderDialog({
     api_key: "",
     priority: 0,
   });
+  const [addError, setAddError] = useState("");
 
   const providerTypes = [
     {
@@ -435,6 +451,7 @@ function AddProviderDialog({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    logInfo("Providers", "handleSubmit", { name: formData.name, type: formData.provider_type });
 
     const now = new Date().toISOString();
     const provider: ProviderConfig = {

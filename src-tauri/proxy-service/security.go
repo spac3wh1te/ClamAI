@@ -20,26 +20,38 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// Keyword categories for classification
+var keywordCategories = []string{"pornography", "violence", "politics", "terrorism", "sensitive_data"}
+var keywordCategoryLabels = map[string]string{
+	"pornography":   "涉黄",
+	"violence":      "涉暴",
+	"politics":      "涉政",
+	"terrorism":     "涉恐",
+	"sensitive_data": "敏感数据",
+}
+
 type DirectionConfig struct {
-	Enabled         bool   `json:"enabled"`
-	Mode            string `json:"mode"` // "block" or "detect"
-	KeywordEnabled  bool   `json:"keyword_enabled"`
+	Enabled          bool   `json:"enabled"`
+	Mode             string `json:"mode"` // "block" or "detect"
+	KeywordEnabled   bool   `json:"keyword_enabled"`
+	KeywordCategories []string `json:"keyword_categories"` // enabled categories, e.g. ["pornography","violence"]
 	SemanticEnabled bool   `json:"semantic_enabled"`
 	VectorEnabled   bool   `json:"vector_enabled"`
 }
 
 type SecurityConfig struct {
-	Enabled           bool            `json:"enabled"`
-	Input             DirectionConfig `json:"input"`
-	Output            DirectionConfig `json:"output"`
-	Keywords          []string        `json:"keywords"`           // backward compat: flat keyword list
-	KeywordByLevel    map[string][]string `json:"keyword_by_level"` // {"critical": [...], "high": [...], "medium": [...], "low": [...]}
-	KeywordLevels     []string        `json:"keyword_levels"`      // enabled levels, e.g. ["critical","high"]
-	BlockMessage      string          `json:"block_message"`
-	SemanticModel     string          `json:"semantic_model"`
-	SemanticThreshold float64         `json:"semantic_threshold"`
-	SemanticPrompt    string          `json:"semantic_prompt"`
-	AutoBanKey        bool            `json:"auto_ban_key"`
+	Enabled           bool                   `json:"enabled"`
+	Input            DirectionConfig        `json:"input"`
+	Output           DirectionConfig        `json:"output"`
+	Keywords         []string               `json:"keywords"`              // backward compat: flat keyword list
+	KeywordByLevel   map[string][]string    `json:"keyword_by_level"`     // backward compat: {"high": [...]}
+	KeywordByCategory map[string]map[string][]string `json:"keyword_by_category"` // {"pornography": {"critical": [...], "high": [...]}, ...}
+	KeywordLevels    []string               `json:"keyword_levels"`        // enabled levels, e.g. ["critical","high"]
+	BlockMessage     string                 `json:"block_message"`
+	SemanticModel    string                 `json:"semantic_model"`
+	SemanticThreshold float64               `json:"semantic_threshold"`
+	SemanticPrompt  string                 `json:"semantic_prompt"`
+	AutoBanKey      bool                   `json:"auto_ban_key"`
 }
 
 type SecurityAlert struct {
@@ -61,8 +73,12 @@ var (
 	compiledRegexps []*regexp.Regexp
 	regexpsMu       sync.Mutex
 
-	acMatchers  map[string]*ahocorasick.Matcher // level -> matcher
-	acDicts     map[string][]string              // level -> keyword list (parallel with matcher)
+	// category -> AC matcher (all enabled levels merged into one dict)
+	acMatchers map[string]*ahocorasick.Matcher
+	// category -> keyword list (parallel with matcher indices)
+	acDicts map[string][]string
+	// category -> level label for each keyword index (so we know which level was hit)
+	acLevelForIdx map[string][]string
 	acBuildMu   sync.Mutex
 )
 
@@ -118,73 +134,115 @@ func rebuildMatchers(cfg *SecurityConfig) {
 	defer acBuildMu.Unlock()
 	acMatchers = make(map[string]*ahocorasick.Matcher)
 	acDicts = make(map[string][]string)
-
-	if cfg.KeywordByLevel == nil || len(cfg.KeywordLevels) == 0 {
-		return
-	}
+	acLevelForIdx = make(map[string][]string)
 
 	enabledLevels := make(map[string]bool)
 	for _, lvl := range cfg.KeywordLevels {
 		enabledLevels[lvl] = true
 	}
 
-	for level, kws := range cfg.KeywordByLevel {
-		if !enabledLevels[level] {
-			continue
+	// If no new category structure, fall back to legacy KeywordByLevel migration
+	if cfg.KeywordByCategory == nil || len(cfg.KeywordByCategory) == 0 {
+		if cfg.KeywordByLevel != nil && len(cfg.KeywordByLevel) > 0 {
+			// Migrate legacy KeywordByLevel to new structure under "sensitive_data"
+			cfg.KeywordByCategory = map[string]map[string][]string{
+				"sensitive_data": cfg.KeywordByLevel,
+			}
+			log.Printf("[INFO] rebuildMatchers: migrated legacy KeywordByLevel to KeywordByCategory")
+		} else {
+			return
 		}
-		if len(kws) == 0 {
-			continue
-		}
+	}
 
-		cleaned := make([]string, 0, len(kws))
-		for _, kw := range kws {
-			if kw == "" {
+	for cat, levelMap := range cfg.KeywordByCategory {
+		allWords := []string{}
+		allLevels := []string{}
+
+		for level, kws := range levelMap {
+			if !enabledLevels[level] {
 				continue
 			}
-			var buf strings.Builder
-			for _, ch := range kw {
-				if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch > 127 {
-					buf.WriteRune(ch)
+			for _, kw := range kws {
+				if kw == "" {
+					continue
+				}
+				var buf strings.Builder
+				for _, ch := range kw {
+					if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch > 127 {
+						buf.WriteRune(ch)
+					}
+				}
+				if buf.Len() > 0 {
+					allWords = append(allWords, buf.String())
+					allLevels = append(allLevels, level)
 				}
 			}
-			if buf.Len() > 0 {
-				cleaned = append(cleaned, buf.String())
-			}
 		}
-		if len(cleaned) == 0 {
+
+		if len(allWords) == 0 {
 			continue
 		}
 
-		matcher := ahocorasick.NewStringMatcher(cleaned)
-		acMatchers[level] = matcher
-		acDicts[level] = cleaned
-		log.Printf("[INFO] AC matcher built for level=%s with %d keywords", level, len(cleaned))
+		matcher := ahocorasick.NewStringMatcher(allWords)
+		acMatchers[cat] = matcher
+		acDicts[cat] = allWords
+		acLevelForIdx[cat] = allLevels
+		log.Printf("[INFO] AC matcher built for category=%s with %d keywords (levels=%v)", cat, len(allWords), cfg.KeywordLevels)
 	}
 }
 
+func normalizeKeywordLevels(levels []string, order []string) []string {
+	set := make(map[string]bool, len(levels))
+	for _, l := range levels {
+		set[l] = true
+	}
+	var result []string
+	for _, l := range order {
+		if set[l] {
+			result = append(result, l)
+		}
+	}
+	for _, l := range levels {
+		if !set[l] {
+			result = append(result, l)
+		}
+	}
+	return result
+}
+
 func rebuildRegexps(keywords []string) {
-	cfg := &SecurityConfig{Keywords: keywords}
+	cfg := &SecurityConfig{
+		Keywords: keywords,
+		KeywordByLevel: map[string][]string{"high": keywords},
+		KeywordByCategory: map[string]map[string][]string{
+			"sensitive_data": {"high": keywords},
+		},
+		KeywordLevels: []string{"critical", "high", "medium", "low"},
+	}
 	rebuildMatchers(cfg)
 }
 
 func defaultSecurityConfig() SecurityConfig {
 	return SecurityConfig{
 		Input: DirectionConfig{
-			Enabled:         true,
-			Mode:            "block",
-			KeywordEnabled:  true,
-			SemanticEnabled: false,
-			VectorEnabled:   false,
+			Enabled:           true,
+			Mode:              "block",
+			KeywordEnabled:    true,
+			KeywordCategories: []string{"pornography", "violence", "politics", "terrorism", "sensitive_data"},
+			SemanticEnabled:   false,
+			VectorEnabled:     false,
 		},
 		Output: DirectionConfig{
-			Enabled:         true,
-			Mode:            "block",
-			KeywordEnabled:  true,
-			SemanticEnabled: false,
-			VectorEnabled:   false,
+			Enabled:           true,
+			Mode:              "block",
+			KeywordEnabled:    true,
+			KeywordCategories: []string{"pornography", "violence", "politics", "terrorism", "sensitive_data"},
+			SemanticEnabled:   false,
+			VectorEnabled:     false,
 		},
-		Keywords:          []string{},
-		BlockMessage:      "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
+		Keywords:       []string{},
+		KeywordLevels:  []string{"critical", "high", "medium", "low"},
+		BlockMessage:   "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
 		SemanticThreshold: 0.8,
 	}
 }
@@ -213,18 +271,53 @@ func dbLoadSecurityConfig() SecurityConfig {
 	if cfg.BlockMessage == "" {
 		cfg.BlockMessage = "抱歉，您的内容涉及敏感信息，已被安全策略拦截。"
 	}
+	allLevels := []string{"critical", "high", "medium", "low"}
+	if cfg.KeywordLevels == nil {
+		cfg.KeywordLevels = allLevels
+	}
 
-	if (cfg.KeywordByLevel == nil || len(cfg.KeywordByLevel) == 0) && len(cfg.Keywords) > 0 {
-		cfg.KeywordByLevel = map[string][]string{
-			"high": cfg.Keywords,
+	if cfg.KeywordByCategory == nil && cfg.KeywordByLevel != nil && len(cfg.KeywordByLevel) > 0 {
+		cfg.KeywordByCategory = map[string]map[string][]string{
+			"sensitive_data": cfg.KeywordByLevel,
 		}
-		cfg.KeywordLevels = []string{"high"}
-		log.Printf("[INFO] dbLoadSecurityConfig: migrated %d flat keywords to KeywordByLevel[\"high\"]", len(cfg.Keywords))
+		log.Printf("[INFO] dbLoadSecurityConfig: migrated KeywordByLevel to KeywordByCategory")
+		cfg.KeywordByLevel = nil
+	}
+
+	if cfg.KeywordByCategory != nil {
+		levelSet := make(map[string]bool, len(cfg.KeywordLevels))
+		for _, l := range cfg.KeywordLevels {
+			levelSet[l] = true
+		}
+		needSave := false
+		for _, levelMap := range cfg.KeywordByCategory {
+			for lvl, kws := range levelMap {
+				if len(kws) > 0 && !levelSet[lvl] {
+					cfg.KeywordLevels = append(cfg.KeywordLevels, lvl)
+					levelSet[lvl] = true
+					needSave = true
+					log.Printf("[INFO] dbLoadSecurityConfig: auto-added keyword_level '%s' (keywords exist)", lvl)
+				}
+			}
+		}
+		if needSave {
+			cfg.KeywordLevels = normalizeKeywordLevels(cfg.KeywordLevels, allLevels)
+			dbSaveSecurityConfig(&cfg)
+			log.Printf("[INFO] dbLoadSecurityConfig: saved updated keyword_levels=%v", cfg.KeywordLevels)
+		}
+	}
+
+	// Set default KeywordCategories if not set (backward compat)
+	if cfg.Input.KeywordCategories == nil || len(cfg.Input.KeywordCategories) == 0 {
+		cfg.Input.KeywordCategories = []string{"sensitive_data"}
+	}
+	if cfg.Output.KeywordCategories == nil || len(cfg.Output.KeywordCategories) == 0 {
+		cfg.Output.KeywordCategories = []string{"sensitive_data"}
 	}
 
 	rebuildMatchers(&cfg)
-	log.Printf("[INFO] dbLoadSecurityConfig: enabled=%v, flat_kw=%d, levels=%v",
-		cfg.Enabled, len(cfg.Keywords), cfg.KeywordLevels)
+	log.Printf("[INFO] dbLoadSecurityConfig: enabled=%v, levels=%v, input_cats=%v, output_cats=%v",
+		cfg.Enabled, cfg.KeywordLevels, cfg.Input.KeywordCategories, cfg.Output.KeywordCategories)
 	return cfg
 }
 
@@ -341,18 +434,22 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 		// ---- Input check ----
 		if cfg.Input.Enabled && inputContent != "" {
 			if cfg.Input.KeywordEnabled {
-				matched, kw := checkKeywordsRegex(inputContent)
+				matched, cat, level, kw := checkKeywords(inputContent)
 				if matched {
-					log.Printf("[SECURITY] input keyword %s: keyword=%s", cfg.Input.Mode, kw)
+					catLabel := keywordCategoryLabels[cat]
+					if catLabel == "" {
+						catLabel = cat
+					}
+					log.Printf("[SECURITY] input keyword %s: cat=%s level=%s keyword=%s", cfg.Input.Mode, cat, level, kw)
 					alert := &SecurityAlert{
 						Timestamp: time.Now(), Direction: "input", Mode: cfg.Input.Mode,
-						TriggerType: "keyword", TriggerDetail: kw,
+						TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
 						ContentPreview: truncate(inputContent, 200), Model: reqModel,
 						APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: cfg.Input.Mode,
 					}
 					dbInsertAlert(alert)
 					if cfg.Input.Mode == "block" {
-						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), fmt.Sprintf("input keyword blocked: %s", kw))
+						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), fmt.Sprintf("input keyword [%s] blocked: %s", cat, kw))
 						sendBlockResponse(w, cfg.BlockMessage)
 						return
 					}
@@ -451,40 +548,46 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(bw, r)
 				defer bw.Release()
 				if bw.statusCode == http.StatusOK && bw.Len() > 0 {
-					// overflow = response exceeded buffer limit, fail-open
 					if bw.overflowed {
-						log.Printf("[WARN] output block: response exceeded buffer limit (%d bytes), fail-open", bw.Len())
-						for k, vs := range bw.Header() {
-							for _, v := range vs {
-								w.Header().Add(k, v)
-							}
+						log.Printf("[WARN] output block: response exceeded buffer limit (%d bytes), fail-closed (blocked)", bw.Len())
+						alert := &SecurityAlert{
+							Timestamp: time.Now(), Direction: "output", Mode: "block",
+							TriggerType: "buffer_overflow", TriggerDetail: "响应超过缓冲区限制",
+							ContentPreview: "", Model: reqModel,
+							APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "block",
 						}
-						w.WriteHeader(bw.statusCode)
-						w.Write(bw.Bytes())
+						dbInsertAlert(alert)
+						w.Header().Set("Content-Type", "application/json")
+						w.Header().Set("X-Security-Block", "output")
+						json.NewEncoder(w).Encode(buildBlockChatResponse(cfg.BlockMessage, nil))
 						return
 					}
 					var resp map[string]interface{}
 					if sonic.Unmarshal(bw.Bytes(), &resp) == nil {
-						outputContent := extractContentFromResponse(resp)
-						if outputContent != "" {
-							blocked := false
-							if cfg.Output.KeywordEnabled {
-								matched, kw := checkKeywordsRegex(outputContent)
-								if matched {
-									log.Printf("[SECURITY] output keyword block: keyword=%s", kw)
-									alert := &SecurityAlert{
-										Timestamp: time.Now(), Direction: "output", Mode: "block",
-										TriggerType: "keyword", TriggerDetail: kw,
-										ContentPreview: truncate(outputContent, 200), Model: reqModel,
-										APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "replace",
-									}
-									dbInsertAlert(alert)
-									w.Header().Set("Content-Type", "application/json")
-									w.Header().Set("X-Security-Block", "output")
-									json.NewEncoder(w).Encode(buildBlockChatResponse(cfg.BlockMessage, resp))
-									blocked = true
+					outputContent := extractContentFromResponse(resp)
+					if outputContent != "" {
+						blocked := false
+						if cfg.Output.KeywordEnabled {
+							matched, cat, level, kw := checkKeywords(outputContent)
+							if matched {
+								catLabel := keywordCategoryLabels[cat]
+								if catLabel == "" {
+									catLabel = cat
 								}
+								log.Printf("[SECURITY] output keyword block: cat=%s level=%s keyword=%s", cat, level, kw)
+								alert := &SecurityAlert{
+									Timestamp: time.Now(), Direction: "output", Mode: "block",
+									TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
+									ContentPreview: truncate(outputContent, 200), Model: reqModel,
+									APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "replace",
+								}
+								dbInsertAlert(alert)
+								w.Header().Set("Content-Type", "application/json")
+								w.Header().Set("X-Security-Block", "output")
+								json.NewEncoder(w).Encode(buildBlockChatResponse(cfg.BlockMessage, resp))
+								blocked = true
 							}
+						}
 							if !blocked && cfg.Output.SemanticEnabled && cfg.SemanticModel != "" {
 								sr, serr := p.semanticCheck(outputContent, cfg)
 								if serr == nil && sr != nil {
@@ -606,12 +709,16 @@ func (p *ProxyServer) asyncInputSemanticCheck(content, model, apiKey, clientIP s
 
 func (p *ProxyServer) asyncOutputCheck(content, model, apiKey, clientIP string, cfg SecurityConfig) {
 	if cfg.Output.KeywordEnabled {
-		matched, kw := checkKeywordsRegex(content)
+		matched, cat, level, kw := checkKeywords(content)
 		if matched {
-			log.Printf("[SECURITY] async output keyword detect: keyword=%s", kw)
+			catLabel := keywordCategoryLabels[cat]
+			if catLabel == "" {
+				catLabel = cat
+			}
+			log.Printf("[SECURITY] async output keyword detect: cat=%s level=%s keyword=%s", cat, level, kw)
 			alert := &SecurityAlert{
 				Timestamp: time.Now(), Direction: "output", Mode: "detect",
-				TriggerType: "keyword", TriggerDetail: kw,
+				TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
 				ContentPreview: truncate(content, 200), Model: model,
 				APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
 			}
@@ -829,12 +936,16 @@ func (w *slidingWindowWriter) Write(b []byte) (int, error) {
 			checkText = combined
 		}
 		if checkText != "" {
-			matched, kw := checkKeywordsRegex(checkText)
+			matched, cat, level, kw := checkKeywords(checkText)
 			if matched {
-				log.Printf("[SECURITY] stream output keyword block: keyword=%s", kw)
+				catLabel := keywordCategoryLabels[cat]
+				if catLabel == "" {
+					catLabel = cat
+				}
+				log.Printf("[SECURITY] stream output keyword block: cat=%s level=%s keyword=%s", cat, level, kw)
 				alert := &SecurityAlert{
 					Timestamp: time.Now(), Direction: "output", Mode: "block",
-					TriggerType: "keyword", TriggerDetail: kw,
+					TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
 					ContentPreview: truncate(text, 200), Model: w.reqModel,
 					APIKeyUsed: w.apiKey, ClientIP: w.clientIP, Action: "abort",
 				}
@@ -913,23 +1024,44 @@ func extractStreamText(data []byte) string {
 
 // ==================== Keyword Matching ====================
 
-func checkKeywordsRegex(content string) (bool, string) {
+// checkKeywords checks content against AC automatons (category-based) or legacy regex.
+// Returns: matched, category, level, keyword
+func normalizeContent(content string) string {
+	var buf strings.Builder
+	buf.Grow(len(content))
+	for _, ch := range content {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch > 127 {
+			buf.WriteRune(ch)
+		}
+	}
+	return buf.String()
+}
+
+func checkKeywords(content string) (bool, string, string, string) {
 	acBuildMu.Lock()
 	hasAC := len(acMatchers) > 0
 	matcherMap := acMatchers
 	dictMap := acDicts
+	levelIdxMap := acLevelForIdx
 	acBuildMu.Unlock()
 
 	if hasAC {
-		for level, matcher := range matcherMap {
-			dict := dictMap[level]
-			hits := matcher.Match([]byte(content))
+		normalized := normalizeContent(content)
+		for cat, matcher := range matcherMap {
+			dict := dictMap[cat]
+			levels := levelIdxMap[cat]
+			hits := matcher.Match([]byte(normalized))
 			if len(hits) > 0 {
-				kw := dict[hits[0]]
-				return true, kw
+				idx := hits[0]
+				kw := dict[idx]
+				level := "high"
+				if idx < len(levels) {
+					level = levels[idx]
+				}
+				return true, cat, level, kw
 			}
 		}
-		return false, ""
+		return false, "", "", ""
 	}
 
 	regexpsMu.Lock()
@@ -937,10 +1069,16 @@ func checkKeywordsRegex(content string) (bool, string) {
 	regexpsMu.Unlock()
 	for _, re := range regexps {
 		if re.MatchString(content) {
-			return true, re.String()
+			return true, "sensitive_data", "high", re.String()
 		}
 	}
-	return false, ""
+	return false, "", "", ""
+}
+
+// Legacy wrapper for backward compat
+func checkKeywordsRegex(content string) (bool, string) {
+	matched, _, _, kw := checkKeywords(content)
+	return matched, kw
 }
 
 // ==================== Semantic Check ====================
@@ -1252,6 +1390,15 @@ func (p *ProxyServer) handleUpdateSecurityConfig(w http.ResponseWriter, r *http.
 	}
 	if cfg.BlockMessage == "" {
 		cfg.BlockMessage = "抱歉，您的内容涉及敏感信息，已被安全策略拦截。"
+	}
+	if cfg.KeywordLevels == nil {
+		cfg.KeywordLevels = []string{"high"}
+	}
+	if cfg.Input.KeywordCategories == nil || len(cfg.Input.KeywordCategories) == 0 {
+		cfg.Input.KeywordCategories = keywordCategories
+	}
+	if cfg.Output.KeywordCategories == nil || len(cfg.Output.KeywordCategories) == 0 {
+		cfg.Output.KeywordCategories = keywordCategories
 	}
 	secConfigMu.Lock()
 	secConfig = cfg

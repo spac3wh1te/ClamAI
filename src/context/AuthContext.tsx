@@ -50,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const data = await invoke<string>("get_auth_status");
       const status = JSON.parse(data);
+      console.log("[AuthContext] checkStatus result:", { initialized: status.initialized, mode: status.mode });
       setInitialized(status.initialized);
       setMode(status.mode);
       setRegistrationOpen(status.registration_open === true);
@@ -61,7 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (e) {
-      console.error("Failed to check auth status:", e);
+      console.error("[AuthContext] checkStatus FAILED:", e);
       setIsInitialized(true);
     }
   };
@@ -114,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    invoke("logout").catch(console.error);
     setToken(null);
     localStorage.removeItem("clamai_token");
   }, []);

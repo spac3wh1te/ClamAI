@@ -246,13 +246,24 @@ func doProxy(w http.ResponseWriter, proxyReq *http.Request) {
 	client := getSharedClient()
 	resp, err := client.Do(proxyReq)
 	if err != nil {
-		http.Error(w, "Failed to send request: "+err.Error(), http.StatusBadGateway)
+		openAIError(w, "Failed to send request: "+err.Error(), http.StatusBadGateway, "bad_gateway")
 		return
 	}
 	defer resp.Body.Close()
 
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
+
+	if resp.StatusCode >= 400 {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			openAIError(w, "Failed to read error response", http.StatusBadGateway, "bad_gateway")
+			return
+		}
+		wrapped := wrapError(body, resp.StatusCode)
+		w.Write(wrapped)
+		return
+	}
 
 	if resp.Header.Get("Content-Type") == "text/event-stream" {
 		handleStreamingResponse(w, resp.Body)
@@ -265,6 +276,55 @@ func doProxy(w http.ResponseWriter, proxyReq *http.Request) {
 		normalizedBody := normalizeResponse(body)
 		w.Write(normalizedBody)
 	}
+}
+
+func openAIError(w http.ResponseWriter, message string, status int, errType string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	resp := map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": message,
+			"type":    errType,
+			"code":    status,
+		},
+	}
+	if body, err := json.Marshal(resp); err == nil {
+		w.Write(body)
+	}
+}
+
+func wrapError(body []byte, status int) []byte {
+	var resp map[string]interface{}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return body
+	}
+	if _, ok := resp["error"]; ok {
+		return body
+	}
+	wrapped := map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": fmt.Sprintf("Upstream error (HTTP %d)", status),
+			"type":    "upstream_error",
+			"code":    status,
+			"internal": resp,
+		},
+	}
+	if errMsg, ok := resp["error"].(string); ok {
+		wrapped["error"].(map[string]interface{})["message"] = errMsg
+	}
+	if errObj, ok := resp["error"].(map[string]interface{}); ok {
+		if msg, ok := errObj["message"].(string); ok {
+			wrapped["error"].(map[string]interface{})["message"] = msg
+		}
+		if t, ok := errObj["type"].(string); ok {
+			wrapped["error"].(map[string]interface{})["type"] = t
+		}
+		if code, ok := errObj["code"].(string); ok {
+			wrapped["error"].(map[string]interface{})["code"] = code
+		}
+	}
+	result, _ := json.Marshal(wrapped)
+	return result
 }
 
 func proxyOpenAIRequest(baseURL, apiKey string) func(http.ResponseWriter, *http.Request) {

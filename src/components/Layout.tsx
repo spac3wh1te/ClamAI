@@ -28,7 +28,7 @@ function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const { logout } = useAuth();
   const { connected, deployMode } = useSetup();
-  const { isAdmin } = useCurrentUser();
+  const { isAdmin, currentUser } = useCurrentUser();
 
   const navigation = [
     { name: "仪表盘", href: "/", icon: LayoutDashboard },
@@ -36,10 +36,14 @@ function Layout({ children }: LayoutProps) {
     { name: "模型管理", href: "/models", icon: Layers },
     { name: "API密钥", href: "/api-keys", icon: Key },
     { name: "调用记录", href: "/logs", icon: FileText },
-    { name: "安全广场", href: "/security-square", icon: Shield },
-    { name: "安全防护", href: "/security", icon: Shield },
-    { name: "模型限流", href: "/rate-limit", icon: Gauge },
-    ...(isAdmin ? [{ name: "用户管理", href: "/users", icon: Users }] : []),
+    ...(isAdmin
+      ? [
+          { name: "安全广场", href: "/security-square", icon: Shield },
+          { name: "安全防护", href: "/security", icon: Shield },
+          { name: "模型限流", href: "/rate-limit", icon: Gauge },
+          { name: "用户管理", href: "/users", icon: Users },
+        ]
+      : []),
     { name: "基本设置", href: "/settings", icon: Settings },
   ];
 
@@ -89,9 +93,18 @@ function Layout({ children }: LayoutProps) {
 
         {sidebarOpen && (
           <div className="p-4 border-t border-border space-y-2">
-            <div className="text-sm text-muted-foreground">
-              <p>ClamAI v1.0.0</p>
-              <p className="text-xs mt-1">智能大模型网关</p>
+            <div className="text-sm">
+              <p className="text-muted-foreground">ClamAI v1.0.0</p>
+              <p className="text-xs mt-1 text-muted-foreground">智能大模型网关</p>
+              {currentUser && (
+                <div className="mt-2 px-2 py-1 bg-secondary rounded text-xs">
+                  <span className="text-muted-foreground">当前用户：</span>
+                  <span className="font-medium">{currentUser.displayName || currentUser.username}</span>
+                  <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${isAdmin ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                    {isAdmin ? '管理员' : '普通用户'}
+                  </span>
+                </div>
+              )}
             </div>
             <button
               onClick={logout}

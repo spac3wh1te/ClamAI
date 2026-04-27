@@ -35,13 +35,15 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
 
   const checkSetup = useCallback(async () => {
     try {
+      console.log("[SetupContext] checkSetup() called");
       const state = await invoke<SetupState>("get_setup_state");
+      console.log("[SetupContext] get_setup_state result:", JSON.stringify(state));
       setSetupComplete(state.setup_complete);
       setDeployMode(state.deploy_mode);
       setServiceUrl(state.service_url);
       setConnected(state.connected);
     } catch (e) {
-      console.error("Failed to check setup state:", e);
+      console.error("[SetupContext] get_setup_state FAILED:", e);
       setConnected(false);
       setSetupComplete(false);
     } finally {

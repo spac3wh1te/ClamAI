@@ -6,10 +6,74 @@ use crate::oauth::{OAuthCallback, OAuthState};
 use crate::services::ServiceStatus;
 use serde::{Deserialize, Serialize};
 
+fn extract_role_from_token(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let payload = parts[1];
+    let mut buf = String::from(payload);
+    while buf.len() % 4 != 0 {
+        buf.push('=');
+    }
+    let input = buf.replace('-', "+").replace('_', "/");
+    if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &input) {
+        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decoded) {
+            return json.get("role").and_then(|v| v.as_str()).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+fn extract_user_id_from_token(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let payload = parts[1];
+    let mut buf = String::from(payload);
+    while buf.len() % 4 != 0 {
+        buf.push('=');
+    }
+    let input = buf.replace('-', "+").replace('_', "/");
+    if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &input) {
+        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decoded) {
+            return json.get("user_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+async fn is_current_user_admin(state: &tauri::State<'_, AppState>) -> bool {
+    let store = state.token_store.lock().await;
+    if let Some(tokens) = &store.tokens {
+        if let Some(role) = extract_role_from_token(&tokens.access_token) {
+            tracing::info!("[is_current_user_admin] token found, role={}", role);
+            return role == "admin";
+        }
+        tracing::warn!("[is_current_user_admin] token exists but role extraction failed");
+    } else {
+        tracing::warn!("[is_current_user_admin] no token in store");
+    }
+    false
+}
+
+async fn get_current_user_id(state: &tauri::State<'_, AppState>) -> Option<String> {
+    let store = state.token_store.lock().await;
+    if let Some(tokens) = &store.tokens {
+        let uid = extract_user_id_from_token(&tokens.access_token);
+        tracing::info!("[get_current_user_id] user_id={:?}", uid);
+        return uid;
+    }
+    tracing::warn!("[get_current_user_id] no token in store");
+    None
+}
+
 // ==================== 配置管理命令 ====================
 
 #[tauri::command]
 pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<crate::config::AppConfig, String> {
+    tracing::info!("[get_config] called");
     Ok(state.config_manager.lock().await.get_config())
 }
 
@@ -18,6 +82,7 @@ pub async fn save_config(
     state: tauri::State<'_, AppState>,
     config: crate::config::AppConfig,
 ) -> Result<(), String> {
+    tracing::info!("[save_config] called");
     let mut manager = state.config_manager.lock().await;
     let mut merged = config;
     merged.active_profile = manager.get_active_profile().to_string();
@@ -76,6 +141,7 @@ pub struct ProfileInfo {
 
 #[tauri::command]
 pub async fn list_profiles(state: tauri::State<'_, AppState>) -> Result<Vec<ProfileInfo>, String> {
+    tracing::info!("[list_profiles] called");
     let manager = state.config_manager.lock().await;
     let active = manager.get_active_profile().to_string();
     let profiles = manager.list_profiles();
@@ -95,6 +161,7 @@ pub async fn save_current_as_profile(
     profile_id: String,
     display_name: String,
 ) -> Result<(), String> {
+    tracing::info!("[save_current_as_profile] called, id={}", profile_id);
     let mut manager = state.config_manager.lock().await;
     manager
         .save_current_as_profile(profile_id, display_name)
@@ -107,6 +174,7 @@ pub async fn load_profile(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<(), String> {
+    tracing::info!("[load_profile] called, id={}", profile_id);
     {
         let mut manager = state.config_manager.lock().await;
         manager.load_profile(&profile_id).await.map_err(|e| e.to_string())?;
@@ -120,6 +188,7 @@ pub async fn delete_profile(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<(), String> {
+    tracing::info!("[delete_profile] called, id={}", profile_id);
     let mut manager = state.config_manager.lock().await;
     manager.delete_profile(&profile_id).await.map_err(|e| e.to_string())
 }
@@ -130,6 +199,7 @@ pub async fn rename_profile(
     profile_id: String,
     new_name: String,
 ) -> Result<(), String> {
+    tracing::info!("[rename_profile] called, id={}", profile_id);
     let mut manager = state.config_manager.lock().await;
     manager.rename_profile(&profile_id, new_name).await.map_err(|e| e.to_string())
 }
@@ -138,8 +208,16 @@ pub async fn rename_profile(
 
 #[tauri::command]
 pub async fn get_providers(state: tauri::State<'_, AppState>) -> Result<Vec<ProviderConfig>, String> {
+    let is_admin = is_current_user_admin(&state).await;
+    let user_id = get_current_user_id(&state).await;
     let manager = state.config_manager.lock().await;
-    Ok(manager.get_providers())
+    let providers = manager.get_providers();
+    if is_admin {
+        return Ok(providers);
+    }
+    Ok(providers.into_iter().filter(|p| {
+        p.created_by.is_empty() || p.created_by == user_id.clone().unwrap_or_default()
+    }).collect())
 }
 
 #[tauri::command]
@@ -147,14 +225,53 @@ pub async fn add_provider(
     state: tauri::State<'_, AppState>,
     provider: ProviderConfig,
 ) -> Result<(), String> {
+    tracing::info!("[add_provider] STEP1: called, id={}, name={}, type={:?}", provider.id, provider.name, provider.provider_type);
+    let is_admin = is_current_user_admin(&state).await;
+    tracing::info!("[add_provider] STEP2: is_admin={}", is_admin);
+    let user_id = get_current_user_id(&state).await;
+    tracing::info!("[add_provider] STEP3: user_id={:?}", user_id);
+    if !is_admin {
+        if user_id.is_none() {
+            tracing::error!("[add_provider] REJECTED: not admin and no user_id");
+            return Err("用户未登录".to_string());
+        }
+    }
+    let mut provider = provider;
+    if !is_admin {
+        provider.created_by = user_id.unwrap_or_default();
+    }
+    tracing::info!("[add_provider] STEP4: auth passed, locking config_manager...");
     let mut manager = state.config_manager.lock().await;
-    manager.add_provider(provider).await.map_err(|e| e.to_string())
+    tracing::info!("[add_provider] STEP5: config_manager locked, adding provider...");
+    manager.add_provider(provider).await.map_err(|e| {
+        tracing::error!("[add_provider] FAILED: {}", e);
+        e.to_string()
+    })?;
+    tracing::info!("[add_provider] STEP6: provider added successfully");
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn remove_provider(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
-    let mut manager = state.config_manager.lock().await;
-    manager.remove_provider(&id).await.map_err(|e| e.to_string())
+    tracing::info!("[remove_provider] called, id={}", id);
+    let is_admin = is_current_user_admin(&state).await;
+    if is_admin {
+        let mut manager = state.config_manager.lock().await;
+        manager.remove_provider(&id).await.map_err(|e| e.to_string())
+    } else {
+        let user_id = get_current_user_id(&state).await;
+        if user_id.is_none() {
+            return Err("用户未登录".to_string());
+        }
+        let mut manager = state.config_manager.lock().await;
+        let providers = manager.get_providers();
+        if let Some(p) = providers.iter().find(|p| p.id == id) {
+            if p.created_by != user_id.clone().unwrap_or_default() {
+                return Err("只能删除自己创建的提供商".to_string());
+            }
+        }
+        manager.remove_provider(&id).await.map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -162,8 +279,25 @@ pub async fn update_provider(
     state: tauri::State<'_, AppState>,
     provider: ProviderConfig,
 ) -> Result<(), String> {
-    let mut manager = state.config_manager.lock().await;
-    manager.update_provider(provider).await.map_err(|e| e.to_string())
+    tracing::info!("[update_provider] called, id={}, name={}", provider.id, provider.name);
+    let is_admin = is_current_user_admin(&state).await;
+    if is_admin {
+        let mut manager = state.config_manager.lock().await;
+        manager.update_provider(provider).await.map_err(|e| e.to_string())
+    } else {
+        let user_id = get_current_user_id(&state).await;
+        if user_id.is_none() {
+            return Err("用户未登录".to_string());
+        }
+        let mut manager = state.config_manager.lock().await;
+        let providers = manager.get_providers();
+        if let Some(p) = providers.iter().find(|p| p.id == provider.id) {
+            if p.created_by != user_id.clone().unwrap_or_default() {
+                return Err("只能修改自己创建的提供商".to_string());
+            }
+        }
+        manager.update_provider(provider).await.map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -173,6 +307,7 @@ pub async fn toggle_model(
     model_name: String,
     enabled: bool,
 ) -> Result<(), String> {
+    tracing::info!("[toggle_model] called, provider_id={}, model={}, enabled={}", provider_id, model_name, enabled);
     let mut manager = state.config_manager.lock().await;
     let mut provider = manager.get_provider(&provider_id)
         .ok_or_else(|| format!("提供商 {} 不存在", provider_id))?;
@@ -195,6 +330,7 @@ pub async fn test_provider(
     state: tauri::State<'_, AppState>,
     provider_id: String,
 ) -> Result<TestProviderResult, String> {
+    tracing::info!("[test_provider] called, provider_id={}", provider_id);
     let manager = state.config_manager.lock().await;
     let provider = manager.get_provider(&provider_id)
         .ok_or_else(|| format!("提供商 {} 不存在", provider_id))?;
@@ -293,6 +429,7 @@ pub async fn fetch_provider_models(
     state: tauri::State<'_, AppState>,
     provider_id: String,
 ) -> Result<Vec<String>, String> {
+    tracing::info!("[fetch_provider_models] called, provider_id={}", provider_id);
     let manager = state.config_manager.lock().await;
     let provider = manager.get_provider(&provider_id)
         .ok_or_else(|| format!("提供商 {} 不存在", provider_id))?;
@@ -556,6 +693,7 @@ pub async fn get_alert_stats(
     state: tauri::State<'_, AppState>,
     period: u32,
 ) -> Result<AlertStats, String> {
+    tracing::info!("[get_alert_stats] called, period={}", period);
     let (url, auth) = get_proxy_url(&state, &format!("stats/alerts?period={}", period)).await.map_err(|e| e.to_string())?;
     let client = https_client()?;
     let mut req = client.get(&url)
@@ -590,6 +728,7 @@ pub async fn check_content_safety(
     state: tauri::State<'_, AppState>,
     content: String,
 ) -> Result<ContentSafetyResult, String> {
+    tracing::info!("[check_content_safety] called");
     let (url, auth) = get_proxy_url(&state, "security/check").await.map_err(|e| e.to_string())?;
     let client = https_client()?;
     let mut req = client.post(&url)
@@ -669,6 +808,7 @@ pub async fn get_request_logs(
     limit: usize,
     _offset: usize,
 ) -> Result<Vec<RequestLog>, String> {
+    tracing::info!("[get_request_logs] called, page={}, per_page={}", limit, _offset);
     let (url, auth) = get_proxy_url(&state, &format!("stats/logs?limit={}", limit)).await?;
     tracing::debug!("get_request_logs: url={}, has_auth={}, limit={}", url, auth.is_some(), limit);
     let client = https_client()?;
@@ -723,6 +863,7 @@ pub async fn export_logs(
     _start_date: String,
     _end_date: String,
 ) -> Result<String, String> {
+    tracing::info!("[export_logs] called");
     let (url, auth) = get_proxy_url(&state, &format!("stats/logs?limit=10000")).await?;
     let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(30));
@@ -1020,6 +1161,7 @@ async fn proxy_request(state: &tauri::State<'_, AppState>, method: &str, path: &
 
 #[tauri::command]
 pub async fn list_api_keys(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    tracing::info!("[list_api_keys] called");
     let (url, auth) = get_proxy_url(&state, "keys").await?;
     tracing::debug!("list_api_keys: url={}, has_auth={}", url, auth.is_some());
     let client = https_client()?;
@@ -1042,6 +1184,7 @@ pub async fn list_api_keys(state: tauri::State<'_, AppState>) -> Result<serde_js
 
 #[tauri::command]
 pub async fn create_api_key(state: tauri::State<'_, AppState>, name: String, allowed_models: Vec<String>) -> Result<serde_json::Value, String> {
+    tracing::info!("[create_api_key] called, name={}", name);
     let (url, auth) = get_proxy_url(&state, "keys").await?;
     tracing::debug!("create_api_key: url={}, has_auth={}, name={}, allowed_models={:?}", url, auth.is_some(), name, allowed_models);
     let client = https_client()?;
@@ -1067,6 +1210,7 @@ pub async fn create_api_key(state: tauri::State<'_, AppState>, name: String, all
 
 #[tauri::command]
 pub async fn update_api_key(state: tauri::State<'_, AppState>, id: String, allowed_models: Vec<String>) -> Result<(), String> {
+    tracing::info!("[update_api_key] called, id={}", id);
     let (url, auth) = get_proxy_url(&state, &format!("keys/{}", id)).await?;
     tracing::debug!("update_api_key: url={}, id={}, allowed_models={:?}", url, id, allowed_models);
     let client = https_client()?;
@@ -1088,6 +1232,7 @@ pub async fn update_api_key(state: tauri::State<'_, AppState>, id: String, allow
 
 #[tauri::command]
 pub async fn delete_api_key(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    tracing::info!("[delete_api_key] called, id={}", id);
     let (url, auth) = get_proxy_url(&state, &format!("keys/{}", id)).await?;
     tracing::debug!("delete_api_key: url={}, has_auth={}, id={}", url, auth.is_some(), id);
     let client = https_client()?;
@@ -1107,6 +1252,7 @@ pub async fn delete_api_key(state: tauri::State<'_, AppState>, id: String) -> Re
 
 #[tauri::command]
 pub async fn get_api_key(state: tauri::State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    tracing::info!("[get_api_key] called, id={}", id);
     let (url, auth) = get_proxy_url(&state, &format!("keys/{}/reveal", id)).await?;
     tracing::debug!("get_api_key: url={}, has_auth={}, id={}", url, auth.is_some(), id);
     let client = https_client()?;
@@ -1127,6 +1273,7 @@ pub async fn get_api_key(state: tauri::State<'_, AppState>, id: String) -> Resul
 
 #[tauri::command]
 pub async fn sync_provider_key(state: tauri::State<'_, AppState>, provider_name: String, api_key: String) -> Result<(), String> {
+    tracing::info!("[sync_provider_key] called, provider={}", provider_name);
     let (url, auth) = get_proxy_url(&state, &format!("providers/{}/key", provider_name)).await?;
     tracing::debug!("sync_provider_key: url={}, has_auth={}, provider={}", url, auth.is_some(), provider_name);
     let client = https_client()?;
@@ -1224,6 +1371,7 @@ pub async fn test_chat_request(
     message: String,
     provider_type: String,
 ) -> Result<TestResult, String> {
+    tracing::info!("[test_chat_request] called");
     let model_type = detect_model_type(&model);
     let start = std::time::Instant::now();
 
@@ -1606,6 +1754,7 @@ pub struct ModelInfo {
 
 #[tauri::command]
 pub async fn get_proxy_models_with_info(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
+    tracing::info!("[get_proxy_models_with_info] called");
     let config = state.config_manager.lock().await.get_config();
     if config.service.deploy_mode == DeployMode::Server {
         let remote_proxy = config.service.remote_proxy_url.clone()
@@ -1770,6 +1919,7 @@ pub async fn save_security_config(state: tauri::State<'_, AppState>, payload: St
 
 #[tauri::command]
 pub async fn get_security_alerts(state: tauri::State<'_, AppState>, limit: Option<u32>, offset: Option<u32>) -> Result<String, String> {
+    tracing::info!("[get_security_alerts] called");
     let l = limit.unwrap_or(50);
     let o = offset.unwrap_or(0);
     let (url, auth) = get_proxy_url(&state, &format!("security/alerts?limit={}&offset={}", l, o)).await?;
@@ -1784,6 +1934,7 @@ pub async fn get_security_alerts(state: tauri::State<'_, AppState>, limit: Optio
 
 #[tauri::command]
 pub async fn resolve_security_alert(state: tauri::State<'_, AppState>, id: u64) -> Result<String, String> {
+    tracing::info!("[resolve_security_alert] called, id={}", id);
     let (url, auth) = get_proxy_url(&state, &format!("security/alerts/{}/resolve", id)).await?;
     let client = https_client()?;
     let mut req = client.put(&url).timeout(std::time::Duration::from_secs(5));
@@ -1798,6 +1949,7 @@ pub async fn resolve_security_alert(state: tauri::State<'_, AppState>, id: u64) 
 
 #[tauri::command]
 pub async fn get_vector_samples(state: tauri::State<'_, AppState>, limit: Option<u32>, offset: Option<u32>) -> Result<String, String> {
+    tracing::info!("[get_vector_samples] called");
     let l = limit.unwrap_or(50);
     let o = offset.unwrap_or(0);
     let (url, auth) = get_proxy_url(&state, &format!("security/vector/samples?limit={}&offset={}", l, o)).await?;
@@ -1812,6 +1964,7 @@ pub async fn get_vector_samples(state: tauri::State<'_, AppState>, limit: Option
 
 #[tauri::command]
 pub async fn add_vector_sample(state: tauri::State<'_, AppState>, content: String, category: String, source: String) -> Result<String, String> {
+    tracing::info!("[add_vector_sample] called");
     let (url, auth) = get_proxy_url(&state, "security/vector/samples").await?;
     let client = https_client()?;
     let mut req = client.post(&url)
@@ -1830,6 +1983,7 @@ pub async fn add_vector_sample(state: tauri::State<'_, AppState>, content: Strin
 
 #[tauri::command]
 pub async fn delete_vector_sample(state: tauri::State<'_, AppState>, id: u64) -> Result<String, String> {
+    tracing::info!("[delete_vector_sample] called, id={}", id);
     let (url, auth) = get_proxy_url(&state, &format!("security/vector/samples/{}", id)).await?;
     let client = https_client()?;
     let mut req = client.delete(&url).timeout(std::time::Duration::from_secs(5));
@@ -1842,6 +1996,7 @@ pub async fn delete_vector_sample(state: tauri::State<'_, AppState>, id: u64) ->
 
 #[tauri::command]
 pub async fn get_vector_config(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[get_vector_config] called");
     let (url, auth) = get_proxy_url(&state, "security/vector/config").await?;
     let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
@@ -1856,6 +2011,7 @@ pub async fn get_vector_config(state: tauri::State<'_, AppState>) -> Result<Stri
 
 #[tauri::command]
 pub async fn get_caller_top10(state: tauri::State<'_, AppState>, period: Option<u32>) -> Result<String, String> {
+    tracing::info!("[get_caller_top10] called, period={:?}", period);
     let p = period.unwrap_or(60 * 24 * 7);
     let (url, auth) = get_proxy_url(&state, &format!("stats/callers?period={}", p)).await?;
     let client = https_client()?;
@@ -1869,6 +2025,7 @@ pub async fn get_caller_top10(state: tauri::State<'_, AppState>, period: Option<
 
 #[tauri::command]
 pub async fn get_security_token_stats(state: tauri::State<'_, AppState>, period: Option<u32>) -> Result<String, String> {
+    tracing::info!("[get_security_token_stats] called, period={:?}", period);
     let p = period.unwrap_or(60 * 24 * 7);
     let (url, auth) = get_proxy_url(&state, &format!("stats/security-tokens?period={}", p)).await?;
     let client = https_client()?;
@@ -1893,6 +2050,7 @@ async fn get_admin_base_url(state: &tauri::State<'_, AppState>) -> Result<String
 
 #[tauri::command]
 pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[get_auth_status] called");
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/status", base_url);
     let client = https_client_for_url(&url)?;
@@ -1904,8 +2062,10 @@ pub async fn get_auth_status(state: tauri::State<'_, AppState>) -> Result<String
 pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/setup", base_url);
+    tracing::info!("[setup_admin] Calling POST {}", url);
     let client = https_client_for_url(&url)?;
     let (_, body) = send_and_log_full("POST", &url, client.post(&url).timeout(std::time::Duration::from_secs(5)).json(&serde_json::json!({"username": username, "password": password}))).await?;
+    tracing::info!("[setup_admin] Response body (first 200 chars): {}", &body[..body.len().min(200)]);
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
         if let (Some(at), Some(rt), Some(ei)) = (
@@ -1927,7 +2087,15 @@ pub async fn setup_admin(state: tauri::State<'_, AppState>, username: String, pa
 }
 
 #[tauri::command]
+pub async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut store = state.token_store.lock().await;
+    store.tokens = None;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, password: String) -> Result<String, String> {
+    tracing::info!("[login_admin] called, username={}", username);
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/login", base_url);
     let client = https_client_for_url(&url)?;
@@ -1954,6 +2122,7 @@ pub async fn login_admin(state: tauri::State<'_, AppState>, username: String, pa
 
 #[tauri::command]
 pub async fn change_admin_password(state: tauri::State<'_, AppState>, old_password: String, new_password: String) -> Result<String, String> {
+    tracing::info!("[change_admin_password] called");
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/change-password", base_url);
     let client = https_client_for_url(&url)?;
@@ -1963,6 +2132,7 @@ pub async fn change_admin_password(state: tauri::State<'_, AppState>, old_passwo
 
 #[tauri::command]
 pub async fn get_admin_token(state: tauri::State<'_, AppState>, password: String) -> Result<String, String> {
+    tracing::info!("[get_admin_token] called");
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/token", base_url);
     let client = https_client_for_url(&url)?;
@@ -1991,6 +2161,7 @@ pub async fn get_admin_token(state: tauri::State<'_, AppState>, password: String
 
 #[tauri::command]
 pub async fn get_ratelimit_config(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[get_ratelimit_config] called");
     let (url, auth) = get_proxy_url(&state, "ratelimit/config").await?;
     let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
@@ -2003,6 +2174,7 @@ pub async fn get_ratelimit_config(state: tauri::State<'_, AppState>) -> Result<S
 
 #[tauri::command]
 pub async fn save_ratelimit_config(state: tauri::State<'_, AppState>, payload: String) -> Result<String, String> {
+    tracing::info!("[save_ratelimit_config] called");
     let (url, auth) = get_proxy_url(&state, "ratelimit/config").await?;
     let client = https_client()?;
     let config_value: serde_json::Value = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
@@ -2212,6 +2384,7 @@ pub async fn get_skills_detection_history(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<String, String> {
+    tracing::info!("[get_skills_detection_history] called");
     let l = limit.unwrap_or(50);
     let o = offset.unwrap_or(0);
     let (url, auth) = get_proxy_url(&state, &format!("skills/history?limit={}&offset={}", l, o)).await?;
@@ -2230,6 +2403,7 @@ pub async fn get_profile_analysis_history(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<String, String> {
+    tracing::info!("[get_profile_analysis_history] called");
     let l = limit.unwrap_or(50);
     let o = offset.unwrap_or(0);
     let (url, auth) = get_proxy_url(&state, &format!("profile/history?limit={}&offset={}", l, o)).await?;
@@ -2254,6 +2428,7 @@ pub async fn create_analysis_task(
     schedule_type: Option<String>,
     interval_minutes: Option<u32>,
 ) -> Result<String, String> {
+    tracing::info!("[create_analysis_task] called, name={}", name);
     let (url, auth) = get_proxy_url(&state, "analysis/tasks").await?;
     let client = https_client()?;
     let body = serde_json::json!({
@@ -2264,10 +2439,13 @@ pub async fn create_analysis_task(
         "schedule_type": schedule_type.unwrap_or_else(|| "once".to_string()),
         "interval_minutes": interval_minutes.unwrap_or(60),
     });
-    let req = client.post(&url)
+    let mut req = client.post(&url)
         .timeout(std::time::Duration::from_secs(10))
         .header("Content-Type", "application/json")
         .body(body.to_string());
+    if let Some(key) = auth {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
     let (status, resp_body) = send_and_log_full("POST", &url, req).await?;
     if status >= 400 {
         return Err(format!("API error {}: {}", status, resp_body));
@@ -2277,6 +2455,7 @@ pub async fn create_analysis_task(
 
 #[tauri::command]
 pub async fn list_analysis_tasks(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[list_analysis_tasks] called");
     let (url, auth) = get_proxy_url(&state, "analysis/tasks").await?;
     let client = https_client()?;
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
@@ -2289,6 +2468,7 @@ pub async fn list_analysis_tasks(state: tauri::State<'_, AppState>) -> Result<St
 
 #[tauri::command]
 pub async fn delete_analysis_task(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    tracing::info!("[delete_analysis_task] called, task_id={}", task_id);
     let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}", task_id)).await?;
     let client = https_client()?;
     let mut req = client.delete(&url).timeout(std::time::Duration::from_secs(10));
@@ -2333,6 +2513,7 @@ pub async fn update_analysis_task(
 
 #[tauri::command]
 pub async fn start_analysis_task(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    tracing::info!("[start_analysis_task] called, task_id={}", task_id);
     sync_all_provider_keys(&state).await;
     let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}/start", task_id)).await?;
     let client = https_client()?;
@@ -2346,6 +2527,7 @@ pub async fn start_analysis_task(state: tauri::State<'_, AppState>, task_id: Str
 
 #[tauri::command]
 pub async fn stop_analysis_task(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    tracing::info!("[stop_analysis_task] called, task_id={}", task_id);
     let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}/stop", task_id)).await?;
     let client = https_client()?;
     let mut req = client.post(&url).timeout(std::time::Duration::from_secs(10));
@@ -2364,6 +2546,7 @@ pub async fn scan_agent_logs(
     scan_path: Option<String>,
     model: Option<String>,
 ) -> Result<String, String> {
+    tracing::info!("[scan_agent_logs] called");
     let (url, auth) = get_proxy_url(&state, "agent/scan-logs").await?;
     let client = https_client()?;
     let body = serde_json::json!({
@@ -2383,6 +2566,7 @@ pub async fn scan_agent_logs(
 
 #[tauri::command]
 pub async fn check_agent_env(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[check_agent_env] called");
     let (url, auth) = get_proxy_url(&state, "agent/env-check").await?;
     let client = https_client()?;
     let mut req = client.post(&url)
@@ -2398,6 +2582,7 @@ pub async fn check_agent_env(state: tauri::State<'_, AppState>) -> Result<String
 
 #[tauri::command]
 pub async fn create_skills_task(state: tauri::State<'_, AppState>, name: String, model: String, source_type: String, source_info: String) -> Result<String, String> {
+    tracing::info!("[create_skills_task] called");
     let (url, auth) = get_proxy_url(&state, "skills/tasks").await?;
     let client = https_client()?;
     let body = serde_json::json!({
@@ -2419,6 +2604,7 @@ pub async fn create_skills_task(state: tauri::State<'_, AppState>, name: String,
 
 #[tauri::command]
 pub async fn list_skills_tasks(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[list_skills_tasks] called");
     let (url, auth) = get_proxy_url(&state, "skills/tasks").await?;
     let client = https_client()?;
     let mut req = client.get(&url)
@@ -2447,6 +2633,7 @@ pub async fn delete_skills_task(state: tauri::State<'_, AppState>, id: String) -
 
 #[tauri::command]
 pub async fn start_skills_task(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    tracing::info!("[start_skills_task] called, task_id={}", id);
     sync_all_provider_keys(&state).await;
     let (url, auth) = get_proxy_url(&state, &format!("skills/tasks/{}/start", id)).await?;
     let client = https_client()?;
@@ -2463,6 +2650,7 @@ pub async fn start_skills_task(state: tauri::State<'_, AppState>, id: String) ->
 
 #[tauri::command]
 pub async fn discover_agents(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[discover_agents] called");
     let (url, auth) = get_proxy_url(&state, "agent/discover").await?;
     let client = https_client()?;
     let mut req = client.get(&url)
@@ -2477,6 +2665,7 @@ pub async fn discover_agents(state: tauri::State<'_, AppState>) -> Result<String
 
 #[tauri::command]
 pub async fn deep_check_agent(state: tauri::State<'_, AppState>, agent: String, model: String) -> Result<String, String> {
+    tracing::info!("[deep_check_agent] called");
     let (url, auth) = get_proxy_url(&state, "agent/deep-check").await?;
     let client = https_client()?;
     let body = serde_json::json!({
@@ -2531,6 +2720,7 @@ pub async fn list_skills_task_history(state: tauri::State<'_, AppState>, task_id
 
 #[tauri::command]
 pub async fn list_analysis_task_history(state: tauri::State<'_, AppState>, task_id: String) -> Result<String, String> {
+    tracing::info!("[list_analysis_task_history] called, task_id={}", task_id);
     let (url, auth) = get_proxy_url(&state, &format!("analysis/tasks/{}/history", task_id)).await?;
     let client = https_client()?;
     let mut req = client.get(&url)
@@ -2561,6 +2751,11 @@ pub async fn get_setup_state(state: tauri::State<'_, AppState>) -> Result<SetupS
         DeployMode::PC => "pc",
         DeployMode::Server => "server",
     };
+
+    tracing::info!(
+        "[get_setup_state] setup_complete={}, deploy_mode={}, service_url={}, connected={}",
+        config.service.setup_complete, deploy_mode, status.service_url, status.proxy_running
+    );
 
     Ok(SetupState {
         setup_complete: config.service.setup_complete,
@@ -2703,18 +2898,25 @@ pub async fn complete_setup_with_config(
     if let Some(t) = use_tls {
         config.gateway.use_tls = t;
     }
-    if let Some(h) = host {
-        config.gateway.host = h;
+    if let Some(ref h) = host {
+        config.gateway.host = h.clone();
     }
     config.service.setup_complete = true;
+
+    tracing::info!(
+        "[complete_setup_with_config] Saving config: setup_complete=true, deploy_mode={}, port={:?}, host={:?}",
+        deploy_mode, port, host
+    );
 
     config_manager.update_config(config).await.map_err(|e| e.to_string())?;
     drop(config_manager);
 
+    tracing::info!("[complete_setup_with_config] Config saved. Starting proxy service...");
+
     let mut service_manager = state.service_manager.lock().await;
     service_manager.start_proxy_service().await.map_err(|e| e.to_string())?;
 
-    tracing::info!("✅ 安装向导完成，模式: {}", deploy_mode);
+    tracing::info!("✅ complete_setup_with_config 完成，模式: {}", deploy_mode);
     Ok(())
 }
 
@@ -2900,6 +3102,7 @@ pub async fn switch_deploy_mode(
 
 #[tauri::command]
 pub async fn list_users(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[list_users] called");
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/users", base_url.trim_end_matches('/'));
     let client = https_client_for_url(&url)?;
@@ -2920,6 +3123,7 @@ pub async fn create_user(
     display_name: Option<String>,
     role: Option<String>,
 ) -> Result<String, String> {
+    tracing::info!("[create_user] called, username={}", username);
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/users", base_url.trim_end_matches('/'));
     let client = https_client_for_url(&url)?;
@@ -2952,6 +3156,7 @@ pub async fn update_user(
     role: Option<String>,
     status: Option<String>,
 ) -> Result<String, String> {
+    tracing::info!("[update_user] called, id={}", id);
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/users/{}", base_url.trim_end_matches('/'), id);
     let client = https_client_for_url(&url)?;
@@ -2974,6 +3179,7 @@ pub async fn update_user(
 
 #[tauri::command]
 pub async fn delete_user(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    tracing::info!("[delete_user] called, id={}", id);
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/users/{}", base_url.trim_end_matches('/'), id);
     let client = https_client_for_url(&url)?;
@@ -2995,6 +3201,7 @@ pub async fn reset_user_password(
     id: String,
     new_password: String,
 ) -> Result<String, String> {
+    tracing::info!("[reset_user_password] called, id={}", id);
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/users/{}/reset-password", base_url.trim_end_matches('/'), id);
     let client = https_client_for_url(&url)?;
@@ -3016,6 +3223,7 @@ pub async fn reset_user_password(
 
 #[tauri::command]
 pub async fn set_registration_open(state: tauri::State<'_, AppState>, open: bool) -> Result<String, String> {
+    tracing::info!("[set_registration_open] called, open={}", open);
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/users/settings/registration", base_url.trim_end_matches('/'));
     let client = https_client_for_url(&url)?;
@@ -3039,6 +3247,7 @@ pub async fn register_user(
     password: String,
     display_name: Option<String>,
 ) -> Result<String, String> {
+    tracing::info!("[register_user] called, username={}", username);
     let base_url = get_service_base_url(&state).await;
     let url = format!("{}/api/v1/auth/register", base_url.trim_end_matches('/'));
     let client = https_client_for_url(&url)?;
@@ -3055,11 +3264,25 @@ pub async fn register_user(
     if status >= 400 {
         return Err(format!("注册失败: {}", resp_body));
     }
+    let parsed: serde_json::Value = serde_json::from_str(&resp_body).unwrap_or_default();
+    if let (Some(at), Some(rt), Some(ei)) = (
+        parsed.get("access_token").and_then(|v| v.as_str()),
+        parsed.get("refresh_token").and_then(|v| v.as_str()),
+        parsed.get("expires_in").and_then(|v| v.as_i64()),
+    ) {
+        let mut store = state.token_store.lock().await;
+        store.tokens = Some(TokenPair {
+            access_token: at.to_string(),
+            refresh_token: rt.to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::seconds(ei),
+        });
+    }
     Ok(resp_body)
 }
 
 #[tauri::command]
 pub async fn get_current_user(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    tracing::info!("[get_current_user] called");
     let base_url = get_admin_base_url(&state).await?;
     let url = format!("{}/api/v1/auth/me", base_url.trim_end_matches('/'));
     let client = https_client_for_url(&url)?;
