@@ -3,12 +3,17 @@ setlocal enabledelayedexpansion
 
 set "PROJECT_ROOT=%~dp0"
 set "SRC_TAURI=%PROJECT_ROOT%src-tauri"
-set "PROXY_SERVICE=%SRC_TAURI%\proxy-service"
-set "FRONTEND_DIST=%PROJECT_ROOT%dist"
+set "PROXY_SERVICE=%PROJECT_ROOT%clamai-service"
+
+set "BUILD_DIR=%PROJECT_ROOT%_build"
+set "RUST_BUILD=%BUILD_DIR%\rust"
+set "GO_BUILD=%BUILD_DIR%\go"
 
 REM ---- args: %1=BUILD_CONFIG (release|debug), %2..=targets ----
 set "BUILD_CONFIG=%~1"
 shift
+
+set "OUT_ROOT=%PROJECT_ROOT%outputs\%BUILD_CONFIG%"
 
 if "%BUILD_CONFIG%"=="release" (
     set "CARGO_FLAG=--release"
@@ -18,9 +23,9 @@ if "%BUILD_CONFIG%"=="release" (
     set "RUST_TARGET_DIR=debug"
 )
 
-set "OUT_ROOT=%PROJECT_ROOT%outputs\%BUILD_CONFIG%"
 set "BUILD_SERVICE_ONLY=0"
 set "TARGET_LIST="
+set "BUMP_VERSION=0"
 
 if "%~1"=="" (
     set "TARGET_LIST=x86_64-win x86_64-linux arm64-win arm64-linux"
@@ -39,6 +44,11 @@ if /i "%~1"=="service" (
     shift
     goto :parse_args
 )
+if /i "%~1"=="--bump-version" (
+    set "BUMP_VERSION=1"
+    shift
+    goto :parse_args
+)
 set "TARGET_LIST=!TARGET_LIST! %~1"
 shift
 goto :parse_args
@@ -46,61 +56,77 @@ goto :parse_args
 :start_build
 
 REM ============================================================
-REM  Version bump: read VERSION, increment patch
+REM  Clean build directories
+REM ============================================================
+if exist "%BUILD_DIR%" (
+    echo Cleaning build directories...
+    rmdir /s /q "%BUILD_DIR%"
+)
+if exist "%OUT_ROOT%" (
+    echo Cleaning output directory...
+    rmdir /s /q "%OUT_ROOT%"
+)
+mkdir "%BUILD_DIR%"
+mkdir "%RUST_BUILD%"
+mkdir "%GO_BUILD%"
+echo.
+
+REM ============================================================
+REM  Version: read VERSION file (bump only in CI via --bump-version)
 REM ============================================================
 if not exist "%PROJECT_ROOT%VERSION" (
-    echo 0.5.1> "%PROJECT_ROOT%VERSION"
+    echo 0.1.0> "%PROJECT_ROOT%VERSION"
 )
-set /p BUILD_VERSION=<"%PROJECT_ROOT%VERSION"
+set /p BUILD_VERSION=<%PROJECT_ROOT%VERSION
+if not "!BUMP_VERSION!"=="1" goto :skip_bump
 for /f "tokens=1,2,3 delims=." %%a in ("!BUILD_VERSION!") do (
     set /a V_PATCH=%%c + 1
     set "BUILD_VERSION=%%a.%%b.!V_PATCH!"
 )
 echo !BUILD_VERSION!> "%PROJECT_ROOT%VERSION"
+echo   Version bumped to !BUILD_VERSION!
+:skip_bump
 
 echo ============================================
 echo   ClamAI v!BUILD_VERSION! Build ^(%BUILD_CONFIG%^)
 echo ============================================
-echo   Output: outputs\%BUILD_CONFIG%\{x86_64,arm64}\
+echo   Build:   _build\rust, _build\go
+echo   Output:  outputs\%BUILD_CONFIG%
 echo.
 
 REM ============================================================
 REM  Step 1: Build frontend
 REM ============================================================
-if "!BUILD_SERVICE_ONLY!"=="0" (
-    echo [1/3] Building frontend...
-    cd /d "%PROJECT_ROOT%"
-    call npm run build
-    if errorlevel 1 (
-        echo Frontend build failed!
-        exit /b 1
-    )
-
-    REM ============================================================
-    REM  Step 2: Build Rust (Tauri desktop - current platform only)
-    REM  Rust toolchain only supports current platform, output goes to x86_64
-    REM ============================================================
-    echo [2/3] Building Rust ^(current platform, %BUILD_CONFIG%^)...
-
-    if exist "%SRC_TAURI%\dist" rmdir /s /q "%SRC_TAURI%\dist"
-    xcopy /E /I /Y "%FRONTEND_DIST%" "%SRC_TAURI%\dist\"
-    if not exist "%SRC_TAURI%\dist\index.html" (
-        echo ERROR: src-tauri\dist\index.html not found!
-        exit /b 1
-    )
-
-    cd /d "%SRC_TAURI%"
-    call cargo build !CARGO_FLAG! --features custom-protocol
-    if errorlevel 1 (
-        echo Rust build failed!
-        exit /b 1
-    )
-    echo   - Rust OK
-    cd /d "%PROJECT_ROOT%"
-) else (
-    echo [1/3] Skipping frontend (service-only)
-    echo [2/3] Skipping Rust   (service-only)
+if not "%BUILD_SERVICE_ONLY%"=="0" goto :skip_frontend
+echo [1/3] Building frontend...
+cd /d "%PROJECT_ROOT%"
+call npm run build
+if errorlevel 1 (
+    echo Frontend build failed
+    exit /b 1
 )
+
+REM ============================================================
+REM  Step 2: Build Rust (Tauri desktop - current platform only)
+REM ============================================================
+echo [2/3] Building Rust (current platform, %BUILD_CONFIG%)...
+
+cd /d "%SRC_TAURI%"
+set CARGO_TARGET_DIR=%RUST_BUILD%\target
+call cargo build !CARGO_FLAG! --features custom-protocol
+if errorlevel 1 (
+    echo Rust build failed
+    exit /b 1
+)
+echo   - Rust OK
+cd /d "%PROJECT_ROOT%"
+goto :step3
+
+:skip_frontend
+echo [1/3] Skipping frontend (service-only)
+echo [2/3] Skipping Rust   (service-only)
+
+:step3
 
 REM ============================================================
 REM  Step 3: Build Go service for each target
@@ -117,7 +143,7 @@ for %%T in (!TARGET_LIST!) do (
 
 echo.
 echo ============================================
-echo   Build complete! v%BUILD_VERSION% ^(%BUILD_CONFIG%^)
+echo   Build complete - v%BUILD_VERSION% ^(%BUILD_CONFIG%^)
 echo ============================================
 echo.
 echo Output:
@@ -191,16 +217,28 @@ setlocal
 set CGO_ENABLED=0
 set GOOS=%B_GOOS%
 set GOARCH=%B_GOARCH%
-pushd "%PROXY_SERVICE%"
-go build -ldflags="%B_LDFLAGS% -X main.BuildVersion=%BUILD_VERSION%" -o "%B_DIR%\%B_OUT%" .
-popd
-endlocal
+set "GO_STAGE=%GO_BUILD%\%B_GOOS%_%B_GOARCH%"
+if not exist "!GO_STAGE!" mkdir "!GO_STAGE!"
 
+REM Copy frontend dist for embed (server build requires it)
+if exist "%PROJECT_ROOT%dist" (
+    if not exist "%PROXY_SERVICE%\frontend" mkdir "%PROXY_SERVICE%\frontend"
+    xcopy /E /I /Y "%PROJECT_ROOT%dist" "%PROXY_SERVICE%\frontend\dist\"
+)
+
+pushd "%PROXY_SERVICE%"
+go build -ldflags="%B_LDFLAGS% -X main.BuildVersion=%BUILD_VERSION%" -tags server -o "!GO_STAGE!\%B_OUT%" .
+popd
 if errorlevel 1 (
     echo     ERROR: Go build failed
+    endlocal
     exit /b 1
 )
 echo     OK
+
+REM Copy Go service binary to output directory
+copy /Y "!GO_STAGE!\%B_OUT%" "%B_DIR%\%B_OUT%" >nul
+echo     Copied %B_OUT% to outputs
 
 if exist "%B_DIR%\clamai.db.bak" (
     copy /Y "%B_DIR%\clamai.db.bak" "%B_DIR%\clamai.db" >nul 2>&1
@@ -208,16 +246,10 @@ if exist "%B_DIR%\clamai.db.bak" (
 )
 
 if "!BUILD_SERVICE_ONLY!"=="0" if "%B_COPY_RUST%"=="1" (
-    copy /Y "%SRC_TAURI%\target\!RUST_TARGET_DIR!\ClamAI.exe" "%B_DIR%\ClamAI.exe" >nul
+    copy /Y "%RUST_BUILD%\target\%RUST_TARGET_DIR%\clamai.exe" "%B_DIR%\ClamAI.exe" >nul
     echo     Copied ClamAI.exe
 )
 
-set "B_GOOS="
-set "B_GOARCH="
-set "B_OUT="
-set "B_DIR="
-set "B_ARCHDIR="
-set "B_LDFLAGS="
-set "B_COPY_RUST="
+endlocal
 
 exit /b 0

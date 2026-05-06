@@ -5,7 +5,8 @@ import React, {
   useCallback,
   useEffect,
 } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { authApi, handleLoginResult } from "../api/auth";
+import { isTauri } from "../api/client";
 
 interface AuthContextType {
   token: string | null;
@@ -46,10 +47,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token]);
 
+  useEffect(() => {
+    const handler = () => {
+      setToken(null);
+      localStorage.removeItem("clamai_token");
+    };
+    window.addEventListener("auth:unauthorized", handler);
+    return () => window.removeEventListener("auth:unauthorized", handler);
+  }, []);
+
   const checkStatus = async () => {
     try {
-      const data = await invoke<string>("get_auth_status");
-      const status = JSON.parse(data);
+      const status = await authApi.status();
       console.log("[AuthContext] checkStatus result:", { initialized: status.initialized, mode: status.mode });
       setInitialized(status.initialized);
       setMode(status.mode);
@@ -63,28 +72,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (e) {
       console.error("[AuthContext] checkStatus FAILED:", e);
-      setIsInitialized(true);
+      if (isTauri()) {
+        setIsInitialized(true);
+      } else {
+        setIsInitialized(true);
+      }
     }
   };
 
   const tryAutoLogin = async () => {
     try {
-      const data = await invoke<string>("get_admin_token", { password: "" });
-      const result = JSON.parse(data);
-      if (result.success && result.access_token) {
-        setToken(result.access_token);
+      const accessToken = await authApi.tryAutoLogin();
+      if (accessToken) {
+        setToken(accessToken);
       }
     } catch (_e) {}
   };
 
   const login = useCallback(async (username: string, password: string) => {
-    const data = await invoke<string>("login_admin", { username, password });
-    const result = JSON.parse(data);
-    if (result.success && result.access_token) {
-      setToken(result.access_token);
-    } else {
-      throw new Error("Login failed");
-    }
+    const result = await authApi.login(username, password);
+    const accessToken = handleLoginResult(result);
+    setToken(accessToken);
   }, []);
 
   const handleAuthExpired = useCallback(() => {
@@ -93,36 +101,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setupAdmin = useCallback(async (username: string, password: string) => {
-    const data = await invoke<string>("setup_admin", { username, password });
-    const result = JSON.parse(data);
-    if (result.success && result.access_token) {
-      setToken(result.access_token);
-      localStorage.setItem("clamai_token", result.access_token);
-      setInitialized(true);
-    } else {
-      throw new Error("Setup failed");
-    }
+    const result = await authApi.setup(username, password);
+    const accessToken = handleLoginResult(result);
+    setToken(accessToken);
+    localStorage.setItem("clamai_token", accessToken);
+    setInitialized(true);
   }, []);
 
   const register = useCallback(async (username: string, password: string, displayName?: string) => {
-    const data = await invoke<string>("register_user", { username, password, displayName: displayName || null });
-    const result = JSON.parse(data);
+    const result = await authApi.register(username, password, displayName);
     if (result.access_token) {
-      setToken(result.access_token);
+      const accessToken = handleLoginResult(result);
+      setToken(accessToken);
     } else {
-      throw new Error(result.message || result.error || "注册失败");
+      throw new Error("注册失败");
     }
   }, []);
 
   const logout = useCallback(() => {
-    invoke("logout").catch(console.error);
+    authApi.logout();
     setToken(null);
     localStorage.removeItem("clamai_token");
   }, []);
 
   const changePassword = useCallback(
     async (oldPassword: string, newPassword: string) => {
-      await invoke("change_admin_password", { oldPassword, newPassword });
+      await authApi.changePassword(oldPassword, newPassword);
     },
     [token],
   );

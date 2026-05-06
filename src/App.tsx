@@ -130,9 +130,9 @@ function AuthExpiredGuard({ children }: { children: ReactNode }) {
 
 function AppContent() {
   const { isAuthenticated, isInitialized, initialized, refreshAuth } = useAuth();
-  const { setupComplete, setupChecked, connected, checkSetup } = useSetup();
+  const { setupComplete, setupChecked, connected, checkSetup, deployMode } = useSetup();
 
-  console.log("[AppContent] render:", { setupComplete, setupChecked, connected, isAuthenticated, isInitialized, initialized });
+  console.log("[AppContent] render:", { setupComplete, setupChecked, connected, isAuthenticated, isInitialized, initialized, deployMode });
 
   const handleSetupComplete = async () => {
     await checkSetup();
@@ -147,22 +147,13 @@ function AppContent() {
     );
   }
 
-  if (!setupComplete) {
+  // Server mode: skip SetupWizard, use Login's built-in setup mode
+  // PC mode without connection: show SetupWizard
+  if (!setupComplete && deployMode !== "server" && !connected) {
     return <SetupWizard onComplete={handleSetupComplete} />;
   }
 
-  if (isAuthenticated) {
-    return (
-      <ApiKeySecretsProvider>
-        <div className="min-h-screen bg-background text-foreground">
-          {!connected && <ConnectBanner />}
-          <Layout>{mainRoutes}</Layout>
-          <StatusBar />
-        </div>
-      </ApiKeySecretsProvider>
-    );
-  }
-
+  // Server mode or already setup: show Login (which handles setup if !initialized)
   if (connected && (!initialized || !isAuthenticated)) {
     return <Login />;
   }
@@ -183,15 +174,19 @@ function AppContent() {
     );
   }
 
-  return (
-    <ApiKeySecretsProvider>
-      <div className="min-h-screen bg-background text-foreground">
-        {!connected && <ConnectBanner />}
-        <Layout>{mainRoutes}</Layout>
-        <StatusBar />
-      </div>
-    </ApiKeySecretsProvider>
-  );
+  if (isAuthenticated) {
+    return (
+      <ApiKeySecretsProvider>
+        <div className="min-h-screen bg-background text-foreground">
+          {!connected && <ConnectBanner />}
+          <Layout>{mainRoutes}</Layout>
+          <StatusBar />
+        </div>
+      </ApiKeySecretsProvider>
+    );
+  }
+
+  return <Login />;
 }
 
 function App() {

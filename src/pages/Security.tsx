@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useState } from "react";
+import { securityApi } from "../api/security";
 import {
   Shield,
   ShieldAlert,
@@ -117,10 +118,7 @@ export default function Security() {
 
   const { data: remoteConfig, isLoading, isError, error } = useQuery({
     queryKey: ["security-config"],
-    queryFn: async () => {
-      const raw = await invoke<string>("get_security_config");
-      return JSON.parse(raw) as SecurityConfig;
-    },
+    queryFn: () => securityApi.getConfig() as unknown as Promise<SecurityConfig>,
     staleTime: 0,
     retry: 1,
     retryDelay: 1000,
@@ -128,21 +126,20 @@ export default function Security() {
 
   const { data: proxyModels } = useQuery({
     queryKey: ["proxy-models"],
+    // TODO: migrate when API available
     queryFn: () => invoke<string[]>("get_proxy_models"),
   });
 
   const { data: alertsData } = useQuery({
     queryKey: ["security-alerts"],
-    queryFn: async () => {
-      const raw = await invoke<string>("get_security_alerts", { limit: 100 });
-      return JSON.parse(raw) as { alerts: Alert[]; total: number };
-    },
+    queryFn: () => securityApi.getLogs({ limit: 100 }) as unknown as Promise<{ alerts: Alert[]; total: number }>,
     staleTime: 0,
     refetchInterval: 10000,
   });
 
   const { data: vectorSamplesData, refetch: refetchVectorSamples } = useQuery({
     queryKey: ["vector-samples"],
+    // TODO: migrate when API available
     queryFn: async () => {
       const raw = await invoke<string>("get_vector_samples", { limit: 100 });
       return JSON.parse(raw) as {
@@ -162,8 +159,7 @@ export default function Security() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: (cfg: SecurityConfig) =>
-      invoke("save_security_config", { payload: JSON.stringify(cfg) }),
+    mutationFn: (cfg: SecurityConfig) => securityApi.saveConfig(cfg as any),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["security-config"] });
       setSaved(true);
@@ -786,6 +782,7 @@ export default function Security() {
                     {!alert.resolved && (
                       <button
                         onClick={() =>
+                          // TODO: migrate when API available
                           invoke("resolve_security_alert", {
                             id: alert.id,
                           }).then(() =>
@@ -845,6 +842,7 @@ export default function Security() {
               <button
                 onClick={async () => {
                   if (!newSample.content.trim()) return;
+                  // TODO: migrate when API available
                   await invoke("add_vector_sample", {
                     content: newSample.content,
                     category: newSample.category,
@@ -907,6 +905,7 @@ export default function Security() {
                       </div>
                       <button
                         onClick={async () => {
+                          // TODO: migrate when API available
                           await invoke("delete_vector_sample", {
                             id: sample.id,
                           });

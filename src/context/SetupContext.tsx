@@ -6,6 +6,8 @@ import React, {
   useCallback,
 } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
+import { configApi } from "../api/config";
+import { authApi } from "../api/auth";
 
 interface SetupContextType {
   setupComplete: boolean;
@@ -15,13 +17,6 @@ interface SetupContextType {
   connected: boolean;
   checkSetup: () => Promise<void>;
   reconnect: (username?: string, password?: string) => Promise<void>;
-}
-
-interface SetupState {
-  setup_complete: boolean;
-  deploy_mode: string;
-  service_url: string;
-  connected: boolean;
 }
 
 const SetupContext = createContext<SetupContextType | null>(null);
@@ -36,14 +31,25 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
   const checkSetup = useCallback(async () => {
     try {
       console.log("[SetupContext] checkSetup() called");
-      const state = await invoke<SetupState>("get_setup_state");
-      console.log("[SetupContext] get_setup_state result:", JSON.stringify(state));
-      setSetupComplete(state.setup_complete);
-      setDeployMode(state.deploy_mode);
-      setServiceUrl(state.service_url);
-      setConnected(state.connected);
+      const status = await authApi.status();
+      const isInitialized = status.initialized === true;
+      const mode = status.mode || "pc";
+      setDeployMode(mode);
+      setConnected(true);
+
+      if (isInitialized) {
+        try {
+          const config = await configApi.get();
+          setSetupComplete(config.service.setup_complete);
+          setServiceUrl(config.service.remote_service_url || "");
+        } catch {
+          setSetupComplete(true);
+        }
+      } else {
+        setSetupComplete(false);
+      }
     } catch (e) {
-      console.error("[SetupContext] get_setup_state FAILED:", e);
+      console.error("[SetupContext] checkSetup FAILED:", e);
       setConnected(false);
       setSetupComplete(false);
     } finally {
@@ -53,25 +59,20 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
 
   const reconnect = useCallback(
     async (username?: string, password?: string) => {
+      console.log(`[SetupContext] reconnect() mode=${deployMode}`);
       if (deployMode === "pc") {
         try {
-          const data = await invoke<string>("get_admin_token", {
-            password: "",
-          });
-          const result = JSON.parse(data);
-          if (result.success && result.access_token) {
+          const token = await authApi.tryAutoLogin();
+          if (token) {
             setConnected(true);
             return;
           }
         } catch {}
         try {
-          await invoke("connect_service");
+          await invoke("start_proxy_service");
           await new Promise((r) => setTimeout(r, 3000));
-          const data = await invoke<string>("get_admin_token", {
-            password: "",
-          });
-          const result = JSON.parse(data);
-          if (result.success) {
+          const token = await authApi.tryAutoLogin();
+          if (token) {
             setConnected(true);
             return;
           }
@@ -82,16 +83,9 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
         if (!username || !password) {
           throw new Error("请输入用户名和密码");
         }
-        await invoke("connect_service");
-        await new Promise((r) => setTimeout(r, 3000));
-        const data = await invoke<string>("login_admin", {
-          username,
-          password,
-        });
-        const result = JSON.parse(data);
-        if (!result.success) {
-          throw new Error(result.error || "认证失败");
-        }
+        const { handleLoginResult } = await import("../api/auth");
+        const result = await authApi.login(username, password);
+        handleLoginResult(result);
         setConnected(true);
       }
     },

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { rateLimitApi } from "../api/rate-limit";
+import { providersApi } from "../api/providers";
 import { Plus, Trash2, Save, Gauge, HelpCircle } from "lucide-react";
 
 interface RateLimitConfig {
@@ -57,11 +58,10 @@ export default function RateLimit() {
   const loadConfig = async () => {
     try {
       setLoading(true);
-      const data = await invoke<string>("get_ratelimit_config");
-      const parsed = JSON.parse(data);
+      const parsed = await rateLimitApi.get() as any;
       setConfig({
         global_rpm: parsed.global_rpm || 0,
-        key_rpm: parsed.key_rpm || 0,
+        key_rpm: parsed.key_rpm || parsed.per_key_rpm || 0,
         model_rpm: parsed.model_rpm || {},
         provider_rpm: parsed.provider_rpm || {},
       });
@@ -74,7 +74,7 @@ export default function RateLimit() {
 
   const loadProviders = async () => {
     try {
-      const data = await invoke<Provider[]>("get_providers");
+      const data = await providersApi.list();
       setProviders(data || []);
       const models: string[] = [];
       for (const p of data || []) {
@@ -91,9 +91,7 @@ export default function RateLimit() {
 
   const handleSave = async () => {
     try {
-      await invoke("save_ratelimit_config", {
-        payload: JSON.stringify(config),
-      });
+      await rateLimitApi.save(config as any);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {

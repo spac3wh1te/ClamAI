@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { keysApi } from "../api/keys";
 
 interface ApiKeySecretsContextType {
   secrets: Record<string, string>;
@@ -26,10 +26,7 @@ export function ApiKeySecretsProvider({
         return secrets[id];
       }
       try {
-        const revealed = await invoke<{ id: string; key: string }>(
-          "get_api_key",
-          { id },
-        );
+        const revealed = await keysApi.reveal(id);
         setSecrets((prev) => ({ ...prev, [revealed.id]: revealed.key }));
         return revealed.key;
       } catch (e) {

@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { setupApi, type ConnectionTestResult } from "../api/setup";
 import {
   Activity, Monitor, Globe, CheckCircle, XCircle, Loader2,
   ArrowRight, ArrowLeft, Shield, Wifi, Lock, Unlock, Server,
 } from "lucide-react";
 
-interface TestResult { success: boolean; message: string; initialized?: boolean }
+type TestResult = ConnectionTestResult;
 interface SetupWizardProps { onComplete: () => void }
 type WizardStep = "mode" | "service" | "admin";
 
@@ -48,8 +48,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     const t = setTimeout(async () => {
       setCheckingPort(true);
       try {
-        const p1 = await invoke<boolean>("check_port_available", { port: proxyPort });
-        const p2 = await invoke<boolean>("check_port_available", { port: adminPort });
+        const p1 = await setupApi.checkPort(proxyPort);
+        const p2 = await setupApi.checkPort(adminPort);
         setProxyPortOk(p1);
         setAdminPortOk(p2);
       } catch { setProxyPortOk(null); setAdminPortOk(null); }
@@ -71,7 +71,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     try {
       const url = ensureProtocol(remoteAdminUrl);
       setRemoteAdminUrl(url);
-      const result = await invoke<TestResult>("check_service_connection", { serviceUrl: url });
+      const result = await setupApi.checkConnection(url);
       setRemoteTestResult(result);
     } catch (e: any) {
       setRemoteTestResult({ success: false, message: e?.toString() || "测试失败" });
@@ -93,31 +93,52 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setCompleteError("");
     try {
       if (deployMode === "pc") {
-        console.log("[SetupWizard] PC mode: calling complete_setup_with_config", { proxyPort, protocol, host });
-        await invoke("complete_setup_with_config", {
-          deployMode: "pc", port: proxyPort, useTls: protocol === "https", host,
-          remoteUrl: null, remoteProxyUrl: null,
-        });
-        console.log("[SetupWizard] complete_setup_with_config OK, calling setup_admin");
-        await invoke("setup_admin", { username, password });
-        console.log("[SetupWizard] setup_admin OK");
+        console.log("[SetupWizard] === PC Mode Setup Start ===");
+        console.log("[SetupWizard] Step 1/2: complete_setup_with_config (Tauri invoke → start Go service)");
+        let adminBaseUrl: string;
+        try {
+          adminBaseUrl = await setupApi.completeSetup({
+            deploy_mode: "pc", port: proxyPort, admin_port: adminPort, use_tls: protocol === "https", host,
+            remote_url: null, remote_proxy_url: null,
+          });
+        } catch (e1: any) {
+          throw new Error(`步骤1失败 [启动本地服务]: ${e1?.message || e1}`);
+        }
+        console.log("[SetupWizard] Step 1 OK. Go service should be running. adminBaseUrl=" + adminBaseUrl);
+        console.log("[SetupWizard] Step 2/2: setupAdmin (HTTP POST /api/v1/auth/setup)");
+        try {
+          await setupApi.setupAdmin(username, password, adminBaseUrl);
+        } catch (e2: any) {
+          throw new Error(`步骤2失败 [创建管理员账号]: ${e2?.message || e2}`);
+        }
+        console.log("[SetupWizard] Step 2 OK. Admin created.");
       } else {
         const adminUrl = ensureProtocol(remoteAdminUrl);
         const proxyUrl = remoteProxyUrl.trim() ? ensureProtocol(remoteProxyUrl) : null;
-        console.log("[SetupWizard] Server mode: calling complete_setup_with_config", { adminUrl, proxyUrl });
-        await invoke("complete_setup_with_config", {
-          deployMode: "server", remoteUrl: adminUrl, remoteProxyUrl: proxyUrl,
-          port: null, useTls: true, host: "127.0.0.1",
-        });
-        console.log("[SetupWizard] complete_setup_with_config OK");
+        console.log("[SetupWizard] === Server Mode Setup Start ===");
+        try {
+          await setupApi.completeSetup({
+            deploy_mode: "server", remote_url: adminUrl, remote_proxy_url: proxyUrl,
+            port: null, admin_port: null, use_tls: true, host: "127.0.0.1",
+          });
+        } catch (e1: any) {
+          throw new Error(`步骤1失败 [连接远程服务]: ${e1?.message || e1}`);
+        }
         if (remoteTestResult?.initialized === false) {
-          console.log("[SetupWizard] Remote not initialized, calling init_remote_server");
-          await invoke("init_remote_server", { username, password });
+          try {
+            await setupApi.initRemote(username, password, adminUrl);
+          } catch (e2: any) {
+            throw new Error(`步骤2失败 [初始化远程管理员]: ${e2?.message || e2}`);
+          }
         }
       }
       console.log("[SetupWizard] All setup steps succeeded, calling onComplete -> checkSetup");
       onComplete();
-    } catch (e: any) { console.error("[SetupWizard] Setup FAILED:", e); setCompleteError(e?.toString() || "配置失败"); }
+    } catch (e: any) {
+      const msg = e?.message || e?.toString() || "配置失败";
+      console.error("[SetupWizard] Setup FAILED:", msg, e);
+      setCompleteError(msg);
+    }
     finally { setCompleting(false); }
   };
 
@@ -387,7 +408,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
               )}
               {adminError && <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">{adminError}</div>}
-              {completeError && <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">{completeError}</div>}
+              {completeError && <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive whitespace-pre-wrap break-all">{completeError}</div>}
             </div>
           )}
 

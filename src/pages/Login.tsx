@@ -23,12 +23,18 @@ export default function Login() {
     setError("");
 
     if (isSetup || isRegister) {
-      if (password.length < 6) {
-        setError("密码至少需要6个字符");
+      if (password.length < 8) {
+        setError("密码至少需要8个字符");
         return;
       }
       if (password !== confirmPassword) {
         setError("两次输入的密码不一致");
+        return;
+      }
+      const hasUpper = /[A-Z]/.test(password);
+      const hasDigit = /[0-9]/.test(password);
+      if (!hasUpper || !hasDigit) {
+        setError("密码必须包含至少一个大写字母和一个数字");
         return;
       }
     }
@@ -124,7 +130,7 @@ export default function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-10 pr-10 py-2 bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                  placeholder={isSetup || isRegister ? "至少6个字符" : "输入密码"}
+                                                      placeholder={isSetup || isRegister ? "至少8字符，含大写字母和数字" : "输入密码"}
                   autoComplete="new-password"
                   data-1p-ignore
                   data-lpignore="true"

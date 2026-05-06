@@ -68,11 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("日志文件: {}", log_path.display());
     info!("可执行文件路径: {}", exe_dir.display());
 
-    // 初始化配置管理器
     let config_manager = Arc::new(Mutex::new(ConfigManager::new().await?));
     info!("配置管理器初始化完成");
 
-    // 初始化服务管理器
     let service_manager = Arc::new(Mutex::new(ServiceManager::new(config_manager.clone())));
     info!("服务管理器初始化完成");
 
@@ -82,58 +80,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         token_store: Arc::new(Mutex::new(TokenStore::default())),
     };
 
-    // 根据部署模式决定是否自动启动服务
     {
         let config = app_state.config_manager.lock().await.get_config();
-        if config.service.setup_complete && config.service.deploy_mode == DeployMode::PC {
+        if config.setup_complete && config.deploy_mode == DeployMode::PC {
             let mut service_manager = app_state.service_manager.lock().await;
             if let Err(e) = service_manager.start_proxy_service().await {
                 tracing::warn!("自动启动本地服务失败（非致命）: {}", e);
-            } else {
-                drop(service_manager);
-                let providers = app_state.config_manager.lock().await.get_providers();
-                let admin_port = app_state.config_manager.lock().await.get_config().gateway.admin_port;
-                let base_url = format!("https://127.0.0.1:{}", admin_port);
-                let client = crate::commands::https_client_for_url(&base_url);
-                if let Ok(client) = client {
-                    for provider in providers {
-                        if !provider.enabled {
-                            continue;
-                        }
-                        if let Some(api_key) = provider.api_keys.iter().find(|k| k.is_active) {
-                            let provider_name = format!("{:?}", provider.provider_type).to_lowercase();
-                            let api_key_value = api_key.key_value.clone();
-                            let url = format!("{}/api/v1/providers/{}/key", base_url, provider_name);
-                            let client = client.clone();
-                            tokio::spawn(async move {
-                                match client.put(&url)
-                                    .timeout(std::time::Duration::from_secs(5))
-                                    .json(&serde_json::json!({ "api_key": api_key_value }))
-                                    .send().await
-                                {
-                                    Ok(resp) if resp.status().is_success() => {
-                                        tracing::info!("自动同步提供商 {} 密钥成功", provider_name);
-                                    }
-                                    Ok(resp) => {
-                                        tracing::warn!("自动同步提供商 {} 密钥失败: HTTP {}", provider_name, resp.status());
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("自动同步提供商 {} 密钥失败: {}", provider_name, e);
-                                    }
-                                }
-                            });
-                        }
-                    }
-                }
+            }
+        } else if config.setup_complete && config.deploy_mode == DeployMode::Server {
+            let mut service_manager = app_state.service_manager.lock().await;
+            if let Err(e) = service_manager.start_proxy_service().await {
+                tracing::warn!("自动连接远程服务失败（非致命）: {}", e);
             }
         } else {
-            info!("等待安装向导或手动连接服务...");
+            info!("首次运行或未配置，等待安装向导...");
         }
     }
 
     info!("✅ ClamAI ready!");
 
-    // 构建Tauri应用
     let _app_handle = tauri::Builder::default()
         .manage(app_state)
         .on_window_event(|event| {
@@ -149,23 +114,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            // 配置管理命令
-            get_config,
-            save_config,
-            reset_config,
-            update_gateway_ports,
-            check_port_available,
-            complete_setup_with_config,
-
-            // 提供商管理命令
-            get_providers,
-            add_provider,
-            remove_provider,
-            update_provider,
-            toggle_model,
-            test_provider,
-            fetch_provider_models,
-
             // OAuth命令
             start_oauth_flow,
             complete_oauth_flow,
@@ -173,116 +121,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 代理服务命令
             get_proxy_status,
+            get_service_url,
+            get_proxy_url_cmd,
+            get_proxy_models,
             start_proxy_service,
             stop_proxy_service,
             restart_proxy_service,
             test_proxy_connectivity,
 
-            // 统计监控命令
-            get_usage_stats,
-            get_alert_stats,
-            get_request_logs,
-            export_logs,
-            get_caller_top10,
-            get_security_token_stats,
-
-            // API Key管理命令
-            list_api_keys,
-            create_api_key,
-            update_api_key,
-            delete_api_key,
-            get_api_key,
-            sync_provider_key,
-
-            // 测试命令
-            test_chat_request,
-            get_proxy_models,
+            // 设置/安装向导命令
+            check_port_available,
+            check_service_connection,
+            complete_setup_with_config,
+            update_gateway_ports,
+            switch_deploy_mode,
+            disconnect_service,
 
             // 系统命令
             get_app_info,
             open_log_folder,
-            check_updates,
-
-            // 安全管理命令
-            get_security_config,
-            save_security_config,
-            get_security_alerts,
-            resolve_security_alert,
-            check_content_safety,
-
-            // 向量样本管理命令
-            get_vector_samples,
-            add_vector_sample,
-            delete_vector_sample,
-            get_vector_config,
-
-            // 认证命令
-            get_auth_status,
-            setup_admin,
-            login_admin,
-            change_admin_password,
-            get_admin_token,
-
-            // 限流命令
-            get_ratelimit_config,
-            save_ratelimit_config,
-
-            // 安全广场分析命令
-            analyze_user_profile,
-            check_skills_content,
-            get_skills_detection_history,
-            get_profile_analysis_history,
-
-            // 分析任务管理命令
-            create_analysis_task,
-            list_analysis_tasks,
-            delete_analysis_task,
-            update_analysis_task,
-            start_analysis_task,
-            stop_analysis_task,
-            list_analysis_task_history,
-
-            // 智能体安全命令
-            scan_agent_logs,
-            check_agent_env,
-            create_skills_task,
-            list_skills_tasks,
-            delete_skills_task,
-            update_skills_task,
-            start_skills_task,
-            list_skills_task_history,
-            discover_agents,
-            deep_check_agent,
-
-            // 模型列表增强
-            get_proxy_models_with_info,
-
-            // 配置档案命令
-            list_profiles,
-            save_current_as_profile,
-            load_profile,
-            delete_profile,
-            rename_profile,
-
-            // 安装向导和服务连接命令
-            get_setup_state,
-            check_service_connection,
-            complete_setup,
-            connect_service,
-            disconnect_service,
-            switch_deploy_mode,
-            init_remote_server,
-
-            // 多用户管理命令
-            list_users,
-            create_user,
-            update_user,
-            delete_user,
-            reset_user_password,
-            set_registration_open,
-            register_user,
-            get_current_user,
-            logout,
+            tauri_fetch,
         ])
         .run(tauri::generate_context!())?;
 

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/tauri";
+import { keysApi } from "../api/keys";
+import { proxyApi } from "../api/stats";
+import { providersApi } from "../api/providers";
 import {
   Key,
   Plus,
@@ -134,23 +136,24 @@ export default function ApiKeys() {
 
   const { data: proxyModels, isLoading: isProxyModelsLoading } = useQuery({
     queryKey: ["proxy-models"],
-    queryFn: () => invoke<string[]>("get_proxy_models"),
-    enabled: testMode === "proxy",
+    queryFn: () => proxyApi.getModels(),
+    enabled: true,
     refetchInterval: 10000,
+    staleTime: 5000,
   });
 
   const { data: keysData, isLoading } = useQuery({
     queryKey: ["api-keys"],
-    queryFn: async () => {
-      const data = await invoke("list_api_keys");
-      return data as { keys: ApiKey[] };
-    },
+    queryFn: () => keysApi.list(),
     refetchInterval: 5000,
   });
 
   const { data: providers } = useQuery({
     queryKey: ["providers"],
-    queryFn: () => invoke<ProviderConfig[]>("get_providers"),
+    queryFn: async () => {
+      await providersApi.syncAll();
+      return providersApi.list();
+    },
   });
 
   const keys = keysData?.keys || [];
@@ -169,6 +172,14 @@ export default function ApiKeys() {
       editingKeyIdRef.current = null;
     }
   }, [editingKeyId, keys]);
+
+  useEffect(() => {
+    if (testMode === "proxy" && testProxyKey) {
+      providersApi.syncAll().then(() => {
+        queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
+      });
+    }
+  }, [testProxyKey, testMode]);
 
   const allAvailableModels =
     providers?.flatMap((provider) => {
@@ -193,10 +204,11 @@ export default function ApiKeys() {
       allowedModels: string[];
     }) => {
       logInfo("ApiKeys", "create_api_key", { name, allowedModels });
-      return invoke("create_api_key", { name, allowedModels });
+      return keysApi.create(name, allowedModels);
     },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+    onSuccess: async (data: any) => {
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+      await providersApi.syncAll();
       setCreatedKey(data.key);
       setSecret(data.id, data.key);
       setNewKeyName("");
@@ -218,10 +230,11 @@ export default function ApiKeys() {
       allowedModels: string[];
     }) => {
       logInfo("ApiKeys", "update_api_key", { id, allowedModels });
-      return invoke("update_api_key", { id, allowedModels });
+      return keysApi.update(id, allowedModels);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+      await providersApi.syncAll();
       setEditingKeyId(null);
       setEditingAllowedModels([]);
     },
@@ -234,7 +247,7 @@ export default function ApiKeys() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => {
       logInfo("ApiKeys", "delete_api_key", { id });
-      return invoke("delete_api_key", { id });
+      return keysApi.delete(id);
     },
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ["api-keys"] });
@@ -254,8 +267,8 @@ export default function ApiKeys() {
         if (!apiKey) throw new Error("该提供商没有配置API Key");
         if (!testModel) throw new Error("请选择模型");
 
-        const result = await invoke("test_chat_request", {
-          testMode: "direct",
+        const result = await proxyApi.testChat({
+          mode: "direct",
           providerId: testProviderId,
           baseUrl: provider.base_url,
           apiKey: apiKey,
@@ -275,10 +288,7 @@ export default function ApiKeys() {
           realApiKey = apiKeySecrets[selectedKey.id];
         } else if (selectedKey) {
           try {
-            const revealedKey = await invoke<{ id: string; key: string }>(
-              "get_api_key",
-              { id: selectedKey.id },
-            );
+            const revealedKey = await keysApi.reveal(selectedKey.id);
             realApiKey = revealedKey.key;
             setSecret(revealedKey.id, revealedKey.key);
           } catch (e) {
@@ -289,8 +299,8 @@ export default function ApiKeys() {
         const provider = providers?.find((p) => p.id === testProviderId);
         const providerType = provider?.provider_type || "custom";
 
-        const result = await invoke("test_chat_request", {
-          testMode: "proxy",
+        const result = await proxyApi.testChat({
+          mode: "proxy",
           providerId: testProviderId,
           baseUrl: "",
           apiKey: realApiKey,
@@ -320,10 +330,7 @@ export default function ApiKeys() {
     } else {
       if (!apiKeySecrets[id]) {
         try {
-          const revealedKey = await invoke<{ id: string; key: string }>(
-            "get_api_key",
-            { id },
-          );
+          const revealedKey = await keysApi.reveal(id);
           setSecret(revealedKey.id, revealedKey.key);
         } catch (e) {
           console.warn("无法获取密钥:", e);
@@ -788,6 +795,9 @@ export default function ApiKeys() {
                 setTestMode("proxy");
                 setTestModel("");
                 setTestProviderId("");
+                providersApi.syncAll().then(() => {
+                  queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
+                });
               }}
               className={`px-3 py-1 rounded text-sm font-medium transition-colors ${testMode === "proxy" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >

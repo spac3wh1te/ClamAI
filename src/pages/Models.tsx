@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
+import { providersApi } from "../api/providers";
 import {
   Layers,
   ArrowRight,
@@ -34,7 +35,7 @@ export default function Models() {
 
   const { data: providers, isLoading } = useQuery({
     queryKey: ["providers"],
-    queryFn: () => invoke<ProviderConfig[]>("get_providers"),
+    queryFn: () => providersApi.list(),
   });
 
   const { data: mappings } = useQuery({
@@ -43,7 +44,7 @@ export default function Models() {
   });
 
   const toggleMutation = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       providerId,
       modelName,
       enabled,
@@ -53,18 +54,30 @@ export default function Models() {
       enabled: boolean;
     }) => {
       logInfo("Models", "toggle_model", { providerId, modelName, enabled });
-      return invoke("toggle_model", { providerId, modelName, enabled });
+      const provider = providers?.find((p) => p.id === providerId);
+      if (!provider) throw new Error("Provider not found");
+      const disabled = provider.disabled_models || [];
+      const updated = enabled
+        ? disabled.filter((m: string) => m !== modelName)
+        : [...new Set([...disabled, modelName])];
+      await providersApi.update(providerId, {
+        ...provider,
+        disabled_models: updated,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
     },
-    onError: (error) => { logError("Models", "toggle_model failed", error); },
+    onError: (error) => {
+      logError("Models", "toggle_model failed", error);
+      window.alert("切换模型失败: " + (error?.message || error));
+    },
   });
 
   const fetchModelsMutation = useMutation({
     mutationFn: (providerId: string) => {
       logInfo("Models", "fetch_provider_models", { providerId });
-      return invoke<string[]>("fetch_provider_models", { providerId });
+      return providersApi.fetchModels(providerId);
     },
     onSuccess: (_data, providerId) => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
@@ -87,9 +100,7 @@ export default function Models() {
       for (const p of providers) {
         if (p.enabled) {
           try {
-            await invoke<string[]>("fetch_provider_models", {
-              providerId: p.id,
-            });
+            await providersApi.fetchModels(p.id);
           } catch (e) {
             console.warn(`刷新 ${p.name} 失败:`, e);
           }
@@ -292,16 +303,19 @@ export default function Models() {
                             </button>
                             {models.length > 0 && (
                               <button
-                                onClick={() => {
-                                  const allDisabled =
-                                    disabledModels.length === models.length;
-                                  models.forEach((model) => {
-                                    toggleMutation.mutate({
-                                      providerId: provider.id,
-                                      modelName: model,
-                                      enabled: allDisabled,
+                                onClick={async () => {
+                                  try {
+                                    const allDisabled =
+                                      disabledModels.length === models.length;
+                                    await providersApi.update(provider.id, {
+                                      ...provider,
+                                      disabled_models: allDisabled ? [] : [...models],
                                     });
-                                  });
+                                    queryClient.invalidateQueries({ queryKey: ["providers"] });
+                                  } catch (err: any) {
+                                    console.error("[Models] 全部禁用/启用失败:", err);
+                                    window.alert("操作失败: " + (err?.message || err));
+                                  }
                                 }}
                                 className="px-3 py-1 text-xs bg-secondary text-secondary-foreground rounded hover:bg-secondary/80"
                               >

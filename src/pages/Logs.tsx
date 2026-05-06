@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/tauri";
+import { statsApi } from "../api/stats";
 import { logInfo, logError } from "../utils/log";
 import {
   FileText,
@@ -34,8 +34,10 @@ export default function Logs() {
 
   const { data: logs, isLoading } = useQuery({
     queryKey: ["request-logs", limit],
-    queryFn: () =>
-      invoke<RequestLog[]>("get_request_logs", { limit, offset: 0 }),
+    queryFn: async () => {
+      const result = await statsApi.logs({ limit });
+      return (result.logs || []) as unknown as RequestLog[];
+    },
     refetchInterval: 5000,
   });
 
@@ -98,13 +100,20 @@ export default function Logs() {
           <p className="text-muted-foreground mt-2">API 调用历史溯源与审计</p>
         </div>
         <button
-          onClick={() =>
-            invoke("export_logs", {
-              format: "json",
-              startDate: "",
-              endDate: "",
-            })
-          }
+          onClick={async () => {
+            try {
+              const text = await statsApi.exportLogs();
+              const blob = new Blob([text], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = "logs.json";
+              a.click();
+              URL.revokeObjectURL(url);
+            } catch (e: any) {
+              alert("导出失败: " + (e?.toString() || "未知错误"));
+            }
+          }}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90"
         >
           <Download size={20} />

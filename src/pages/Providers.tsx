@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/tauri";
+import { providersApi, ProviderConfig } from "../api/providers";
 import { logInfo, logError } from "../utils/log";
 import {
   Plus,
@@ -12,31 +12,6 @@ import {
   Server,
   Key,
 } from "lucide-react";
-
-interface ProviderConfig {
-  id: string;
-  name: string;
-  provider_type: string;
-  auth_type: "apikey";
-  enabled: boolean;
-  base_url: string;
-  api_keys: Array<{
-    id: string;
-    key_value: string;
-    name: string;
-    is_active: boolean;
-    created_at: string;
-    last_used: string | null;
-    usage_count: number;
-  }>;
-  models: string[];
-  disabled_models: string[];
-  oauth_config: any;
-  rate_limits: any;
-  priority: number;
-  created_at: string;
-  updated_at: string;
-}
 
 interface TestProviderResult {
   success: boolean;
@@ -53,26 +28,23 @@ export default function Providers() {
 
   const { data: providers, isLoading } = useQuery({
     queryKey: ["providers"],
-    queryFn: () => invoke<ProviderConfig[]>("get_providers"),
+    queryFn: () => providersApi.list(),
   });
 
   const addMutation = useMutation({
     mutationFn: async (provider: ProviderConfig) => {
       logInfo("Providers", "add_provider called", { name: provider.name, type: provider.provider_type });
-      const result = await invoke("add_provider", { provider });
+      const result = await providersApi.add(provider);
       try {
         const activeKey = provider.api_keys.find((k) => k.is_active);
         if (activeKey && activeKey.key_value) {
-          await invoke("sync_provider_key", {
-            providerName: provider.provider_type,
-            apiKey: activeKey.key_value,
-          });
+          await providersApi.syncKey(provider.provider_type, activeKey.key_value);
         }
       } catch (e) {
         console.warn("同步provider key到代理服务失败:", e);
       }
       try {
-        await invoke("fetch_provider_models", { providerId: provider.id });
+        await providersApi.fetchModels(provider.id);
       } catch (e) {
         console.warn("自动拉取模型失败:", e);
       }
@@ -90,14 +62,11 @@ export default function Providers() {
   const updateMutation = useMutation({
     mutationFn: async (provider: ProviderConfig) => {
       logInfo("Providers", "update_provider called", { id: provider.id, name: provider.name });
-      const result = await invoke("update_provider", { provider });
+      const result = await providersApi.update(provider.id, provider);
       try {
         const activeKey = provider.api_keys.find((k) => k.is_active);
         if (activeKey && activeKey.key_value) {
-          await invoke("sync_provider_key", {
-            providerName: provider.provider_type,
-            apiKey: activeKey.key_value,
-          });
+          await providersApi.syncKey(provider.provider_type, activeKey.key_value);
         }
       } catch (e) {
         console.warn("同步provider key到代理服务失败:", e);
@@ -117,7 +86,7 @@ export default function Providers() {
   const removeMutation = useMutation({
     mutationFn: (id: string) => {
       logInfo("Providers", "remove_provider called", { id });
-      return invoke("remove_provider", { id });
+      return providersApi.remove(id);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
@@ -130,7 +99,7 @@ export default function Providers() {
 
   const testMutation = useMutation<TestProviderResult, Error, string>({
     mutationFn: (providerId: string) =>
-      invoke<TestProviderResult>("test_provider", { providerId }),
+      providersApi.test(providerId),
   });
 
   const getProviderIcon = (type: string) => {
@@ -141,15 +110,15 @@ export default function Providers() {
     const labels: Record<string, string> = {
       openai: "OpenAI",
       anthropic: "Anthropic",
-      gemini: "Google Gemini",
-      deepseek: "DeepSeek",
-      minimax: "MiniMax",
-      siliconflow: "SiliconFlow",
-      glm: "智谱GLM",
-      doubao: "字节豆包",
-      qwen: "阿里通义",
-      moonshot: "月之暗面Kimi",
-      yi: "零一万物",
+      deepseek: "DeepSeek[深度求索]",
+      siliconflow: "SiliconFlow[硅基流动]",
+      glm: "GLM[智谱]",
+      "glm-coding": "GLM(Coding)[智谱]",
+      minimax: "MiniMax[上海稀宇科技]",
+      "minimax-tokenplan": "MiniMax(TokenPlan)[上海稀宇科技]",
+      "arkcode": "ArkCode(Coding)[火山引擎]",
+      moonshot: "Kimi[月之暗面]",
+      yi: "零一万物Yi",
       openrouter: "OpenRouter",
     };
     return labels[type] || type;
@@ -252,7 +221,7 @@ export default function Providers() {
                   <div className="flex items-center gap-1">
                     <Key size={16} />
                     <span className="text-sm">
-                      {provider.api_keys.length} 个
+                      {(provider.api_keys || []).length} 个
                     </span>
                   </div>
                 </div>
@@ -262,7 +231,7 @@ export default function Providers() {
                   <span className="text-sm text-muted-foreground">
                     可用模型
                   </span>
-                  <span className="text-sm">{provider.models.length} 个</span>
+                  <span className="text-sm">{(provider.models || []).length} 个</span>
                 </div>
 
                 {/* 基础URL */}
@@ -386,26 +355,14 @@ function AddProviderDialog({
       ],
     },
     {
-      value: "gemini",
-      label: "Google Gemini",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      models: [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-      ],
-    },
-    {
       value: "deepseek",
-      label: "DeepSeek",
+      label: "DeepSeek[深度求索]",
       baseUrl: "https://api.deepseek.com",
       models: ["deepseek-chat", "deepseek-coder", "deepseek-chat-v3"],
     },
     {
       value: "siliconflow",
-      label: "SiliconFlow",
+      label: "SiliconFlow[硅基流动]",
       baseUrl: "https://api.siliconflow.cn",
       models: [
         "Qwen/Qwen2.5-7B-Instruct",
@@ -421,13 +378,37 @@ function AddProviderDialog({
     },
     {
       value: "glm",
-      label: "智谱GLM",
+      label: "GLM[智谱]",
       baseUrl: "https://open.bigmodel.cn/api/paas/v4",
       models: ["glm-4", "glm-4-plus", "glm-4v", "glm-3-turbo"],
     },
     {
+      value: "glm-coding",
+      label: "GLM(Coding)[智谱]",
+      baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+      models: ["coder-4-plus", "coder-4"],
+    },
+    {
+      value: "minimax",
+      label: "MiniMax[上海稀宇科技]",
+      baseUrl: "https://api.minimax.chat",
+      models: ["MiniMax-Text-01", "abab6.5s-chat", "abab6.5g-chat"],
+    },
+    {
+      value: "minimax-tokenplan",
+      label: "MiniMax(TokenPlan)[上海稀宇科技]",
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      models: [],
+    },
+    {
+      value: "arkcode",
+      label: "ArkCode(Coding)[火山引擎]",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      models: [],
+    },
+    {
       value: "moonshot",
-      label: "月之暗面Kimi",
+      label: "Kimi[月之暗面]",
       baseUrl: "https://api.moonshot.cn/v1",
       models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
     },
@@ -444,7 +425,6 @@ function AddProviderDialog({
       models: [
         "openai/gpt-4o",
         "anthropic/claude-3.5-sonnet",
-        "google/gemini-2.0-flash-exp",
       ],
     },
   ];

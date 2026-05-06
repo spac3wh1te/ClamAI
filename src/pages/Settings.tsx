@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
+import { configApi } from "../api/config";
+import { proxyApi } from "../api/stats";
 import {
   Save,
   RotateCcw,
@@ -21,7 +23,7 @@ import { useAuth } from "../context/AuthContext";
 import { useApp } from "../context/AppContext";
 import { useSetup } from "../context/SetupContext";
 import { User, Lock } from "lucide-react";
-import { logInfo, logError } from "../utils/log";
+import { logInfo, logError, setFrontendLogLevel } from "../utils/log";
 
 interface AppConfig {
   gateway: {
@@ -106,26 +108,27 @@ export default function Settings() {
 
   const { data: currentConfig, isLoading } = useQuery<AppConfig>({
     queryKey: ["config"],
-    queryFn: () => invoke<AppConfig>("get_config"),
+    queryFn: () => configApi.get() as Promise<AppConfig>,
   });
 
   const { data: profilesData, refetch: refetchProfiles } = useQuery<
     ProfileInfo[]
   >({
     queryKey: ["profiles"],
-    queryFn: () => invoke<ProfileInfo[]>("list_profiles"),
+    queryFn: () => configApi.listProfiles(),
   });
 
   useEffect(() => {
     if (currentConfig && !config) {
       setConfig(currentConfig);
+      if (currentConfig.gateway?.log_level) setFrontendLogLevel(currentConfig.gateway.log_level);
     }
   }, [currentConfig]);
 
   const saveMutation = useMutation({
     mutationFn: (newConfig: AppConfig) => {
       logInfo("Settings", "save_config");
-      return invoke("save_config", { config: newConfig });
+      return configApi.save(newConfig as any);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["config"] });
@@ -133,6 +136,7 @@ export default function Settings() {
       if (config?.ui.theme) setTheme(config.ui.theme);
       if (config?.ui.language) setLocale(config.ui.language as any);
       if (config?.ui.timezone) setTimezone(config.ui.timezone);
+      if (config?.gateway.log_level) setFrontendLogLevel(config.gateway.log_level);
     },
     onError: (error) => { logError("Settings", "save_config failed", error); },
   });
@@ -140,7 +144,7 @@ export default function Settings() {
   const resetMutation = useMutation({
     mutationFn: () => {
       logInfo("Settings", "reset_config");
-      return invoke("reset_config");
+      return configApi.reset();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["config"] });
@@ -167,9 +171,7 @@ export default function Settings() {
     setProxyTesting(true);
     setProxyTestResult(null);
     try {
-      const result = await invoke<ProxyTestResult>("test_proxy_connectivity", {
-        proxyUrl: config?.advanced.proxy_url || null,
-      });
+      const result = await proxyApi.testConnectivity(config?.advanced.proxy_url || undefined);
       setProxyTestResult(result);
     } catch (e: any) {
       setProxyTestResult({
@@ -298,10 +300,7 @@ export default function Settings() {
     if (!newProfileName.trim()) return;
     try {
       const id = "profile_" + Date.now();
-      await invoke("save_current_as_profile", {
-        profileId: id,
-        displayName: newProfileName.trim(),
-      });
+      await configApi.saveAsProfile(id, newProfileName.trim());
       setNewProfileName("");
       setShowNewProfile(false);
       refetchProfiles();
@@ -318,7 +317,7 @@ export default function Settings() {
     )
       return;
     try {
-      await invoke("load_profile", { profileId });
+      await configApi.loadProfile(profileId);
       queryClient.invalidateQueries({ queryKey: ["config"] });
       queryClient.invalidateQueries({ queryKey: ["providers"] });
       queryClient.invalidateQueries({ queryKey: ["proxy-models"] });
@@ -332,7 +331,7 @@ export default function Settings() {
   const handleDeleteProfile = async (profileId: string) => {
     if (!confirm("确定删除此配置方案？")) return;
     try {
-      await invoke("delete_profile", { profileId });
+      await configApi.deleteProfile(profileId);
       refetchProfiles();
     } catch (e: any) {
       alert("删除失败: " + (e?.toString() || "未知错误"));
@@ -342,10 +341,7 @@ export default function Settings() {
   const handleRenameProfile = async (profileId: string) => {
     if (!renameValue.trim()) return;
     try {
-      await invoke("rename_profile", {
-        profileId,
-        newName: renameValue.trim(),
-      });
+      await configApi.renameProfile(profileId, renameValue.trim());
       setRenamingId(null);
       refetchProfiles();
     } catch (e: any) {

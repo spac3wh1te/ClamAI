@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/tauri";
+import { usersApi } from "../api/users";
+import { authApi } from "../api/auth";
 import {
   Users,
   UserPlus,
@@ -39,17 +40,15 @@ function UserManagement() {
   const { data: usersData, refetch } = useQuery({
     queryKey: ["users"],
     queryFn: async () => {
-      const raw = await invoke<string>("list_users");
-      const parsed = JSON.parse(raw);
-      return (parsed.users || []) as UserInfo[];
+      const result = await usersApi.list();
+      return (result.users || []) as unknown as UserInfo[];
     },
   });
 
   useQuery({
     queryKey: ["registration-open"],
     queryFn: async () => {
-      const raw = await invoke<string>("get_auth_status");
-      const parsed = JSON.parse(raw);
+      const parsed = await authApi.status();
       setRegOpen(parsed.registration_open === true);
       return parsed;
     },
@@ -59,12 +58,7 @@ function UserManagement() {
 
   const createMutation = useMutation({
     mutationFn: () =>
-      invoke("create_user", {
-        username: newUser.username,
-        password: newUser.password,
-        display_name: newUser.display_name || undefined,
-        role: newUser.role,
-      }),
+      usersApi.create(newUser.username, newUser.password, newUser.role, newUser.display_name || undefined),
     onSuccess: () => {
       setShowCreate(false);
       setNewUser({ username: "", password: "", display_name: "", role: "user" });
@@ -75,11 +69,10 @@ function UserManagement() {
 
   const updateMutation = useMutation({
     mutationFn: (u: UserInfo) =>
-      invoke("update_user", {
-        id: u.id,
+      usersApi.update(u.id, {
         display_name: u.display_name,
         role: u.role,
-        status: u.status,
+        is_active: u.status === "active",
       }),
     onSuccess: () => {
       setEditingUser(null);
@@ -89,14 +82,14 @@ function UserManagement() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => invoke("delete_user", { id }),
+    mutationFn: (id: string) => usersApi.delete(id),
     onSuccess: () => refetch(),
     onError: (e: any) => alert("删除失败: " + e),
   });
 
   const resetMutation = useMutation({
     mutationFn: ({ id, pw }: { id: string; pw: string }) =>
-      invoke("reset_user_password", { id, newPassword: pw }),
+      usersApi.resetPassword(id, pw),
     onSuccess: () => {
       setResettingUserId(null);
       setResetPassword("");
@@ -105,7 +98,7 @@ function UserManagement() {
   });
 
   const regToggleMutation = useMutation({
-    mutationFn: (open: boolean) => invoke("set_registration_open", { open }),
+    mutationFn: (open: boolean) => usersApi.setRegistrationOpen(open),
     onSuccess: (_, open) => setRegOpen(open),
     onError: (e: any) => alert("设置失败: " + e),
   });

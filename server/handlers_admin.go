@@ -1,0 +1,582 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gorilla/mux"
+)
+
+func (p *ProxyServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	p.stats.mu.Lock()
+	total := p.stats.TotalRequests
+	active := p.stats.ActiveRequests
+	success := p.stats.SuccessRequests
+	errCount := p.stats.ErrorRequests
+	p.stats.mu.Unlock()
+
+	health := map[string]interface{}{
+		"status":  "healthy",
+		"version": "1.0.0",
+		"stats": map[string]interface{}{
+			"total_requests":   total,
+			"active_requests":  active,
+			"success_requests": success,
+			"error_requests":   errCount,
+		},
+	}
+	jsonBytes, _ := json.Marshal(health)
+	w.Write(jsonBytes)
+}
+
+func (p *ProxyServer) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	provider := r.URL.Query().Get("provider")
+
+	if code == "" {
+		http.Error(w, "Missing authorization code", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("OAuth callback: provider=%s, state=%s", provider, state)
+
+	tauriURL := "http://127.0.0.1:1420/oauth/callback"
+	callbackData := map[string]string{
+		"provider": provider,
+		"code":     code,
+		"state":    state,
+	}
+	jsonData, _ := json.Marshal(callbackData)
+
+	safeGo(func() {
+		req, _ := http.NewRequest("POST", tauriURL, bytes.NewReader(jsonData))
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 5 * time.Second}
+		client.Do(req)
+	})
+
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`<!DOCTYPE html><html><head><title>Authentication Successful</title><meta http-equiv="refresh" content="3;url=http://127.0.0.1:1420"><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0}.container{text-align:center;background:#16213e;padding:3rem;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.3)}h1{color:#4ade80;margin-bottom:1rem}p{color:#9ca3af;margin-bottom:1rem}.spinner{width:40px;height:40px;border:3px solid #374151;border-top-color:#4ade80;border-radius:50%;animation:spin 1s linear infinite;margin:1rem auto}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div class="container"><h1>Authentication Successful</h1><p>Returning to ClamAI...</p><div class="spinner"></div></div></body></html>`))
+}
+
+func (p *ProxyServer) handleStartOAuth(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider    string `json:"provider"`
+		RedirectURI string `json:"redirect_uri"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	state := generateOAuthState()
+	oauthStatesMu.Lock()
+	oauthStates[state] = &OAuthStateInfo{
+		Provider:    req.Provider,
+		RedirectURI: req.RedirectURI,
+		CreatedAt:   time.Now(),
+	}
+	oauthStatesMu.Unlock()
+
+	authURL := buildAuthURL(req.Provider, state, req.RedirectURI)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"state":    state,
+		"auth_url": authURL,
+	})
+}
+
+func generateOAuthState() string {
+	return fmt.Sprintf("state_%d", time.Now().UnixNano())
+}
+
+func buildAuthURL(provider, state, redirectURI string) string {
+	switch provider {
+	case "gemini":
+		return fmt.Sprintf("https://accounts.google.com/o/oauth2/v2/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=https://www.googleapis.com/auth/generative-language.tts&state=%s",
+			os.Getenv("GEMINI_CLIENT_ID"), redirectURI, state)
+	case "qwen":
+		return fmt.Sprintf("https://qwen.aliyun.com/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=api_access&state=%s",
+			os.Getenv("QWEN_CLIENT_ID"), redirectURI, state)
+	default:
+		return ""
+	}
+}
+
+func getProviderNames(providers map[string]Provider) []string {
+	names := make([]string, 0, len(providers))
+	for k := range providers {
+		names = append(names, k)
+	}
+	return names
+}
+
+func (p *ProxyServer) handleListProviders(w http.ResponseWriter, r *http.Request) {
+	providers := dbListProviders()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"providers": providers,
+	})
+}
+
+func (p *ProxyServer) handleTestProvider(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider        string `json:"provider"`
+		APIKey          string `json:"api_key"`
+		ProviderID      string `json:"provider_id"`
+		FetchModelsOnly bool   `json:"fetch_models_only"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.ProviderID != "" {
+		var found map[string]interface{}
+		for _, pr := range dbListProviders() {
+			if pr["id"] == req.ProviderID {
+				found = pr
+				break
+			}
+		}
+		if found == nil {
+			http.Error(w, "provider not found", http.StatusNotFound)
+			return
+		}
+		providerType, _ := found["provider_type"].(string)
+		apiKey := ""
+		if keys, ok := found["api_keys"].([]map[string]interface{}); ok && len(keys) > 0 {
+			apiKey, _ = keys[0]["key_value"].(string)
+		}
+		provider, err := NewProvider(providerType, apiKey)
+		if err != nil {
+			log.Printf("[ERROR] handleTestProvider: NewProvider failed: %v", err)
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		if req.FetchModelsOnly {
+			provider.FetchModels()
+			models := provider.GetModels()
+			modelsJSON, _ := json.Marshal(models)
+			dbMu.Lock()
+			db.Exec("UPDATE providers SET models=?, updated_at=? WHERE id=?", string(modelsJSON), time.Now().UTC().Format(time.RFC3339), req.ProviderID)
+			dbMu.Unlock()
+			invalidateProviderCache()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"models": models,
+			})
+			return
+		}
+		if err := provider.TestConnection(); err != nil {
+			log.Printf("[ERROR] handleTestProvider: TestConnection failed: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Connection test failed",
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Connection successful",
+		})
+		return
+	}
+
+	if req.Provider == "" {
+		http.Error(w, "missing provider or provider_id", http.StatusBadRequest)
+		return
+	}
+	provider, err := NewProvider(req.Provider, req.APIKey)
+	if err != nil {
+		log.Printf("[ERROR] handleTestProvider: NewProvider failed: %v", err)
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	if err := provider.TestConnection(); err != nil {
+		log.Printf("[ERROR] handleTestProvider: TestConnection failed: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Connection test failed",
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Connection successful",
+	})
+}
+
+func (p *ProxyServer) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	name := vars["name"]
+
+	var req struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("[DEBUG] handleSetProviderKey: name=%s, has_api_key=%v", name, req.APIKey != "")
+
+	if err := p.SetProviderKey(name, req.APIKey); err != nil {
+		log.Printf("[ERROR] handleSetProviderKey: failed to set provider key: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Provider key set successfully",
+	})
+}
+
+func (p *ProxyServer) SetProviderKey(name, apiKey string) error {
+	log.Printf("[INFO] SetProviderKey called: name=%s, apiKey length=%d", name, len(apiKey))
+	provider, err := NewProvider(name, apiKey)
+	if err != nil {
+		log.Printf("[ERROR] SetProviderKey: NewProvider failed: %v", err)
+		return err
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.providers[name] = provider
+	log.Printf("[INFO] SetProviderKey: provider %s registered, total providers=%d", name, len(p.providers))
+
+	provider.FetchModels()
+	log.Printf("[INFO] SetProviderKey: FetchModels done for %s, models=%d", name, len(provider.GetModels()))
+
+	return nil
+}
+
+func (p *ProxyServer) GetProvider(name string) (Provider, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	provider, exists := p.providers[name]
+	log.Printf("[DEBUG] GetProvider: name=%s, found=%v", name, exists)
+	return provider, exists
+}
+
+func (p *ProxyServer) handleStatsUsage(w http.ResponseWriter, r *http.Request) {
+	period := 60 * 24 * 7
+	if p := r.URL.Query().Get("period"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			period = parsed
+		}
+	}
+
+	log.Printf("[DEBUG] handleStatsUsage called, period=%d minutes", period)
+
+	dbStats := dbGetUsageStats(period)
+	totalReqs := dbStats.TotalRequests
+	successReqs := dbStats.SuccessRequests
+	inputTok := dbStats.InputTokens
+	outputTok := dbStats.OutputTokens
+	totalLat := dbStats.TotalLatencyMs
+
+	log.Printf("[DEBUG] handleStatsUsage: totalReqs=%d, successReqs=%d", totalReqs, successReqs)
+
+	byProvider := make(map[string]map[string]interface{})
+	for k, v := range dbStats.ByProvider {
+		reqs := int64(0)
+		if r, ok := v["requests"].(int64); ok {
+			reqs = r
+		}
+		succ := int64(0)
+		if s, ok := v["success"].(int64); ok {
+			succ = s
+		}
+		sr := 1.0
+		if reqs > 0 {
+			sr = float64(succ) / float64(reqs)
+		}
+		byProvider[k] = map[string]interface{}{
+			"requests":     v["requests"],
+			"tokens":       v["tokens"],
+			"success_rate": sr,
+		}
+	}
+
+	byModel := make(map[string]map[string]interface{})
+	for k, v := range dbStats.ByModel {
+		byModel[k] = map[string]interface{}{
+			"requests": v["requests"],
+			"tokens":   v["tokens"],
+		}
+	}
+
+	dailyStats := make(map[string]*DailyStat)
+	for k, v := range dbStats.DailyBreakdown {
+		ds := *v
+		dailyStats[k] = &ds
+	}
+
+	hourlyStats := make(map[string]*DailyStat)
+	for k, v := range dbStats.HourlyBreakdown {
+		ds := *v
+		hourlyStats[k] = &ds
+	}
+
+	minuteStats := make(map[string]*DailyStat)
+	for k, v := range dbStats.MinuteBreakdown {
+		ds := *v
+		minuteStats[k] = &ds
+	}
+
+	var successRate float64
+	if totalReqs > 0 {
+		successRate = float64(successReqs) / float64(totalReqs) * 100
+	}
+	var avgLatency float64
+	if totalReqs > 0 {
+		avgLatency = float64(totalLat) / float64(totalReqs)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_requests":     totalReqs,
+		"input_tokens":       inputTok,
+		"output_tokens":      outputTok,
+		"total_tokens":       inputTok + outputTok,
+		"success_requests":   successReqs,
+		"error_requests":     totalReqs - successReqs,
+		"success_rate":       successRate,
+		"average_latency_ms": avgLatency,
+		"by_provider":        byProvider,
+		"by_model":           byModel,
+		"daily_breakdown":    dailyStats,
+		"hourly_breakdown":   hourlyStats,
+		"minute_breakdown":   minuteStats,
+		"granularity":        dbStats.Granularity,
+	})
+}
+
+func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
+	period := 60 * 24 * 7
+	if d := r.URL.Query().Get("period"); d != "" {
+		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 {
+			period = parsed
+		}
+	}
+
+	cutoff := time.Now().Add(-time.Duration(period) * time.Minute).UTC()
+
+	granularity := "hour"
+	if period <= 60 {
+		granularity = "minute"
+	} else if period > 60*24 {
+		granularity = "day"
+	}
+
+	type AlertItem struct {
+		Date        string `json:"date"`
+		Total       int    `json:"total"`
+		InputBlock  int    `json:"input_block"`
+		OutputBlock int    `json:"output_block"`
+		Keyword     int    `json:"keyword"`
+		Semantic    int    `json:"semantic"`
+	}
+
+	daily := make(map[string]*AlertItem)
+	hourly := make(map[string]*AlertItem)
+	minutely := make(map[string]*AlertItem)
+
+	rows, err := db.Query(`SELECT datetime(timestamp, 'localtime') as ts_local, direction, trigger_type FROM security_alerts WHERE timestamp >= ? ORDER BY timestamp ASC`, cutoff.Format(time.RFC3339))
+	if err != nil {
+		log.Printf("[ERROR] handleAlertStats: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"daily": []interface{}{}, "hourly": []interface{}{}, "minute": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ts string
+		var direction, triggerType string
+		if err := rows.Scan(&ts, &direction, &triggerType); err != nil {
+			continue
+		}
+		dateKey := ts[:10]
+		hourKey := strings.Replace(ts[:13], "T", " ", 1) + ":00"
+		minuteKey := strings.Replace(ts[:16], "T", " ", 1)
+
+		if _, ok := daily[dateKey]; !ok {
+			daily[dateKey] = &AlertItem{Date: dateKey}
+		}
+		daily[dateKey].Total++
+		if direction == "input" {
+			daily[dateKey].InputBlock++
+		} else if direction == "output" {
+			daily[dateKey].OutputBlock++
+		}
+		if triggerType == "keyword" {
+			daily[dateKey].Keyword++
+		} else if triggerType == "semantic" {
+			daily[dateKey].Semantic++
+		}
+
+		if _, ok := hourly[hourKey]; !ok {
+			hourly[hourKey] = &AlertItem{Date: hourKey}
+		}
+		hourly[hourKey].Total++
+		if direction == "input" {
+			hourly[hourKey].InputBlock++
+		} else if direction == "output" {
+			hourly[hourKey].OutputBlock++
+		}
+		if triggerType == "keyword" {
+			hourly[hourKey].Keyword++
+		} else if triggerType == "semantic" {
+			hourly[hourKey].Semantic++
+		}
+
+		if _, ok := minutely[minuteKey]; !ok {
+			minutely[minuteKey] = &AlertItem{Date: minuteKey}
+		}
+		minutely[minuteKey].Total++
+		if direction == "input" {
+			minutely[minuteKey].InputBlock++
+		} else if direction == "output" {
+			minutely[minuteKey].OutputBlock++
+		}
+		if triggerType == "keyword" {
+			minutely[minuteKey].Keyword++
+		} else if triggerType == "semantic" {
+			minutely[minuteKey].Semantic++
+		}
+	}
+
+	dailyResult := make([]*AlertItem, 0, len(daily))
+	for _, v := range daily {
+		dailyResult = append(dailyResult, v)
+	}
+	sort.Slice(dailyResult, func(i, j int) bool { return dailyResult[i].Date < dailyResult[j].Date })
+
+	hourlyResult := make([]*AlertItem, 0, len(hourly))
+	for _, v := range hourly {
+		hourlyResult = append(hourlyResult, v)
+	}
+	sort.Slice(hourlyResult, func(i, j int) bool { return hourlyResult[i].Date < hourlyResult[j].Date })
+
+	minuteResult := make([]*AlertItem, 0, len(minutely))
+	for _, v := range minutely {
+		minuteResult = append(minuteResult, v)
+	}
+	sort.Slice(minuteResult, func(i, j int) bool { return minuteResult[i].Date < minuteResult[j].Date })
+
+	log.Printf("[DEBUG] handleAlertStats: daily=%d entries, hourly=%d entries, granularity=%s", len(dailyResult), len(hourlyResult), granularity)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"daily":       dailyResult,
+		"hourly":      hourlyResult,
+		"minute":      minuteResult,
+		"granularity": granularity,
+	})
+}
+
+func (p *ProxyServer) handleCallerTop10(w http.ResponseWriter, r *http.Request) {
+	period := 60 * 24 * 7
+	if p := r.URL.Query().Get("period"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			period = parsed
+		}
+	}
+	callers := dbGetCallerTop10(period)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"callers": callers,
+	})
+}
+
+func (p *ProxyServer) handleSecurityTokenStats(w http.ResponseWriter, r *http.Request) {
+	period := 60 * 24 * 7
+	if p := r.URL.Query().Get("period"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			period = parsed
+		}
+	}
+	stats := dbGetSecurityTokenStats(period)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+func (p *ProxyServer) handleSyncAllProviders(w http.ResponseWriter, r *http.Request) {
+	synced := 0
+	for _, pr := range dbListProviders() {
+		ptype, _ := pr["provider_type"].(string)
+		name, _ := pr["name"].(string)
+		if ptype == "" {
+			continue
+		}
+		var apiKey string
+		var baseURL string
+		if keys, ok := pr["api_keys"].([]map[string]interface{}); ok && len(keys) > 0 {
+			apiKey, _ = keys[0]["key_value"].(string)
+			baseURL, _ = pr["base_url"].(string)
+		}
+		if apiKey == "" {
+			continue
+		}
+		p.mu.Lock()
+		provider, err := NewProvider(ptype, apiKey)
+		if err != nil {
+			p.mu.Unlock()
+			continue
+		}
+		p.providers[ptype] = provider
+		p.mu.Unlock()
+		log.Printf("[Sync] registered provider %s (name=%s) from DB, baseURL=%s", ptype, name, baseURL)
+		provider.FetchModels()
+		synced++
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"synced": synced, "total_providers": len(p.providers),
+	})
+}
+
+func (p *ProxyServer) handleStatsLogs(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[DEBUG] handleStatsLogs called, path=%s", r.URL.Path)
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = userIDForQuery(r)
+	}
+
+	logs, totalCount := dbGetRecentLogs(limit, userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total": len(logs),
+		"count": totalCount,
+		"logs":  logs,
+	})
+}

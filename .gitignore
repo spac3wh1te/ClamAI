@@ -25,12 +25,12 @@ dist-ssr
 *.sw?
 
 # Rust
-src-tauri/target
-src-tauri/Cargo.lock
+_build/rust/target/
+src-tauri/target/
 
 # Go
-src-tauri/proxy-service/ClamAI-service
-src-tauri/proxy-service/ClamAI-service.exe
+proxy-service/ClamAI-service
+proxy-service/ClamAI-service.exe
 *.exe
 *.exe~
 *.dll
@@ -45,9 +45,11 @@ src-tauri/proxy-service/ClamAI-service.exe
 .env.*.local
 
 # Build artifacts
-target/
+_build/
+outputs/
 debug/
 release/
+.v0.*/
 
 # User data
 *.db

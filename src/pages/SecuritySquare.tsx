@@ -1,12 +1,9 @@
 import { useState } from "react";
-import { getSecurityApps } from "../security-apps";
+import { getSecurityApps } from "../features/security";
 
 export default function SecuritySquare() {
   const apps = getSecurityApps();
   const [activeTab, setActiveTab] = useState(apps[0]?.id || "");
-
-  const activeApp = apps.find((a) => a.id === activeTab);
-  const ActiveComponent = activeApp?.component;
 
   return (
     <div className="space-y-6">
@@ -37,12 +34,19 @@ export default function SecuritySquare() {
       </div>
 
       <div className="bg-card rounded-lg p-6 border border-border">
-        {ActiveComponent ? (
-          <ActiveComponent />
-        ) : (
+        {apps.length === 0 ? (
           <p className="text-muted-foreground text-center py-8">
             暂无可用安全应用
           </p>
+        ) : (
+          apps.map((app) => {
+            const Comp = app.component;
+            return (
+              <div key={app.id} className={activeTab === app.id ? "" : "hidden"}>
+                <Comp />
+              </div>
+            );
+          })
         )}
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
+import { providersApi } from "../api/providers";
 import { Shield, Key, ExternalLink, Check, AlertCircle } from "lucide-react";
 
 interface OAuthConfig {
@@ -40,7 +41,7 @@ interface OAuthState {
 export default function OAuth() {
   const { data: providers } = useQuery<ProviderConfig[]>({
     queryKey: ["providers"],
-    queryFn: () => invoke<ProviderConfig[]>("get_providers"),
+    queryFn: () => providersApi.list() as Promise<ProviderConfig[]>,
   });
 
   const oauthProviders = [
@@ -83,6 +84,7 @@ export default function OAuth() {
     Error,
     { providerType: string; redirectUri: string }
   >({
+    // TODO: migrate when API available
     mutationFn: ({ providerType, redirectUri }) =>
       invoke<OAuthState>("start_oauth_flow", {
         providerType,

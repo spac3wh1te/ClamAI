@@ -5,21 +5,8 @@ import {
   useState,
   ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { configApi } from "../api/config";
 import { translations, Locale, TranslationKey } from "../lib/i18n";
-
-interface UiConfig {
-  theme: string;
-  language: string;
-  timezone: string;
-  auto_start: boolean;
-  minimize_to_tray: boolean;
-  show_notifications: boolean;
-}
-
-interface AppConfig {
-  ui: UiConfig;
-}
 
 interface I18nContextType {
   locale: Locale;
@@ -48,7 +35,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const [configKey, setConfigKey] = useState(0);
 
   useEffect(() => {
-    invoke<AppConfig>("get_config")
+    configApi.get()
       .then((config) => {
         const savedTheme = config.ui.theme;
         const savedLocale = config.ui.language as Locale;
