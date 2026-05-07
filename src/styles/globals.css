@@ -2,49 +2,197 @@
 @tailwind components;
 @tailwind utilities;
 
+/* === 默认主题: 静谧 (Tranquil) === */
 :root {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
-  --card: 222.2 84% 4.9%;
-  --card-foreground: 210 40% 98%;
-  --popover: 222.2 84% 4.9%;
-  --popover-foreground: 210 40% 98%;
-  --primary: 210 40% 98%;
-  --primary-foreground: 222.2 47.4% 11.2%;
-  --secondary: 217.2 32.6% 17.5%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 217.2 32.6% 17.5%;
-  --muted-foreground: 215 20.2% 65.1%;
-  --accent: 217.2 32.6% 17.5%;
-  --accent-foreground: 210 40% 98%;
+  --background: 224 71% 4%;
+  --foreground: 210 40% 95%;
+  --card: 224 65% 9%;
+  --card-foreground: 210 40% 95%;
+  --popover: 224 65% 9%;
+  --popover-foreground: 210 40% 95%;
+  --primary: 187 92% 69%;
+  --primary-foreground: 224 71% 4%;
+  --secondary: 224 40% 14%;
+  --secondary-foreground: 210 40% 95%;
+  --muted: 224 40% 14%;
+  --muted-foreground: 215 20% 55%;
+  --accent: 224 40% 14%;
+  --accent-foreground: 210 40% 95%;
   --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 217.2 32.6% 17.5%;
-  --input: 217.2 32.6% 17.5%;
-  --ring: 212.7 26.8% 83.9%;
+  --destructive-foreground: 210 40% 95%;
+  --border: 220 30% 14%;
+  --input: 220 30% 14%;
+  --ring: 187 92% 69%;
   --radius: 0.5rem;
+  --glow: 187 92% 69%;
 }
 
-.light {
-  --background: 210 20% 96%;
-  --foreground: 222.2 47.4% 11.2%;
-  --card: 0 0% 100%;
-  --card-foreground: 222.2 47.4% 11.2%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222.2 47.4% 11.2%;
-  --primary: 222.2 47.4% 11.2%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 217.2 32.6% 17.5%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 217.2 32.6% 17.5%;
-  --muted-foreground: 215 20.2% 65.1%;
-  --accent: 217.2 32.6% 17.5%;
-  --accent-foreground: 210 40% 98%;
+/* === 热情 (Passion) === */
+.theme-passion {
+  --background: 20 14% 6%;
+  --foreground: 30 20% 93%;
+  --card: 20 14% 10%;
+  --card-foreground: 30 20% 93%;
+  --popover: 20 14% 10%;
+  --popover-foreground: 30 20% 93%;
+  --primary: 24 95% 55%;
+  --primary-foreground: 20 14% 6%;
+  --secondary: 20 10% 16%;
+  --secondary-foreground: 30 20% 93%;
+  --muted: 20 10% 16%;
+  --muted-foreground: 20 10% 48%;
+  --accent: 20 10% 16%;
+  --accent-foreground: 30 20% 93%;
   --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 214.3 31.8% 91.4%;
-  --input: 214.3 31.8% 91.4%;
-  --ring: 215 20.2% 65.1%;
+  --destructive-foreground: 30 20% 93%;
+  --border: 20 10% 18%;
+  --input: 20 10% 18%;
+  --ring: 24 95% 55%;
+  --glow: 24 95% 55%;
+}
+
+/* === 极客 (Geek) === */
+.theme-geek {
+  --background: 150 10% 3%;
+  --foreground: 120 10% 88%;
+  --card: 150 10% 7%;
+  --card-foreground: 120 10% 88%;
+  --popover: 150 10% 7%;
+  --popover-foreground: 120 10% 88%;
+  --primary: 142 72% 45%;
+  --primary-foreground: 150 10% 3%;
+  --secondary: 150 10% 12%;
+  --secondary-foreground: 120 10% 88%;
+  --muted: 150 10% 12%;
+  --muted-foreground: 150 10% 42%;
+  --accent: 150 10% 12%;
+  --accent-foreground: 120 10% 88%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 120 10% 88%;
+  --border: 150 10% 15%;
+  --input: 150 10% 15%;
+  --ring: 142 72% 45%;
+  --glow: 142 72% 45%;
+}
+
+/* === 经典 (Classic) === */
+.theme-classic {
+  --background: 220 20% 96%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 14% 91%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 220 14% 91%;
+  --muted-foreground: 220 10% 46%;
+  --accent: 220 14% 91%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 13% 88%;
+  --input: 220 13% 88%;
+  --ring: 221 83% 53%;
+  --glow: 221 83% 53%;
+}
+
+/* === 商务 (Business) === */
+.theme-business {
+  --background: 220 10% 8%;
+  --foreground: 40 20% 90%;
+  --card: 220 10% 12%;
+  --card-foreground: 40 20% 90%;
+  --popover: 220 10% 12%;
+  --popover-foreground: 40 20% 90%;
+  --primary: 45 93% 47%;
+  --primary-foreground: 220 10% 8%;
+  --secondary: 220 10% 16%;
+  --secondary-foreground: 40 20% 90%;
+  --muted: 220 10% 16%;
+  --muted-foreground: 220 10% 48%;
+  --accent: 220 10% 16%;
+  --accent-foreground: 40 20% 90%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 40 20% 90%;
+  --border: 220 10% 18%;
+  --input: 220 10% 18%;
+  --ring: 45 93% 47%;
+  --glow: 45 93% 47%;
+}
+
+/* === 简约 (Minimal) === */
+.theme-minimal {
+  --background: 0 0% 97%;
+  --foreground: 0 0% 15%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 15%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 15%;
+  --primary: 0 0% 25%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 94%;
+  --secondary-foreground: 0 0% 15%;
+  --muted: 0 0% 94%;
+  --muted-foreground: 0 0% 50%;
+  --accent: 0 0% 94%;
+  --accent-foreground: 0 0% 15%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 88%;
+  --input: 0 0% 88%;
+  --ring: 0 0% 25%;
+  --glow: 0 0% 50%;
+}
+
+/* === 明亮 (Bright) === */
+.theme-bright {
+  --background: 210 20% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 20% 92%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 20% 92%;
+  --muted-foreground: 215 15% 42%;
+  --accent: 210 20% 92%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 215 20% 88%;
+  --input: 215 20% 88%;
+  --ring: 217 91% 60%;
+  --glow: 217 91% 60%;
+}
+
+/* === 黑暗 (Dark) === */
+.theme-dark {
+  --background: 0 0% 3%;
+  --foreground: 0 0% 93%;
+  --card: 0 0% 8%;
+  --card-foreground: 0 0% 93%;
+  --popover: 0 0% 8%;
+  --popover-foreground: 0 0% 93%;
+  --primary: 0 0% 85%;
+  --primary-foreground: 0 0% 3%;
+  --secondary: 0 0% 12%;
+  --secondary-foreground: 0 0% 93%;
+  --muted: 0 0% 12%;
+  --muted-foreground: 0 0% 42%;
+  --accent: 0 0% 12%;
+  --accent-foreground: 0 0% 93%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 0 0% 93%;
+  --border: 0 0% 15%;
+  --input: 0 0% 15%;
+  --ring: 0 0% 85%;
+  --glow: 0 0% 60%;
 }
 
 * {
@@ -58,10 +206,9 @@ body {
     "calt" 1;
 }
 
-/* 滚动条样式 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -76,7 +223,6 @@ body {
   @apply bg-muted-foreground/50;
 }
 
-/* 工具类 */
 .container-custom {
   @apply container mx-auto px-4 max-w-7xl;
 }
@@ -85,7 +231,6 @@ body {
   @apply transition-all duration-200 hover:shadow-lg hover:scale-[1.02];
 }
 
-/* 动画 */
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -101,7 +246,23 @@ body {
   animation: fade-in 0.3s ease-out;
 }
 
-/* 加载状态 */
 .loading-spinner {
   @apply animate-spin rounded-full h-8 w-8 border-b-2 border-primary;
+}
+
+.sidebar-active {
+  background: hsl(var(--glow) / 0.12);
+  box-shadow: inset 0 0 0 1px hsl(var(--glow) / 0.15);
+}
+
+.sidebar-glow-dot {
+  box-shadow: 0 0 6px hsl(var(--glow) / 0.6);
+}
+
+.status-dot-safe {
+  box-shadow: 0 0 6px hsl(142 72% 45% / 0.6);
+}
+
+.status-dot-danger {
+  box-shadow: 0 0 6px hsl(0 84% 60% / 0.6);
 }

@@ -93,8 +93,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setCompleteError("");
     try {
       if (deployMode === "pc") {
-        console.log("[SetupWizard] === PC Mode Setup Start ===");
-        console.log("[SetupWizard] Step 1/2: complete_setup_with_config (Tauri invoke → start Go service)");
         let adminBaseUrl: string;
         try {
           adminBaseUrl = await setupApi.completeSetup({
@@ -104,18 +102,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         } catch (e1: any) {
           throw new Error(`步骤1失败 [启动本地服务]: ${e1?.message || e1}`);
         }
-        console.log("[SetupWizard] Step 1 OK. Go service should be running. adminBaseUrl=" + adminBaseUrl);
-        console.log("[SetupWizard] Step 2/2: setupAdmin (HTTP POST /api/v1/auth/setup)");
         try {
           await setupApi.setupAdmin(username, password, adminBaseUrl);
         } catch (e2: any) {
           throw new Error(`步骤2失败 [创建管理员账号]: ${e2?.message || e2}`);
         }
-        console.log("[SetupWizard] Step 2 OK. Admin created.");
       } else {
         const adminUrl = ensureProtocol(remoteAdminUrl);
         const proxyUrl = remoteProxyUrl.trim() ? ensureProtocol(remoteProxyUrl) : null;
-        console.log("[SetupWizard] === Server Mode Setup Start ===");
         try {
           await setupApi.completeSetup({
             deploy_mode: "server", remote_url: adminUrl, remote_proxy_url: proxyUrl,
@@ -132,7 +126,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           }
         }
       }
-      console.log("[SetupWizard] All setup steps succeeded, calling onComplete -> checkSetup");
       onComplete();
     } catch (e: any) {
       const msg = e?.message || e?.toString() || "配置失败";

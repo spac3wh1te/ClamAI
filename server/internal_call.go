@@ -19,7 +19,16 @@ func isAnthropicProvider(provider Provider) bool {
 	return false
 }
 
-func (p *ProxyServer) directModelCall(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, []byte, error) {
+func (p *ProxyServer) getUsageSpecForProvider(providerName string) UsageExtraction {
+	for i := range p.providerRoutes {
+		if p.providerRoutes[i].Name == providerName {
+			return p.providerRoutes[i].Usage
+		}
+	}
+	return UsageExtraction{ModelPath: "model", UsagePath: "usage", InputField: "prompt_tokens", OutputField: "completion_tokens"}
+}
+
+func (p *ProxyServer) directModelCall(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, int, int, []byte, error) {
 	provider, modelName := p.resolveProvider(model)
 	if provider == nil {
 		p.mu.RLock()
@@ -29,7 +38,7 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 		}
 		p.mu.RUnlock()
 		log.Printf("[INTERNAL] resolveProvider FAILED for model=%s, available=%v", model, available)
-		return 0, nil, fmt.Errorf("no provider for model: %s", model)
+		return 0, 0, 0, nil, fmt.Errorf("no provider for model: %s", model)
 	}
 	log.Printf("[INTERNAL] resolved provider=%s model=%s", provider.GetName(), modelName)
 
@@ -86,7 +95,7 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 
 	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, fmt.Errorf("create request: %w", err)
+		return 0, 0, 0, nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -105,13 +114,13 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[INTERNAL] ERROR upstream call failed: %v", err)
-		return 0, nil, fmt.Errorf("upstream call failed: %w", err)
+		return 0, 0, 0, nil, fmt.Errorf("upstream call failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("read response: %w", err)
+		return resp.StatusCode, 0, 0, nil, fmt.Errorf("read response: %w", err)
 	}
 
 	preview := string(respBody)
@@ -120,8 +129,12 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 	}
 	log.Printf("[INTERNAL] response status=%d bodyLen=%d", resp.StatusCode, len(respBody))
 
+	usageSpec := p.getUsageSpecForProvider(provider.GetName())
+	inputTokens, outputTokens := extractTokensFromBody(respBody, &usageSpec)
+	log.Printf("[INTERNAL] extracted tokens: input=%d output=%d", inputTokens, outputTokens)
+
 	_ = preview
-	return resp.StatusCode, respBody, nil
+	return resp.StatusCode, inputTokens, outputTokens, respBody, nil
 }
 
 func (p *ProxyServer) directEmbeddingCall(model string, input string) ([]float32, error) {

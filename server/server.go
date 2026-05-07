@@ -93,6 +93,7 @@ func NewProxyServer(config *Config) (*ProxyServer, error) {
 	proxy.setupRoutes()
 	go proxy.periodicSave()
 	proxy.startPeriodicTaskScheduler()
+	initSystemAnalysis()
 	return proxy, nil
 }
 
@@ -149,8 +150,12 @@ func (p *ProxyServer) initProviders() error {
 			continue
 		}
 		var apiKey string
+		var baseURL string
 		if keys, ok := pr["api_keys"].([]map[string]interface{}); ok && len(keys) > 0 {
 			apiKey, _ = keys[0]["key_value"].(string)
+		}
+		if v, ok := pr["base_url"].(string); ok && v != "" {
+			baseURL = v
 		}
 		if apiKey == "" {
 			continue
@@ -159,7 +164,7 @@ func (p *ProxyServer) initProviders() error {
 			continue
 		}
 		log.Printf("[Init] Loading provider %s (%s) from database", name, ptype)
-		if err := p.SetProviderKey(ptype, apiKey); err != nil {
+		if err := p.SetProviderKeyWithBaseURL(ptype, apiKey, baseURL); err != nil {
 			log.Printf("[Init] Failed to load provider %s: %v", ptype, err)
 		}
 	}
@@ -267,7 +272,9 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/keys/{id}/reveal", p.handleRevealAPIKey).Methods("GET")
 	api.HandleFunc("/stats/usage", p.handleStatsUsage).Methods("GET")
 	api.HandleFunc("/stats/logs", p.handleStatsLogs).Methods("GET")
+	api.HandleFunc("/stats/service-logs", p.handleServiceLogs).Methods("GET")
 	api.HandleFunc("/stats/alerts", p.handleAlertStats).Methods("GET")
+	api.HandleFunc("/stats/alert-severity", p.handleAlertSeverityStats).Methods("GET")
 	api.HandleFunc("/stats/callers", p.handleCallerTop10).Methods("GET")
 	api.HandleFunc("/stats/security-tokens", p.handleSecurityTokenStats).Methods("GET")
 	api.HandleFunc("/proxy/test", p.handleProxyTest).Methods("GET")
@@ -300,8 +307,12 @@ func (p *ProxyServer) setupRoutes() {
 
 	p.setupSecurityRoutes(api)
 	log.Printf("[SETUP] Security routes registered")
+	p.setupThreatRoutes(api)
+	log.Printf("[SETUP] Threat routes registered")
 	p.setupVectorRoutes(api)
 	log.Printf("[SETUP] Vector routes registered")
+	p.setupSystemAnalysisRoutes(api)
+	log.Printf("[SETUP] SystemAnalysis routes registered")
 	p.setupRateLimitRoutes(api)
 	log.Printf("[SETUP] RateLimit routes registered")
 	p.setupAuthRoutes(api)

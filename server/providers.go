@@ -15,15 +15,14 @@ import (
 	"time"
 )
 
-// Provider 接口定义
 type Provider interface {
 	GetName() string
 	GetBaseURL() string
-	GetModels() []string
 	GetAPIKey() string
 	ProxyRequest(w http.ResponseWriter, r *http.Request)
 	TestConnection() error
-	FetchModels()
+	FetchModels() []string
+	SetBaseURL(url string)
 }
 
 var fetchMu sync.Mutex
@@ -97,7 +96,6 @@ func fetchModelsForProvider(baseURL, apiKey, authType string) []string {
 	return fetchModelsFromAPI(modelsURL, apiKey, authType)
 }
 
-// 辅助函数
 func testConnection(url, apiKey, authType string) error {
 	client := newHTTPClient("")
 	if proxyURL := getProxy(); proxyURL != nil {
@@ -354,7 +352,6 @@ func proxyOpenAIRequest(baseURL, apiKey string) func(http.ResponseWriter, *http.
 	}
 }
 
-// ==================== 提供商工厂 ====================
 func NewProvider(providerType, apiKey string) (Provider, error) {
 	switch providerType {
 	case "openai":

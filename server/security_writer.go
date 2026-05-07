@@ -157,6 +157,7 @@ func (w *slidingWindowWriter) Write(b []byte) (int, error) {
 					TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
 					ContentPreview: truncate(text, 200), Model: w.reqModel,
 					APIKeyUsed: w.apiKey, ClientIP: w.clientIP, Action: "abort",
+					Severity: level,
 				}
 				dbInsertAlert(alert)
 				abortMsg := fmt.Sprintf("data: {\"error\":{\"message\":\"%s\",\"type\":\"content_policy_violation\"}}\n\n", w.cfg.BlockMessage)

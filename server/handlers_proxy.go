@@ -32,6 +32,27 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		apiKey = provider.GetAPIKey()
 	}
 	p.mu.RUnlock()
+	if upstreamBase == "" || apiKey == "" {
+		for _, pr := range dbListProviders() {
+			ptype, _ := pr["provider_type"].(string)
+			if ptype != spec.Name {
+				continue
+			}
+			if upstreamBase == "" {
+				if bu, ok := pr["base_url"].(string); ok && bu != "" {
+					upstreamBase = bu
+				}
+			}
+			if apiKey == "" {
+				if keys, ok := pr["api_keys"].([]map[string]interface{}); ok && len(keys) > 0 {
+					apiKey, _ = keys[0]["key_value"].(string)
+				}
+			}
+			if upstreamBase != "" && apiKey != "" {
+				break
+			}
+		}
+	}
 	if upstreamBase == "" {
 		upstreamBase = spec.UpstreamBase
 	}
@@ -55,6 +76,11 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	reqHeaders := make(map[string]string)
+	for key, values := range r.Header {
+		reqHeaders[key] = strings.Join(values, ",")
+	}
+
 	skipHeaders := map[string]bool{
 		"authorization":      true,
 		"x-api-key":          true,
@@ -62,6 +88,7 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		"host":               true,
 		"content-length":     true,
 		"transfer-encoding":  true,
+		"accept-encoding":    true,
 	}
 	for key, values := range r.Header {
 		if skipHeaders[strings.ToLower(key)] {
@@ -93,14 +120,64 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 	resp, err := client.Do(proxyReq)
 	latency := time.Since(startTime)
 
+	respHeaders := make(map[string]string)
+	for key, values := range resp.Header {
+		respHeaders[key] = strings.Join(values, ",")
+	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
+	resp.Body.Close()
+
 	if err != nil {
 		log.Printf("[ERROR] transparent proxy: %s %s → %s failed: %v (%dms)", r.Method, r.URL.Path, upstreamURL, err, latency.Milliseconds())
 		http.Error(w, "Upstream request failed", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
 
 	log.Printf("[PROXY] %s %s → %s %d (%dms)", r.Method, r.URL.Path, upstreamURL, resp.StatusCode, latency.Milliseconds())
+
+	upstreamReqContent := string(bodyBytes)
+	if len(upstreamReqContent) > 10000 {
+		upstreamReqContent = upstreamReqContent[:10000]
+	}
+	upstreamRespContent := string(respBody)
+	if len(upstreamRespContent) > 10000 {
+		upstreamRespContent = upstreamRespContent[:10000]
+	}
+	reqHeadersJSON, _ := json.Marshal(reqHeaders)
+	respHeadersJSON, _ := json.Marshal(respHeaders)
+
+	upstreamEntry := &RequestLog{
+		Timestamp:           startTime,
+		Provider:           spec.Name,
+		Model:              getModelFromProxyRequest(bodyBytes),
+		InputTokens:        0,
+		OutputTokens:       0,
+		LatencyMs:          latency.Milliseconds(),
+		Success:            resp.StatusCode >= 200 && resp.StatusCode < 300,
+		ErrorMessage:       "",
+		ClientIP:           getClientIP(r),
+		APIKeyUsed:         maskAPIKeyForLog(apiKey),
+		StatusCode:         resp.StatusCode,
+		Path:               upstreamURL,
+		Method:             r.Method,
+		RequestContent:     upstreamReqContent,
+		ResponseContent:    upstreamRespContent,
+		UserID:             "",
+		APIKeyID:           "",
+		IsProxyCall:        true,
+		UpstreamReqHeaders: string(reqHeadersJSON),
+		UpstreamRespHeaders: string(respHeadersJSON),
+		UpstreamReqBody:    "",
+		UpstreamRespBody:   "",
+		UpstreamProvider:   spec.Name,
+		UpstreamModel:      getModelFromProxyRequest(bodyBytes),
+	}
+	dbInsertLog(upstreamEntry)
+
+	if cw, ok := w.(*capturingResponseWriter); ok {
+		cw.upstreamProvider = spec.Name
+		cw.upstreamModel = getModelFromProxyRequest(bodyBytes)
+	}
 
 	for key, values := range resp.Header {
 		for _, value := range values {
@@ -108,19 +185,35 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	w.Write(respBody)
+}
+
+func getModelFromProxyRequest(bodyBytes []byte) string {
+	var body map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &body); err == nil {
+		if model, ok := body["model"].(string); ok {
+			return model
+		}
+	}
+	return ""
 }
 
 func (p *ProxyServer) handleListAllModels(w http.ResponseWriter, r *http.Request) {
 	var models []ModelInfo
-	for providerName, provider := range p.providers {
-		for _, modelName := range provider.GetModels() {
-			models = append(models, ModelInfo{
-				ID:      fmt.Sprintf("%s:%s", providerName, modelName),
-				Object:  "model",
-				Created: time.Now().Unix(),
-				OwnedBy: providerName,
-			})
+	for _, pr := range dbListProviders() {
+		ptype, _ := pr["provider_type"].(string)
+		if ptype == "" {
+			continue
+		}
+		if modelList, ok := pr["models"].([]string); ok {
+			for _, modelName := range modelList {
+				models = append(models, ModelInfo{
+					ID:      fmt.Sprintf("%s:%s", ptype, modelName),
+					Object:  "model",
+					Created: time.Now().Unix(),
+					OwnedBy: ptype,
+				})
+			}
 		}
 	}
 	if models == nil {
@@ -132,12 +225,15 @@ func (p *ProxyServer) handleListAllModels(w http.ResponseWriter, r *http.Request
 
 func (p *ProxyServer) handleProviderModels(w http.ResponseWriter, r *http.Request, spec *ProviderRouteSpec) {
 	var allModels []string
-	p.mu.RLock()
-	provider, exists := p.providers[spec.Name]
-	if exists {
-		allModels = provider.GetModels()
+	for _, pr := range dbListProviders() {
+		ptype, _ := pr["provider_type"].(string)
+		if ptype == spec.Name {
+			if modelList, ok := pr["models"].([]string); ok {
+				allModels = modelList
+			}
+			break
+		}
 	}
-	p.mu.RUnlock()
 
 	if len(allModels) == 0 {
 		w.Header().Set("Content-Type", "application/json")
@@ -152,12 +248,12 @@ func (p *ProxyServer) handleProviderModels(w http.ResponseWriter, r *http.Reques
 		if info, ok := apiKeys[apiKeyStr]; ok && info.Active && len(info.AllowedModels) > 0 {
 			allowedSet = make(map[string]bool, len(info.AllowedModels))
 			for _, m := range info.AllowedModels {
-				if m == "*" || m == provider.GetName()+":*" || m == provider.GetName()+":" {
+				if m == "*" || m == spec.Name+":*" || m == spec.Name+":" {
 					allowedSet = nil
 					break
 				}
-				if strings.HasPrefix(m, provider.GetName()+":") {
-					allowedSet[strings.TrimPrefix(m, provider.GetName()+":")] = true
+				if strings.HasPrefix(m, spec.Name+":") {
+					allowedSet[strings.TrimPrefix(m, spec.Name+":")] = true
 				} else if !strings.Contains(m, ":") && !strings.Contains(m, "/") {
 					allowedSet[m] = true
 				}

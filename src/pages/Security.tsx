@@ -1,43 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/tauri";
-import { useState } from "react";
-import { securityApi } from "../api/security";
+import { useState, useEffect } from "react";
+import { securityApi, type SecurityConfig, type DirectionConfig } from "../api/security";
 import {
   Shield,
-  ShieldAlert,
   ShieldCheck,
   Plus,
   X,
-  AlertTriangle,
-  CheckCircle,
   Save,
   Database,
   Trash2,
+  BookOpen,
+  Brain,
 } from "lucide-react";
-
-interface DirectionConfig {
-  enabled: boolean;
-  mode: "block" | "detect";
-  keyword_enabled: boolean;
-  keyword_categories: string[];
-  semantic_enabled: boolean;
-  vector_enabled: boolean;
-}
-
-interface SecurityConfig {
-  enabled: boolean;
-  input: DirectionConfig;
-  output: DirectionConfig;
-  keywords: string[];
-  keyword_by_level: Record<string, string[]>;
-  keyword_by_category: Record<string, Record<string, string[]>>;
-  keyword_levels: string[];
-  block_message: string;
-  semantic_model: string;
-  semantic_threshold: number;
-  semantic_prompt: string;
-  auto_ban_key: boolean;
-}
 
 const CATEGORIES = [
   { id: "pornography", label: "涉黄", color: "text-pink-400", bg: "bg-pink-500/10", border: "border-pink-500/30" },
@@ -53,21 +28,6 @@ const LEVELS = [
   { id: "medium", label: "中危", color: "text-yellow-400" },
   { id: "low", label: "低危", color: "text-green-400" },
 ] as const;
-
-interface Alert {
-  id: number;
-  timestamp: string;
-  direction: string;
-  mode: string;
-  trigger_type: string;
-  trigger_detail: string;
-  content_preview: string;
-  model: string;
-  api_key_used: string;
-  client_ip: string;
-  action: string;
-  resolved: number;
-}
 
 const defaultConfig: SecurityConfig = {
   enabled: false,
@@ -104,11 +64,15 @@ const defaultConfig: SecurityConfig = {
   auto_ban_key: false,
 };
 
-export default function Security() {
+export default function Security({ initialTab }: { initialTab?: "config" | "keyword" | "semantic" | "vector" }) {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"config" | "alerts" | "vector">("config");
+  const [tab, setTab] = useState<"config" | "keyword" | "semantic" | "vector">(initialTab || "config");
   const [draft, setDraft] = useState<SecurityConfig | null>(null);
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
   const [kwTab, setKwTab] = useState<string>("pornography");
   const [newSample, setNewSample] = useState({
     content: "",
@@ -126,20 +90,11 @@ export default function Security() {
 
   const { data: proxyModels } = useQuery({
     queryKey: ["proxy-models"],
-    // TODO: migrate when API available
     queryFn: () => invoke<string[]>("get_proxy_models"),
-  });
-
-  const { data: alertsData } = useQuery({
-    queryKey: ["security-alerts"],
-    queryFn: () => securityApi.getLogs({ limit: 100 }) as unknown as Promise<{ alerts: Alert[]; total: number }>,
-    staleTime: 0,
-    refetchInterval: 10000,
   });
 
   const { data: vectorSamplesData, refetch: refetchVectorSamples } = useQuery({
     queryKey: ["vector-samples"],
-    // TODO: migrate when API available
     queryFn: async () => {
       const raw = await invoke<string>("get_vector_samples", { limit: 100 });
       return JSON.parse(raw) as {
@@ -220,9 +175,6 @@ export default function Security() {
     return Object.values(catMap).reduce((s: number, v: any) => s + (v?.length || 0), 0);
   };
 
-  const alerts = alertsData?.alerts || [];
-  const unresolvedCount = alerts.filter((a) => a.resolved === 0).length;
-
   const defaultPrompt = `你是一个内容安全分类引擎。你的唯一任务是对输入内容进行安全分类评分。
 
 你必须严格回复一个JSON对象，不要回复任何其他内容。格式如下：
@@ -238,64 +190,72 @@ export default function Security() {
 每个字段：d: boolean是否检测到, c: float 0.0-1.0置信度
 只输出JSON。`;
 
+  const TABS = [
+    { id: "config" as const, label: "安全配置", icon: Shield },
+    { id: "keyword" as const, label: "关键词词库", icon: BookOpen },
+    { id: "semantic" as const, label: "语义检测", icon: Brain },
+    { id: "vector" as const, label: "向量样本库", icon: Database },
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">安全防护</h1>
-          <p className="text-muted-foreground mt-2">
-            内容安全策略管理与告警记录
-          </p>
+      {!initialTab && (
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">防护策略</h1>
+            <p className="text-muted-foreground mt-2">
+              内容安全策略与检测规则配置
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => saveMutation.mutate(cfg)}
+              disabled={saveMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50"
+            >
+              <Save size={16} />
+              {saveMutation.isPending
+                ? "保存中..."
+                : saved
+                  ? "已保存"
+                  : "保存配置"}
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          {unresolvedCount > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
-              <AlertTriangle size={16} />
-              <span>{unresolvedCount} 条未处理</span>
-            </div>
-          )}
+      )}
+
+      {!initialTab && (
+        <div className="flex gap-2">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${tab === t.id ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
+              >
+                <Icon size={14} />
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {initialTab && (
+        <div className="flex items-center justify-end">
           <button
             onClick={() => saveMutation.mutate(cfg)}
             disabled={saveMutation.isPending}
             className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50"
           >
             <Save size={16} />
-            {saveMutation.isPending
-              ? "保存中..."
-              : saved
-                ? "已保存"
-                : "保存配置"}
+            {saveMutation.isPending ? "保存中..." : saved ? "已保存" : "保存配置"}
           </button>
         </div>
-      </div>
+      )}
 
-      <div className="flex gap-2">
-        <button
-          onClick={() => setTab("config")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${tab === "config" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
-        >
-          安全配置
-        </button>
-        <button
-          onClick={() => setTab("alerts")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${tab === "alerts" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
-        >
-          告警记录
-          {unresolvedCount > 0 && (
-            <span className="px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">
-              {unresolvedCount}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => setTab("vector")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${tab === "vector" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
-        >
-          <Database size={14} />
-          向量样本库
-        </button>
-      </div>
-
+      {/* ===== Tab 1: 安全配置 ===== */}
       {tab === "config" && (
         <div className="space-y-6">
           {/* 全局开关 */}
@@ -325,7 +285,7 @@ export default function Security() {
             </div>
           </div>
 
-          {/* ===== 输入检测 ===== */}
+          {/* 输入检测 */}
           <div className="bg-card rounded-lg p-6 border border-border space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold">输入检测（用户请求）</h3>
@@ -377,9 +337,7 @@ export default function Security() {
                     <input
                       type="checkbox"
                       checked={cfg.input.keyword_enabled}
-                      onChange={(e) =>
-                        updateInput({ keyword_enabled: e.target.checked })
-                      }
+                      onChange={(e) => updateInput({ keyword_enabled: e.target.checked })}
                       className="w-4 h-4"
                     />
                     <span className="text-sm">关键词检测</span>
@@ -388,9 +346,7 @@ export default function Security() {
                     <input
                       type="checkbox"
                       checked={cfg.input.semantic_enabled}
-                      onChange={(e) =>
-                        updateInput({ semantic_enabled: e.target.checked })
-                      }
+                      onChange={(e) => updateInput({ semantic_enabled: e.target.checked })}
                       className="w-4 h-4"
                     />
                     <span className="text-sm">语义安全检测</span>
@@ -399,9 +355,7 @@ export default function Security() {
                     <input
                       type="checkbox"
                       checked={cfg.input.vector_enabled}
-                      onChange={(e) =>
-                        updateInput({ vector_enabled: e.target.checked })
-                      }
+                      onChange={(e) => updateInput({ vector_enabled: e.target.checked })}
                       className="w-4 h-4"
                     />
                     <span className="text-sm">向量相似度检测</span>
@@ -411,7 +365,7 @@ export default function Security() {
             )}
           </div>
 
-          {/* ===== 输出检测 ===== */}
+          {/* 输出检测 */}
           <div className="bg-card rounded-lg p-6 border border-border space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold">输出检测（AI响应）</h3>
@@ -463,9 +417,7 @@ export default function Security() {
                     <input
                       type="checkbox"
                       checked={cfg.output.keyword_enabled}
-                      onChange={(e) =>
-                        updateOutput({ keyword_enabled: e.target.checked })
-                      }
+                      onChange={(e) => updateOutput({ keyword_enabled: e.target.checked })}
                       className="w-4 h-4"
                     />
                     <span className="text-sm">关键词检测</span>
@@ -474,9 +426,7 @@ export default function Security() {
                     <input
                       type="checkbox"
                       checked={cfg.output.semantic_enabled}
-                      onChange={(e) =>
-                        updateOutput({ semantic_enabled: e.target.checked })
-                      }
+                      onChange={(e) => updateOutput({ semantic_enabled: e.target.checked })}
                       className="w-4 h-4"
                     />
                     <span className="text-sm">语义安全检测</span>
@@ -485,9 +435,7 @@ export default function Security() {
                     <input
                       type="checkbox"
                       checked={cfg.output.vector_enabled}
-                      onChange={(e) =>
-                        updateOutput({ vector_enabled: e.target.checked })
-                      }
+                      onChange={(e) => updateOutput({ vector_enabled: e.target.checked })}
                       className="w-4 h-4"
                     />
                     <span className="text-sm">向量相似度检测</span>
@@ -498,9 +446,7 @@ export default function Security() {
                     <input
                       type="checkbox"
                       checked={cfg.auto_ban_key}
-                      onChange={(e) =>
-                        updateDraft({ auto_ban_key: e.target.checked })
-                      }
+                      onChange={(e) => updateDraft({ auto_ban_key: e.target.checked })}
                       className="w-4 h-4"
                     />
                     <div>
@@ -514,11 +460,25 @@ export default function Security() {
             )}
           </div>
 
-          {/* ===== 关键词词库（分类分级） ===== */}
+          {/* 拦截后回复 */}
+          <div className="bg-card rounded-lg p-6 border border-border">
+            <h3 className="text-lg font-semibold mb-4">拦截后回复内容</h3>
+            <textarea
+              value={cfg.block_message}
+              onChange={(e) => updateDraft({ block_message: e.target.value })}
+              rows={2}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ===== Tab 2: 关键词词库 ===== */}
+      {tab === "keyword" && (
+        <div className="space-y-6">
           <div className="bg-card rounded-lg p-6 border border-border">
             <h3 className="text-lg font-semibold mb-4">关键词词库</h3>
 
-            {/* 分类 Tab */}
             <div className="flex flex-wrap gap-2 mb-4 border-b border-border pb-3">
               {CATEGORIES.map((cat) => {
                 const count = getCatKwCount(cat.id);
@@ -536,7 +496,6 @@ export default function Security() {
               })}
             </div>
 
-            {/* 当前分类的级别列表 */}
             <div className="space-y-3">
               {(() => {
                 const curCat = CATEGORIES.find((c) => c.id === kwTab) || CATEGORIES[0];
@@ -633,20 +592,25 @@ export default function Security() {
               </table>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* ===== 拦截后回复 ===== */}
-          <div className="bg-card rounded-lg p-6 border border-border">
-            <h3 className="text-lg font-semibold mb-4">拦截后回复内容</h3>
-            <textarea
-              value={cfg.block_message}
-              onChange={(e) => updateDraft({ block_message: e.target.value })}
-              rows={2}
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-            />
-          </div>
-
-          {/* ===== 语义安全检测 ===== */}
+      {/* ===== Tab 3: 语义检测 ===== */}
+      {tab === "semantic" && (
+        <div className="space-y-6">
           <div className="bg-card rounded-lg p-6 border border-border space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">语义安全检测</h3>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className={`inline-block w-2 h-2 rounded-full ${cfg.input.semantic_enabled || cfg.output.semantic_enabled ? "bg-green-500" : "bg-gray-400"}`} />
+                {cfg.input.semantic_enabled || cfg.output.semantic_enabled ? "已启用" : "未启用"}
+              </div>
+            </div>
+
+            <p className="text-sm text-muted-foreground">
+              使用 LLM 对内容进行语义级别的安全分类。需在"安全配置"页签中为输入/输出检测勾选"语义安全检测"才会实际生效。
+            </p>
+
             <div className="flex flex-wrap gap-2">
               {["敏感数据", "涉黄", "涉暴", "涉政", "涉恐"].map((cat) => (
                 <span
@@ -661,9 +625,7 @@ export default function Security() {
               <label className="text-sm font-medium">分析模型</label>
               <select
                 value={cfg.semantic_model}
-                onChange={(e) =>
-                  updateDraft({ semantic_model: e.target.value })
-                }
+                onChange={(e) => updateDraft({ semantic_model: e.target.value })}
                 className="w-full mt-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="">选择分析模型...</option>
@@ -690,11 +652,7 @@ export default function Security() {
                 max="1.0"
                 step="0.1"
                 value={cfg.semantic_threshold}
-                onChange={(e) =>
-                  updateDraft({
-                    semantic_threshold: parseFloat(e.target.value),
-                  })
-                }
+                onChange={(e) => updateDraft({ semantic_threshold: parseFloat(e.target.value) })}
                 className="w-full mt-1"
               />
             </div>
@@ -710,100 +668,7 @@ export default function Security() {
         </div>
       )}
 
-      {tab === "alerts" && (
-        <div className="bg-card rounded-lg border border-border">
-          {alerts.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground">
-              <ShieldCheck className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>暂无安全告警记录</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {alerts.map((alert) => (
-                <div
-                  key={alert.id}
-                  className={`p-4 ${alert.resolved ? "opacity-60" : ""}`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-3">
-                      <div
-                        className={`mt-0.5 ${alert.resolved ? "text-green-500" : "text-red-500"}`}
-                      >
-                        {alert.resolved ? (
-                          <CheckCircle size={18} />
-                        ) : (
-                          <ShieldAlert size={18} />
-                        )}
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-sm flex-wrap">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-xs font-medium ${alert.direction === "input" ? "bg-blue-500/10 text-blue-400" : "bg-purple-500/10 text-purple-400"}`}
-                          >
-                            {alert.direction === "input" ? "输入" : "输出"}
-                          </span>
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-xs font-medium ${alert.mode === "block" ? "bg-amber-500/10 text-amber-400" : "bg-cyan-500/10 text-cyan-400"}`}
-                          >
-                            {alert.mode === "block" ? "拦截" : "检测"}
-                          </span>
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-xs font-medium ${alert.trigger_type?.startsWith("keyword") ? "bg-orange-500/10 text-orange-400" : alert.trigger_type === "vector" ? "bg-teal-500/10 text-teal-400" : "bg-red-500/10 text-red-400"}`}
-                          >
-                            {alert.trigger_type?.startsWith("keyword")
-                              ? "关键词"
-                              : alert.trigger_type === "vector"
-                                ? "向量检测"
-                                : "语义检测"}
-                          </span>
-                          {alert.trigger_detail && (
-                            <code className="text-xs text-muted-foreground">
-                              {alert.trigger_detail}
-                            </code>
-                          )}
-                        </div>
-                        <p className="text-sm text-muted-foreground line-clamp-2">
-                          {alert.content_preview}
-                        </p>
-                        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                          <span>
-                            {new Date(alert.timestamp).toLocaleString()}
-                          </span>
-                          {alert.model && <span>模型: {alert.model}</span>}
-                          {alert.api_key_used && (
-                            <span>Key: {alert.api_key_used}</span>
-                          )}
-                          {alert.client_ip && (
-                            <span>IP: {alert.client_ip}</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {!alert.resolved && (
-                      <button
-                        onClick={() =>
-                          // TODO: migrate when API available
-                          invoke("resolve_security_alert", {
-                            id: alert.id,
-                          }).then(() =>
-                            queryClient.invalidateQueries({
-                              queryKey: ["security-alerts"],
-                            }),
-                          )
-                        }
-                        className="px-3 py-1 text-xs bg-green-500/10 text-green-400 border border-green-500/30 rounded-lg hover:bg-green-500/20 shrink-0"
-                      >
-                        标记已处理
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
+      {/* ===== Tab 4: 向量样本库 ===== */}
       {tab === "vector" && (
         <div className="space-y-6">
           <div className="bg-card rounded-lg p-6 border border-border space-y-4">
@@ -814,9 +679,7 @@ export default function Security() {
             </p>
             <textarea
               value={newSample.content}
-              onChange={(e) =>
-                setNewSample({ ...newSample, content: e.target.value })
-              }
+              onChange={(e) => setNewSample({ ...newSample, content: e.target.value })}
               placeholder="输入恶意内容样本..."
               rows={4}
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
@@ -824,9 +687,7 @@ export default function Security() {
             <div className="flex gap-3 items-center">
               <select
                 value={newSample.category}
-                onChange={(e) =>
-                  setNewSample({ ...newSample, category: e.target.value })
-                }
+                onChange={(e) => setNewSample({ ...newSample, category: e.target.value })}
                 className="px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="general">通用恶意</option>
@@ -842,7 +703,6 @@ export default function Security() {
               <button
                 onClick={async () => {
                   if (!newSample.content.trim()) return;
-                  // TODO: migrate when API available
                   await invoke("add_vector_sample", {
                     content: newSample.content,
                     category: newSample.category,
@@ -868,8 +728,7 @@ export default function Security() {
                 </p>
               </div>
             </div>
-            {!vectorSamplesData?.samples ||
-            vectorSamplesData.samples.length === 0 ? (
+            {!vectorSamplesData?.samples || vectorSamplesData.samples.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground">
                 <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
                 <p>暂无向量样本</p>
@@ -905,10 +764,7 @@ export default function Security() {
                       </div>
                       <button
                         onClick={async () => {
-                          // TODO: migrate when API available
-                          await invoke("delete_vector_sample", {
-                            id: sample.id,
-                          });
+                          await invoke("delete_vector_sample", { id: sample.id });
                           refetchVectorSamples();
                         }}
                         className="p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded-lg shrink-0"

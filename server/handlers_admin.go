@@ -168,8 +168,7 @@ func (p *ProxyServer) handleTestProvider(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if req.FetchModelsOnly {
-			provider.FetchModels()
-			models := provider.GetModels()
+			models := provider.FetchModels()
 			modelsJSON, _ := json.Marshal(models)
 			dbMu.Lock()
 			db.Exec("UPDATE providers SET models=?, updated_at=? WHERE id=?", string(modelsJSON), time.Now().UTC().Format(time.RFC3339), req.ProviderID)
@@ -252,21 +251,51 @@ func (p *ProxyServer) handleSetProviderKey(w http.ResponseWriter, r *http.Reques
 }
 
 func (p *ProxyServer) SetProviderKey(name, apiKey string) error {
-	log.Printf("[INFO] SetProviderKey called: name=%s, apiKey length=%d", name, len(apiKey))
+	return p.SetProviderKeyWithBaseURL(name, apiKey, "")
+}
+
+func (p *ProxyServer) SetProviderKeyWithBaseURL(name, apiKey, baseURL string) error {
+	log.Printf("[INFO] SetProviderKey called: name=%s, apiKey length=%d, baseURL=%s", name, len(apiKey), baseURL)
 	provider, err := NewProvider(name, apiKey)
 	if err != nil {
 		log.Printf("[ERROR] SetProviderKey: NewProvider failed: %v", err)
 		return err
 	}
+	if baseURL != "" {
+		provider.SetBaseURL(baseURL)
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.providers[name] = provider
-	log.Printf("[INFO] SetProviderKey: provider %s registered, total providers=%d", name, len(p.providers))
+	log.Printf("[INFO] SetProviderKey: provider %s registered (baseURL=%s), total providers=%d", name, provider.GetBaseURL(), len(p.providers))
 
-	provider.FetchModels()
-	log.Printf("[INFO] SetProviderKey: FetchModels done for %s, models=%d", name, len(provider.GetModels()))
+	models := provider.FetchModels()
+	if len(models) > 0 {
+		dbUpdateProviderModels(name, models)
+	}
+	log.Printf("[INFO] SetProviderKey: FetchModels done for %s, models=%d", name, len(models))
 
+	dbMu.Lock()
+	defer dbMu.Unlock()
+	rows, err := db.Query("SELECT id FROM providers WHERE provider_type = ?", name)
+	if err == nil {
+		hasRow := false
+		var id string
+		for rows.Next() {
+			rows.Scan(&id)
+			hasRow = true
+		}
+		rows.Close()
+		if hasRow {
+			db.Exec("UPDATE providers SET api_key = ? WHERE provider_type = ?", apiKey, name)
+		} else {
+			now := time.Now().UTC().Format(time.RFC3339)
+			db.Exec(`INSERT INTO providers (id, name, provider_type, auth_type, enabled, base_url, api_key, models, disabled_models, oauth_config, rate_limits, priority, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				fmt.Sprintf("%d", time.Now().UnixMilli()), name, name, "apikey", 1, baseURL, apiKey, "[]", "[]", "", "", 0, "", now, now)
+		}
+	}
 	return nil
 }
 
@@ -496,6 +525,37 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (p *ProxyServer) handleAlertSeverityStats(w http.ResponseWriter, r *http.Request) {
+	period := 60 * 24 * 7
+	if d := r.URL.Query().Get("period"); d != "" {
+		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 {
+			period = parsed
+		}
+	}
+	cutoff := time.Now().Add(-time.Duration(period) * time.Minute).UTC()
+
+	rows, err := db.Query(`SELECT severity, COUNT(*) FROM security_alerts WHERE timestamp >= ? AND (severity IS NOT NULL AND severity != '') GROUP BY severity`, cutoff.Format(time.RFC3339))
+	if err != nil {
+		log.Printf("[ERROR] handleAlertSeverityStats: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"by_severity": map[string]int{}})
+		return
+	}
+	defer rows.Close()
+
+	bySeverity := make(map[string]int)
+	for rows.Next() {
+		var sev string
+		var cnt int
+		if rows.Scan(&sev, &cnt) == nil && sev != "" {
+			bySeverity[sev] = cnt
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"by_severity": bySeverity})
+}
+
 func (p *ProxyServer) handleCallerTop10(w http.ResponseWriter, r *http.Request) {
 	period := 60 * 24 * 7
 	if p := r.URL.Query().Get("period"); p != "" {
@@ -545,10 +605,19 @@ func (p *ProxyServer) handleSyncAllProviders(w http.ResponseWriter, r *http.Requ
 			p.mu.Unlock()
 			continue
 		}
+		if baseURL != "" {
+			provider.SetBaseURL(baseURL)
+		}
 		p.providers[ptype] = provider
 		p.mu.Unlock()
-		log.Printf("[Sync] registered provider %s (name=%s) from DB, baseURL=%s", ptype, name, baseURL)
-		provider.FetchModels()
+
+		models := provider.FetchModels()
+		if len(models) > 0 {
+			dbUpdateProviderModels(ptype, models)
+			log.Printf("[Sync] provider %s (name=%s): fetched %d models from upstream, saved to DB", ptype, name, len(models))
+		} else {
+			log.Printf("[Sync] provider %s (name=%s): upstream returned no models, keeping DB models", ptype, name)
+		}
 		synced++
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -578,5 +647,76 @@ func (p *ProxyServer) handleStatsLogs(w http.ResponseWriter, r *http.Request) {
 		"total": len(logs),
 		"count": totalCount,
 		"logs":  logs,
+	})
+}
+
+func (p *ProxyServer) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
+	level := r.URL.Query().Get("level")
+	keyword := r.URL.Query().Get("keyword")
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+	limit := 200
+	offset := 0
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 2000 {
+		limit = l
+	}
+	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+		offset = o
+	}
+
+	logFilePath := getLogFilePath()
+	data, err := os.ReadFile(logFilePath)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"lines": []string{}, "total": 0, "error": err.Error()})
+		return
+	}
+
+	lines := bytes.Split(data, []byte("\n"))
+	var filtered []string
+	for _, line := range lines {
+		lineStr := string(line)
+		if lineStr == "" {
+			continue
+		}
+		if level != "" {
+			levelUpper := "[" + strings.ToUpper(level) + "]"
+			if !bytes.Contains(line, []byte(levelUpper)) && !bytes.Contains(line, []byte(`"level":"`+strings.ToUpper(level)+`"`)) {
+				continue
+			}
+		}
+		if keyword != "" && !strings.Contains(strings.ToLower(lineStr), strings.ToLower(keyword)) {
+			continue
+		}
+		filtered = append(filtered, lineStr)
+	}
+
+	total := len(filtered)
+	end := len(filtered) - offset
+	if end > limit {
+		end = offset + limit
+	}
+	start := offset
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+
+	if end < start {
+		end = start
+	}
+
+	var result []string
+	if start < len(filtered) {
+		reversed := make([]string, 0, end-start)
+		for i := len(filtered) - 1 - start; i >= 0 && len(reversed) < limit; i-- {
+			reversed = append(reversed, filtered[i])
+		}
+		result = reversed
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"lines": result,
+		"total": total,
 	})
 }

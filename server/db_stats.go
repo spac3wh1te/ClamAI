@@ -65,9 +65,9 @@ func dbLoadStats(stats *RequestStats) {
 		COALESCE(SUM(input_tokens), 0) as input_tokens,
 		COALESCE(SUM(output_tokens), 0) as output_tokens,
 		COALESCE(SUM(latency_ms), 0) as total_latency,
-		provider, model, DATE(timestamp, 'localtime') as date
+		COALESCE(NULLIF(provider, ''), upstream_provider) as provider, model, DATE(timestamp, 'localtime') as date
 		FROM request_logs
-		GROUP BY provider, model, DATE(timestamp, 'localtime')`)
+		GROUP BY COALESCE(NULLIF(provider, ''), upstream_provider), model, DATE(timestamp, 'localtime')`)
 	if err != nil {
 		log.Printf("[ERROR] dbLoadStats: failed to load from request_logs: %v", err)
 		return
@@ -108,13 +108,19 @@ func dbLoadStats(stats *RequestStats) {
 }
 
 func dbInsertLog(entry *RequestLog) {
-	_, err := db.Exec(`INSERT INTO request_logs (timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, request_content, response_content, user_id, api_key_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	isProxy := 0
+	if entry.IsProxyCall {
+		isProxy = 1
+	}
+	_, err := db.Exec(`INSERT INTO request_logs (timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, request_content, response_content, user_id, api_key_id, is_proxy_call, upstream_request_headers, upstream_response_headers, upstream_provider, upstream_model)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.UTC().Format(time.RFC3339), entry.Provider, entry.Model,
 		entry.InputTokens, entry.OutputTokens, entry.LatencyMs,
 		boolToInt(entry.Success), entry.ErrorMessage, entry.ClientIP,
 		entry.APIKeyUsed, entry.StatusCode, entry.Path, entry.Method,
-		entry.RequestContent, entry.ResponseContent, entry.UserID, entry.APIKeyID)
+		entry.RequestContent, entry.ResponseContent, entry.UserID, entry.APIKeyID,
+		isProxy, entry.UpstreamReqHeaders, entry.UpstreamRespHeaders,
+		entry.UpstreamProvider, entry.UpstreamModel)
 	if err != nil {
 		log.Printf("[ERROR] dbInsertLog: %v", err)
 	}
@@ -182,12 +188,13 @@ func dbGetRecentLogs(limit int, userID string) ([]*RequestLog, int) {
 	var total int
 	var rows *sql.Rows
 	var err error
+	cols := "id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,''), COALESCE(user_id,''), COALESCE(api_key_id,''), COALESCE(is_proxy_call,0), COALESCE(upstream_request_headers,''), COALESCE(upstream_response_headers,''), COALESCE(upstream_request_body,''), COALESCE(upstream_response_body,''), COALESCE(upstream_provider,''), COALESCE(upstream_model,'')"
 	if userID != "" {
 		db.QueryRow("SELECT COUNT(*) FROM request_logs WHERE user_id = ?", userID).Scan(&total)
-		rows, err = db.Query("SELECT id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,''), COALESCE(user_id,''), COALESCE(api_key_id,'') FROM request_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?", userID, limit)
+		rows, err = db.Query("SELECT "+cols+" FROM request_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?", userID, limit)
 	} else {
 		db.QueryRow("SELECT COUNT(*) FROM request_logs").Scan(&total)
-		rows, err = db.Query("SELECT id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,''), COALESCE(user_id,''), COALESCE(api_key_id,'') FROM request_logs ORDER BY id DESC LIMIT ?", limit)
+		rows, err = db.Query("SELECT "+cols+" FROM request_logs ORDER BY id DESC LIMIT ?", limit)
 	}
 	if err != nil {
 		log.Printf("[ERROR] dbGetRecentLogs: %v", err)
@@ -200,14 +207,19 @@ func dbGetRecentLogs(limit int, userID string) ([]*RequestLog, int) {
 		entry := &RequestLog{}
 		var ts string
 		var success int
+		var isProxyCall int
 		if err := rows.Scan(&entry.ID, &ts, &entry.Provider, &entry.Model, &entry.InputTokens, &entry.OutputTokens,
 			&entry.LatencyMs, &success, &entry.ErrorMessage, &entry.ClientIP,
 			&entry.APIKeyUsed, &entry.StatusCode, &entry.Path, &entry.Method,
-			&entry.RequestContent, &entry.ResponseContent, &entry.UserID, &entry.APIKeyID); err != nil {
+			&entry.RequestContent, &entry.ResponseContent, &entry.UserID, &entry.APIKeyID,
+			&isProxyCall, &entry.UpstreamReqHeaders, &entry.UpstreamRespHeaders,
+			&entry.UpstreamReqBody, &entry.UpstreamRespBody,
+			&entry.UpstreamProvider, &entry.UpstreamModel); err != nil {
 			continue
 		}
 		entry.Timestamp, _ = time.Parse(time.RFC3339, ts)
 		entry.Success = success == 1
+		entry.IsProxyCall = isProxyCall == 1
 		logs = append(logs, entry)
 	}
 	return logs, total
@@ -392,6 +404,7 @@ func dbGetUsageStats(periodMinutes int) *DBUsageStats {
 		groupBy = "DATE(timestamp, 'localtime')"
 	}
 
+	providerExpr := "COALESCE(NULLIF(provider, ''), upstream_provider)"
 	query := fmt.Sprintf(`SELECT
 		COUNT(*) as total,
 		SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success,
@@ -399,12 +412,12 @@ func dbGetUsageStats(periodMinutes int) *DBUsageStats {
 		COALESCE(SUM(input_tokens), 0) as input_tokens,
 		COALESCE(SUM(output_tokens), 0) as output_tokens,
 		COALESCE(SUM(latency_ms), 0) as total_latency,
-		provider,
+		%s as provider,
 		model,
 		%s as bucket
 		FROM request_logs
 		WHERE timestamp >= ?
-		GROUP BY provider, model, %s`, groupBy, groupBy)
+		GROUP BY %s, model, %s`, providerExpr, groupBy, providerExpr, groupBy)
 
 	rows, err := db.Query(query, cutoff.Format(time.RFC3339))
 	if err != nil {

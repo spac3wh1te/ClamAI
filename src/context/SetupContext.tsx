@@ -30,7 +30,6 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
 
   const checkSetup = useCallback(async () => {
     try {
-      console.log("[SetupContext] checkSetup() called");
       const status = await authApi.status();
       const isInitialized = status.initialized === true;
       const mode = status.mode || "pc";
@@ -59,7 +58,6 @@ export function SetupProvider({ children }: { children: React.ReactNode }) {
 
   const reconnect = useCallback(
     async (username?: string, password?: string) => {
-      console.log(`[SetupContext] reconnect() mode=${deployMode}`);
       if (deployMode === "pc") {
         try {
           const token = await authApi.tryAutoLogin();

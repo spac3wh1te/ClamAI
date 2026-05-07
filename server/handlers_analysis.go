@@ -51,11 +51,17 @@ func (p *ProxyServer) handleAnalysisChat(w http.ResponseWriter, r *http.Request)
 		if provider != nil {
 			modelForGateway = provider.GetName() + ":" + modelForGateway
 		} else {
-			for pname, prov := range p.providers {
-				for _, m := range prov.GetModels() {
-					if m == modelForGateway {
-						modelForGateway = pname + ":" + m
-						break
+			for _, pr := range dbListProviders() {
+				ptype, _ := pr["provider_type"].(string)
+				if ptype == "" {
+					continue
+				}
+				if modelList, ok := pr["models"].([]string); ok {
+					for _, m := range modelList {
+						if m == modelForGateway {
+							modelForGateway = ptype + ":" + m
+							break
+						}
 					}
 				}
 				if strings.Contains(modelForGateway, ":") {
@@ -157,7 +163,7 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 	}
 
 	log.Printf("[INFO] handleUserProfileAnalysis: calling gateway internally, model=%s, prompt_chars=%d", modelName, len(conversationSummary.String()))
-	statusCode, respBody, err := p.internalChatCompletion(modelName, messages, 0.3, 1500)
+	statusCode, inputTokens, outputTokens, respBody, err := p.internalChatCompletion(modelName, messages, 0.3, 1500)
 	if err != nil {
 		log.Printf("[ERROR] handleUserProfileAnalysis: internal call failed: %v", err)
 		http.Error(w, "Failed to call analysis model", http.StatusInternalServerError)
@@ -176,7 +182,6 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	inputTokens, outputTokens := extractTokensFromBody(respBody, nil)
 	now := time.Now()
 	entry := &RequestLog{
 		Timestamp:       now,
@@ -289,7 +294,7 @@ func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Reque
 	}
 
 	log.Printf("[INFO] handleSkillsDetection: calling gateway internally, model=%s, content_chars=%d", modelName, len(content))
-	statusCode, respBody, err := p.internalChatCompletion(modelName, messages, 0.2, 2000)
+	statusCode, inputTokens, outputTokens, respBody, err := p.internalChatCompletion(modelName, messages, 0.2, 2000)
 	if err != nil {
 		log.Printf("[ERROR] handleSkillsDetection: internal call failed: %v", err)
 		http.Error(w, "Failed to call analysis model", http.StatusInternalServerError)
@@ -332,7 +337,6 @@ func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	inputTokens, outputTokens := extractTokensFromBody(respBody, nil)
 	entry := &RequestLog{
 		Timestamp:       time.Now(),
 		Provider:        providerName,
@@ -896,7 +900,7 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 		{"role": "user", "content": wrappedContent},
 	}
 
-	statusCode, respBody, err := p.internalChatCompletion(model, messages, 0.2, 2000)
+	statusCode, inputTokens, outputTokens, respBody, err := p.internalChatCompletion(model, messages, 0.2, 2000)
 	if err != nil {
 		log.Printf("[SKILLS] ERROR id=%s internalChatCompletion failed: %v", taskID, err)
 		dbUpdateSkillsTaskResult(taskID, "error", "检测失败: "+err.Error(), "", "")
@@ -952,7 +956,6 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 	dbInsertSkillsTaskHistory(taskID, riskLevel, summary, detail, dimensions, riskLevel, durationMs)
 
 	createdBy, _ := task["created_by"].(string)
-	inputTokens, outputTokens := extractTokensFromBody(respBody, nil)
 	provider, resolvedName := p.resolveProvider(model)
 	providerName := ""
 	if provider != nil {
@@ -1094,7 +1097,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 	}
 
 	log.Printf("[ANALYSIS] id=%s fetched %d logs, calling internalChatCompletion...", taskID, len(logs))
-	statusCode, respBody, err := p.internalChatCompletion(modelForGateway, messages, 0.3, 1500)
+	statusCode, inputTokens, outputTokens, respBody, err := p.internalChatCompletion(modelForGateway, messages, 0.3, 1500)
 	if err != nil {
 		log.Printf("[ANALYSIS] ERROR id=%s internalChatCompletion failed: %v", taskID, err)
 		dbUpdateAnalysisTaskResult(taskID, "error", "Analysis failed: "+err.Error(), "", "", 0)
@@ -1149,7 +1152,6 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 	durationMs := time.Since(taskStart).Milliseconds()
 	dbInsertAnalysisTaskHistory(taskID, riskLevel, summary, detail, dimensions, riskLevel, total, durationMs)
 
-	inputTokens, outputTokens := extractTokensFromBody(respBody, nil)
 	prov, resolvedModel := p.resolveProvider(modelForGateway)
 	providerName := ""
 	if prov != nil {

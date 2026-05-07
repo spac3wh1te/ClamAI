@@ -129,7 +129,7 @@ export default function Providers() {
       {/* 页面标题 */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">提供商管理</h1>
+          <h1 className="text-3xl font-bold">服务商</h1>
           <p className="text-muted-foreground mt-2">
             添加和管理你的AI服务提供商
           </p>

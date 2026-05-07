@@ -166,8 +166,6 @@ export async function apiRequest<T>(
     );
   }
   const url = `${base}/api/v1${path}`;
-  console.log(`[API] ${method} ${url}`, body ? { body } : "");
-
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -184,20 +182,16 @@ export async function apiRequest<T>(
     if (tokenOverride) {
       h["Authorization"] = `Bearer ${tokenOverride}`;
     }
-    console.log(`[API] ${method} ${url} headers=`, h);
     return rawFetch(method, url, h, body !== undefined ? JSON.stringify(body) : undefined);
   };
 
   let resp = await doFetch();
 
   if (resp.status === 401 && !options?.noAuth) {
-    console.log(`[API] ${url} got 401, attempting token refresh`);
     const refreshed = await tryRefreshToken();
     if (refreshed) {
-      console.log(`[API] ${url} token refresh succeeded, retrying with new token`);
       resp = await doFetch(getToken() || undefined);
     } else {
-      console.log(`[API] ${url} token refresh failed, clearing tokens`);
       clearTokens();
       window.dispatchEvent(new CustomEvent("auth:unauthorized"));
       throw new ApiError("认证已过期，请重新登录", 401);
@@ -220,7 +214,6 @@ export async function apiRequest<T>(
 
   const text = resp.body;
   if (!text) return {} as T;
-  console.log(`[API] ${method} ${url} response (${text.length} bytes):`, text.substring(0, 500));
   try {
     return JSON.parse(text) as T;
   } catch (parseErr: any) {

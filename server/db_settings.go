@@ -420,3 +420,18 @@ func sliceOrNil(v interface{}) []string {
 	}
 	return []string{}
 }
+
+func dbUpdateProviderModels(providerType string, models []string) {
+	modelsJSON, _ := json.Marshal(models)
+	dbMu.Lock()
+	defer dbMu.Unlock()
+	result, err := db.Exec("UPDATE providers SET models = ? WHERE provider_type = ?", string(modelsJSON), providerType)
+	if err != nil {
+		log.Printf("[ERROR] dbUpdateProviderModels(%s): %v", providerType, err)
+		return
+	}
+	rows, _ := result.RowsAffected()
+	if rows > 0 {
+		invalidateProviderCache()
+	}
+}

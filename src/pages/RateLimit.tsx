@@ -167,7 +167,7 @@ export default function RateLimit() {
             <Gauge className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h2 className="text-xl font-bold">限流配置</h2>
+             <h2 className="text-xl font-bold">流量控制</h2>
             <p className="text-sm text-muted-foreground">
               控制请求速率，防止上游 API 过载被封
             </p>

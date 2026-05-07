@@ -4,15 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gorilla/mux"
 )
 
 func (p *ProxyServer) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[DEBUG] handleListAPIKeys called")
 	userID := userIDForQuery(r)
 	isAdmin := false
 	if claims := getUserFromContext(r); claims != nil {
@@ -37,10 +36,23 @@ func (p *ProxyServer) handleListAPIKeys(w http.ResponseWriter, r *http.Request) 
 		if info.LastUsed != nil {
 			entry["last_used"] = *info.LastUsed
 		}
+		if info.LastSynced != nil {
+			entry["last_synced"] = *info.LastSynced
+		}
 		keys = append(keys, entry)
 	}
 	apiKeysMu.Unlock()
-	log.Printf("[DEBUG] handleListAPIKeys: returning %d keys (userID=%s, isAdmin=%v)", len(keys), userID, isAdmin)
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		ci, _ := keys[i]["created_at"].(time.Time)
+		cj, _ := keys[j]["created_at"].(time.Time)
+		if !ci.Equal(cj) {
+			return ci.Before(cj)
+		}
+		idi, _ := keys[i]["id"].(string)
+		idj, _ := keys[j]["id"].(string)
+		return idi < idj
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -49,7 +61,6 @@ func (p *ProxyServer) handleListAPIKeys(w http.ResponseWriter, r *http.Request) 
 }
 
 func (p *ProxyServer) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[DEBUG] handleCreateAPIKey called")
 	var req struct {
 		Name          string            `json:"name"`
 		AllowedModels []string          `json:"allowed_models"`
@@ -62,6 +73,7 @@ func (p *ProxyServer) handleCreateAPIKey(w http.ResponseWriter, r *http.Request)
 
 	key := generateAPIKey()
 	id := generateKeyID()
+	now := time.Now()
 	info := &APIKeyInfo{
 		ID:            id,
 		Key:           key,
@@ -69,8 +81,9 @@ func (p *ProxyServer) handleCreateAPIKey(w http.ResponseWriter, r *http.Request)
 		UserID:        userIDForQuery(r),
 		AllowedModels: req.AllowedModels,
 		ProviderKeys:  req.ProviderKeys,
-		CreatedAt:     time.Now(),
+		CreatedAt:     now,
 		Active:        true,
+		LastSynced:    &now,
 	}
 
 	apiKeysMu.Lock()
@@ -93,7 +106,6 @@ func (p *ProxyServer) handleCreateAPIKey(w http.ResponseWriter, r *http.Request)
 func (p *ProxyServer) handleUpdateAPIKey(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
-	log.Printf("[DEBUG] handleUpdateAPIKey called, id=%s", id)
 
 	var req struct {
 		AllowedModels []string          `json:"allowed_models"`
@@ -128,6 +140,8 @@ func (p *ProxyServer) handleUpdateAPIKey(w http.ResponseWriter, r *http.Request)
 	if req.ProviderKeys != nil {
 		info.ProviderKeys = req.ProviderKeys
 	}
+	now := time.Now()
+	info.LastSynced = &now
 	dbSaveAPIKey(info)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -185,7 +199,6 @@ func (p *ProxyServer) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request)
 func (p *ProxyServer) handleRevealAPIKey(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
-	log.Printf("[DEBUG] handleRevealAPIKey called, id=%s", id)
 
 	userID := userIDForQuery(r)
 	isAdmin := false
@@ -201,7 +214,6 @@ func (p *ProxyServer) handleRevealAPIKey(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Forbidden: not your API key", http.StatusForbidden)
 			return
 		}
-		log.Printf("[DEBUG] handleRevealAPIKey: found key, id=%s, key=%s...", id, info.Key[:min(8, len(info.Key))])
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"id":   info.ID,
@@ -211,7 +223,6 @@ func (p *ProxyServer) handleRevealAPIKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	log.Printf("[WARN] handleRevealAPIKey: key not found, id=%s", id)
 	http.Error(w, "API key not found", http.StatusNotFound)
 }
 

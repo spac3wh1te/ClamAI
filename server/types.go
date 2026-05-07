@@ -51,6 +51,12 @@ func initLogging() *os.File {
 	return file
 }
 
+func getLogFilePath() string {
+	exePath, _ := os.Executable()
+	dir := filepath.Dir(exePath)
+	return filepath.Join(dir, "clamai-service.log")
+}
+
 func applyDBLogLevel() {
 	if db == nil {
 		return
@@ -189,6 +195,13 @@ type RequestLog struct {
 	ResponseContent string    `json:"response_content"`
 	UserID          string    `json:"user_id"`
 	APIKeyID        string    `json:"api_key_id"`
+	IsProxyCall     bool      `json:"is_proxy_call"`
+	UpstreamReqHeaders  string `json:"upstream_request_headers"`
+	UpstreamRespHeaders string `json:"upstream_response_headers"`
+	UpstreamReqBody     string `json:"upstream_request_body"`
+	UpstreamRespBody    string `json:"upstream_response_body"`
+	UpstreamProvider    string `json:"upstream_provider"`
+	UpstreamModel       string `json:"upstream_model"`
 }
 
 type LogBuffer struct {
@@ -260,6 +273,7 @@ type APIKeyInfo struct {
 	Active        bool              `json:"active"`
 	RequestCount  int64             `json:"request_count"`
 	LastUsed      *time.Time        `json:"last_used,omitempty"`
+	LastSynced    *time.Time        `json:"last_synced,omitempty"`
 }
 
 var (

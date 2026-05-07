@@ -59,7 +59,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const checkStatus = async () => {
     try {
       const status = await authApi.status();
-      console.log("[AuthContext] checkStatus result:", { initialized: status.initialized, mode: status.mode });
       setInitialized(status.initialized);
       setMode(status.mode);
       setRegistrationOpen(status.registration_open === true);

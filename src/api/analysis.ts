@@ -1,5 +1,48 @@
 import { apiRequest } from "./client";
 
+export interface SystemAnalysisConfig {
+  enabled: boolean;
+  model: string;
+  api_key_id: string;
+  time_range: string;
+  interval_minutes: number;
+  notify_on_high_risk: boolean;
+  auto_block_risk_level: string;
+}
+
+export interface SystemAnalysisTask {
+  id: string;
+  task_no: string;
+  name: string;
+  api_key_id: string;
+  model: string;
+  time_range: string;
+  schedule_type: string;
+  interval_minutes: number;
+  status: string;
+  result_risk_level?: string;
+  result_summary?: string;
+  result_detail?: string;
+  result_dimensions?: string;
+  result_logs_analyzed?: number;
+  last_run_at?: string;
+  next_run_at?: string;
+  created_at?: string;
+  created_by?: string;
+}
+
+export interface SystemAnalysisHistory {
+  id: number;
+  risk_level: string;
+  summary: string;
+  detail: string;
+  dimensions: string;
+  logs_analyzed: number;
+  status: string;
+  duration_ms: number;
+  run_at: string;
+}
+
 export interface AnalysisTask {
   id: string;
   name: string;
@@ -87,6 +130,23 @@ export interface AgentScanResult {
   risk_level: string;
   summary: string;
 }
+
+export const systemAnalysisApi = {
+  getConfig: () =>
+    apiRequest<SystemAnalysisConfig>("GET", "/system-analysis/config"),
+
+  updateConfig: (config: SystemAnalysisConfig) =>
+    apiRequest<{ success: boolean }>("PUT", "/system-analysis/config", config),
+
+  listTasks: () =>
+    apiRequest<{ tasks: SystemAnalysisTask[] }>("GET", "/system-analysis/tasks"),
+
+  trigger: () =>
+    apiRequest<{ success: boolean }>("POST", "/system-analysis/tasks/trigger"),
+
+  getHistory: () =>
+    apiRequest<{ history: SystemAnalysisHistory[] }>("GET", "/system-analysis/history"),
+};
 
 export const agentApi = {
   scanLogs: (params: { log_path?: string; patterns?: string[] }) =>

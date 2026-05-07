@@ -71,7 +71,7 @@ func (p *ProxyServer) handleProxyModeTestChat(w http.ResponseWriter, req struct 
 		return
 	}
 
-	providerName := req.ProviderType
+	providerName := ""
 	modelName := req.Model
 	if idx := strings.Index(modelName, ":"); idx >= 0 {
 		providerName = modelName[:idx]
@@ -126,11 +126,8 @@ func (p *ProxyServer) handleProxyModeTestChat(w http.ResponseWriter, req struct 
 		url = fmt.Sprintf("%s://%s%s/chat/completions", scheme, p.proxyAddr, spec.PathPrefix)
 	}
 
-	log.Printf("[DEBUG] handleProxyModeTestChat: calling url=%s model=%s provider=%s authType=%s", url, modelName, providerName, spec.AuthType)
-
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		log.Printf("[ERROR] handleProxyModeTestChat: failed to create request: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false, "message": "Request failed", "latency_ms": 0, "input_tokens": 0, "output_tokens": 0,

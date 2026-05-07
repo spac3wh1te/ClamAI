@@ -12,10 +12,9 @@ import (
 
 // ==================== Anthropic提供商 ====================
 type AnthropicProvider struct {
-	name          string
-	baseURL       string
-	apiKey        string
-	dynamicModels []string
+	name    string
+	baseURL string
+	apiKey  string
 }
 
 func NewAnthropicProvider(apiKey string) *AnthropicProvider {
@@ -26,16 +25,11 @@ func NewAnthropicProvider(apiKey string) *AnthropicProvider {
 	}
 }
 
-func (p *AnthropicProvider) GetName() string    { return p.name }
-func (p *AnthropicProvider) GetBaseURL() string { return p.baseURL }
-func (p *AnthropicProvider) GetAPIKey() string  { return p.apiKey }
-func (p *AnthropicProvider) GetModels() []string {
-	if len(p.dynamicModels) > 0 {
-		return p.dynamicModels
-	}
-	return []string{"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229", "claude-3-sonnet-20240229"}
-}
-func (p *AnthropicProvider) FetchModels() {}
+func (p *AnthropicProvider) GetName() string         { return p.name }
+func (p *AnthropicProvider) GetBaseURL() string       { return p.baseURL }
+func (p *AnthropicProvider) SetBaseURL(url string)    { p.baseURL = url }
+func (p *AnthropicProvider) GetAPIKey() string        { return p.apiKey }
+func (p *AnthropicProvider) FetchModels() []string    { return nil }
 func (p *AnthropicProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/v1/messages", p.apiKey, "x-api-key")
 }
@@ -73,10 +67,9 @@ func (p *AnthropicProvider) ProxyRequest(w http.ResponseWriter, r *http.Request)
 
 // ==================== GLM Coding 提供商 (Anthropic协议) ====================
 type GLMCodingProvider struct {
-	name          string
-	baseURL       string
-	apiKey        string
-	dynamicModels []string
+	name    string
+	baseURL string
+	apiKey  string
 }
 
 func NewGLMCodingProvider(apiKey string) *GLMCodingProvider {
@@ -87,21 +80,12 @@ func NewGLMCodingProvider(apiKey string) *GLMCodingProvider {
 	}
 }
 
-func (p *GLMCodingProvider) GetName() string    { return p.name }
-func (p *GLMCodingProvider) GetBaseURL() string { return p.baseURL }
-func (p *GLMCodingProvider) GetAPIKey() string  { return p.apiKey }
-func (p *GLMCodingProvider) GetModels() []string {
-	if len(p.dynamicModels) > 0 {
-		return p.dynamicModels
-	}
-	return []string{"coder-4-plus", "coder-4"}
-}
-func (p *GLMCodingProvider) FetchModels() {
-	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "x-api-key"); len(models) > 0 {
-		p.dynamicModels = models
-	}
-}
-func (p *GLMCodingProvider) TestConnection() error { return nil }
+func (p *GLMCodingProvider) GetName() string         { return p.name }
+func (p *GLMCodingProvider) GetBaseURL() string       { return p.baseURL }
+func (p *GLMCodingProvider) SetBaseURL(url string)    { p.baseURL = url }
+func (p *GLMCodingProvider) GetAPIKey() string        { return p.apiKey }
+func (p *GLMCodingProvider) FetchModels() []string    { return fetchModelsForProvider(p.baseURL, p.apiKey, "x-api-key") }
+func (p *GLMCodingProvider) TestConnection() error    { return nil }
 func (p *GLMCodingProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	path = strings.TrimPrefix(path, "/v1")
@@ -132,10 +116,9 @@ func (p *GLMCodingProvider) ProxyRequest(w http.ResponseWriter, r *http.Request)
 
 // ==================== MiniMax TokenPlan 提供商 (Anthropic协议) ====================
 type MiniMaxTokenPlanProvider struct {
-	name          string
-	baseURL       string
-	apiKey        string
-	dynamicModels []string
+	name    string
+	baseURL string
+	apiKey  string
 }
 
 func NewMiniMaxTokenPlanProvider(apiKey string) *MiniMaxTokenPlanProvider {
@@ -146,16 +129,11 @@ func NewMiniMaxTokenPlanProvider(apiKey string) *MiniMaxTokenPlanProvider {
 	}
 }
 
-func (p *MiniMaxTokenPlanProvider) GetName() string    { return p.name }
-func (p *MiniMaxTokenPlanProvider) GetBaseURL() string { return p.baseURL }
-func (p *MiniMaxTokenPlanProvider) GetAPIKey() string  { return p.apiKey }
-func (p *MiniMaxTokenPlanProvider) GetModels() []string {
-	if len(p.dynamicModels) > 0 {
-		return p.dynamicModels
-	}
-	return []string{"MiniMax-Text-01", "abab6.5s-chat", "abab6.5g-chat"}
-}
-func (p *MiniMaxTokenPlanProvider) FetchModels() {
+func (p *MiniMaxTokenPlanProvider) GetName() string         { return p.name }
+func (p *MiniMaxTokenPlanProvider) GetBaseURL() string       { return p.baseURL }
+func (p *MiniMaxTokenPlanProvider) SetBaseURL(url string)    { p.baseURL = url }
+func (p *MiniMaxTokenPlanProvider) GetAPIKey() string        { return p.apiKey }
+func (p *MiniMaxTokenPlanProvider) FetchModels() []string {
 	modelsURL := strings.TrimRight(p.baseURL, "/") + "/v1/models"
 	client := newHTTPClient("")
 	if proxyURL := getProxy(); proxyURL != nil {
@@ -163,7 +141,7 @@ func (p *MiniMaxTokenPlanProvider) FetchModels() {
 	}
 	req, err := http.NewRequest("GET", modelsURL, nil)
 	if err != nil {
-		return
+		return nil
 	}
 	if p.apiKey != "" {
 		req.Header.Set("x-api-key", p.apiKey)
@@ -173,16 +151,16 @@ func (p *MiniMaxTokenPlanProvider) FetchModels() {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[MiniMaxTokenPlan.FetchModels] GET %s failed: %v", modelsURL, err)
-		return
+		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[MiniMaxTokenPlan.FetchModels] GET %s status %d", modelsURL, resp.StatusCode)
-		return
+		return nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return
+		return nil
 	}
 	var result struct {
 		Data []struct {
@@ -191,7 +169,7 @@ func (p *MiniMaxTokenPlanProvider) FetchModels() {
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		log.Printf("[MiniMaxTokenPlan.FetchModels] parse failed: %v", err)
-		return
+		return nil
 	}
 	var models []string
 	for _, m := range result.Data {
@@ -199,10 +177,8 @@ func (p *MiniMaxTokenPlanProvider) FetchModels() {
 			models = append(models, m.ID)
 		}
 	}
-	if len(models) > 0 {
-		p.dynamicModels = models
-		log.Printf("[MiniMaxTokenPlan.FetchModels] got %d models: %v", len(models), models)
-	}
+	log.Printf("[MiniMaxTokenPlan.FetchModels] got %d models", len(models))
+	return models
 }
 func (p *MiniMaxTokenPlanProvider) TestConnection() error { return nil }
 func (p *MiniMaxTokenPlanProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {

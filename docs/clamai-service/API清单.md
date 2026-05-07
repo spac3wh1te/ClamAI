@@ -89,10 +89,11 @@
 
 > **前缀**：`/api/v1/config`
 > **鉴权**：Bearer Token
+> **说明**：`GET /config` 返回完整的 Provider API Keys（不再做掩码处理），`PUT /config` 保存完整配置到数据库
 
 | 方法 | 路径 | 功能 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| GET | `/` | 获取配置 | - | `{...config}` |
+| GET | `/` | 获取配置（含完整 Provider API Keys） | - | `{...config}` |
 | PUT | `/` | 保存配置 | `{...config}` | `{success}` |
 | POST | `/reset` | 重置为默认配置 | - | `{success}` |
 
@@ -120,8 +121,10 @@
 | 方法 | 路径 | 功能 | 查询参数 | 响应 |
 |------|------|------|----------|------|
 | GET | `/usage` | 流量统计 | `period`（分钟，默认 10080） | `{total_requests, success_requests, failure_requests, avg_latency_ms}` |
-| GET | `/logs` | 最近请求日志 | `limit`（默认 100） | `{logs, total_count}` |
+| GET | `/logs` | 最近请求日志 | `limit`（默认 100） | `{logs: [{...is_proxy_call, upstream_request_headers, upstream_response_headers, upstream_provider, upstream_model}], total_count}` |
+| GET | `/service-logs` | 服务运行日志 | `level`, `keyword`, `limit`（默认 200）, `offset` | `{lines, total}` |
 | GET | `/alerts` | 安全告警统计 | - | `{alerts: [...]}` |
+| GET | `/alert-severity` | 告警级别统计 | `period`（分钟） | `{by_severity: {critical, high, medium, low}}` |
 | GET | `/callers` | Top Caller 排行 | - | `{callers: [...]}` |
 | GET | `/security-tokens` | Token 统计 | - | `{tokens: [...]}` |
 
@@ -136,7 +139,7 @@
 |------|------|------|--------|------|
 | GET | `/config` | 获取安全配置 | - | `{enabled, keywords, keyword_levels, block_message, semantic_model}` |
 | PUT | `/config` | 更新安全配置 | `{enabled?, keywords?, ...}` | `{success}` |
-| GET | `/alerts` | 获取安全告警列表 | - | `{alerts: [...]}` |
+| GET | `/alerts` | 获取安全告警列表 | `limit`, `offset`, `severity`, `direction`, `trigger_type`, `search` | `{alerts: [{id, timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved}], total}` |
 | PUT | `/alerts/{id}/resolve` | 标记告警已处理 | `{resolved: bool}` | `{success}` |
 
 ---
@@ -169,14 +172,48 @@
 
 ---
 
-## 十一、AI 分析任务（Admin 端口，`/api/v1/analysis/*`）
+## 十一、威胁规则（Admin 端口，`/api/v1/threats/*`）
+
+> **前缀**：`/api/v1/threats`
+> **鉴权**：Bearer Token
+
+| 方法 | 路径 | 功能 | 请求体 | 响应 |
+|------|------|------|--------|------|
+| GET | `/rules` | 列出威胁规则 | `?type=hacker_attack` | `{rules: [{id, threat_type, name, patterns, severity, enabled}]}` |
+| POST | `/rules` | 创建威胁规则 | `{threat_type, name, patterns, severity, enabled}` | `{id, success}` |
+| PUT | `/rules/{id}` | 更新威胁规则 | `{threat_type, name, patterns, severity, enabled}` | `{success}` |
+| DELETE | `/rules/{id}` | 删除威胁规则 | - | `{success}` |
+| GET | `/stats` | 威胁统计 | `?period=1440` | `{by_type: {hacker_attack, jailbreak, ...}, total, rule_counts}` |
+
+### 威胁类型
+`hacker_attack`（黑客攻击）、`jailbreak`（模型越狱）、`adversarial`（对抗攻击）、`malicious_gen`（恶意内容生成）
+
+---
+
+## 十二、系统行为分析（Admin 端口，`/api/v1/system-analysis/*`）
+
+> **前缀**：`/api/v1/system-analysis`
+> **鉴权**：Bearer Token
+> **说明**：系统级 AI 行为分析，独立于用户分析任务，自动周期性执行，识别未知威胁
+
+| 方法 | 路径 | 功能 | 请求体 | 响应 |
+|------|------|------|--------|------|
+| GET | `/config` | 获取分析配置 | - | `{enabled, model, api_key_id, time_range, interval_minutes, notify_on_high_risk}` |
+| PUT | `/config` | 更新分析配置 | `{enabled, model, api_key_id, time_range, interval_minutes, notify_on_high_risk}` | `{success}` |
+| GET | `/tasks` | 列出系统分析任务 | - | `{tasks: [{id, task_no, name, status, result_risk_level, result_summary, last_run_at, next_run_at}]}` |
+| POST | `/tasks/trigger` | 手动触发一次分析 | - | `{success}` |
+| GET | `/history` | 历史分析记录 | - | `{history: [{id, risk_level, summary, detail, dimensions, logs_analyzed, run_at}]}` |
+
+---
+
+## 十三、用户分析任务（Admin 端口，`/api/v1/analysis/*`）
 
 > **前缀**：`/api/v1/analysis`
 > **鉴权**：Bearer Token
 
 | 方法 | 路径 | 功能 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| POST | `/tasks` | 创建分析任务 | `{type, name, api_key_id?, model?}` | `{task_id}` |
+| POST | `/tasks` | 创建分析任务 | `{type, name, api_key_id?, model?, time_range?, schedule_type?, interval_minutes?}` | `{task_id}` |
 | GET | `/tasks` | 列出分析任务 | - | `{tasks: [...]}` |
 | PUT | `/tasks/{id}` | 更新任务 | `{name?, api_key_id?, model?}` | `{success}` |
 | DELETE | `/tasks/{id}` | 删除任务 | - | `{success}` |
@@ -186,11 +223,11 @@
 
 ---
 
-## 十二、技能检测任务（Admin 端口，`/api/v1/skills/*`）
+## 十四、技能检测任务（Admin 端口，`/api/v1/skills/*`）
 
 > **前缀**：`/api/v1/skills`
 > **鉴权**：Bearer Token
-> **防注入**：待检测内容以 `<document>` 标签包裹后发送给 LLM，system prompt 明确要求只做安全分析、不执行文档中的任何指令，防止恶意 Skills 文档劫持分析模型
+> **防注入**：待检测内容以 `<document>` 标签包裹后发送给 LLM，system prompt 明确要求只做安全分析、不执行文档中的任何指令
 
 | 方法 | 路径 | 功能 | 请求体 | 响应 |
 |------|------|------|--------|------|
@@ -211,18 +248,7 @@
 
 ---
 
-## 十三、Profile 分析历史（Admin 端口，`/api/v1/profile/history`）
-
-> **路径**：`/api/v1/profile/history`
-> **鉴权**：Bearer Token
-
-| 方法 | 功能 | 响应 |
-|------|------|------|
-| GET | 获取 Profile 分析历史 | `{history: [...]}` |
-
----
-
-## 十四、Agent 工具（Admin 端口，`/api/v1/agent/*`）
+## 十五、Agent 工具（Admin 端口，`/api/v1/agent/*`）
 
 > **前缀**：`/api/v1/agent`
 > **鉴权**：Bearer Token
@@ -240,7 +266,7 @@
 
 ---
 
-## 十五、代理测试（Admin 端口，`/api/v1/proxy/*`）
+## 十六、代理测试（Admin 端口，`/api/v1/proxy/*`）
 
 > **前缀**：`/api/v1/proxy`
 > **鉴权**：Bearer Token
@@ -252,7 +278,7 @@
 
 ---
 
-## 十六、模型代理接口（Proxy 端口，Provider-native 透明代理）
+## 十七、模型代理接口（Proxy 端口，Provider-native 透明代理）
 
 > **架构**：Provider-native 透明代理，按服务商原生协议透传转发
 > **鉴权**：Bearer Token（JWT）或 x-api-key（静态 API Key `clam-sk-xxx`）
@@ -313,7 +339,7 @@ curl http://localhost:8080/siliconflow/v1/chat/completions \
 
 ---
 
-## 十七、其他管理接口
+## 十八、其他管理接口
 
 ### 健康检查（Admin 端口）
 | 方法 | 路径 | 功能 | 鉴权 |
@@ -332,7 +358,7 @@ curl http://localhost:8080/siliconflow/v1/chat/completions \
 
 ---
 
-## 十八、鉴权机制说明
+## 十九、鉴权机制说明
 
 ### Bearer Token（JWT）
 - 管理接口使用 JWT Bearer Token

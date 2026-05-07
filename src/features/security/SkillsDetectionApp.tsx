@@ -219,13 +219,13 @@ function SkillsDetection() {
   const createMutation = useMutation({
     mutationFn: async () => analysisApi.createSkillsTask({ name: newName, model: newModel, source_type: sourceType, source_info: sourceInfo }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }); setShowCreate(false); setNewName(""); setNewModel(""); setSourceInfo(""); },
-    onError: (e: any) => { console.error("创建失败:", e); setErrorMsg("创建失败: " + e); },
+    onError: (e: any) => { setErrorMsg("创建失败: " + e); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => analysisApi.deleteSkillsTask(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }),
-    onError: (e: any) => { console.error("删除失败:", e); setErrorMsg("删除失败: " + e); },
+    onError: (e: any) => { setErrorMsg("删除失败: " + e); },
   });
 
   const batchDeleteMutation = useMutation({
@@ -233,26 +233,26 @@ function SkillsDetection() {
       await Promise.all(ids.map((id) => analysisApi.deleteSkillsTask(id)));
     },
     onSuccess: () => { setSelectedIds(new Set()); queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }); },
-    onError: (e: any) => { console.error("批量删除失败:", e); setErrorMsg("批量删除失败: " + e); },
+    onError: (e: any) => { setErrorMsg("批量删除失败: " + e); },
   });
 
   const startMutation = useMutation({
     mutationFn: (id: string) => analysisApi.startSkillsTask(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }),
-    onError: (e: any) => { console.error("启动失败:", e); setErrorMsg("启动失败: " + e); },
+    onError: (e: any) => { setErrorMsg("启动失败: " + e); },
   });
 
   const stopMutation = useMutation({
     mutationFn: (id: string) => analysisApi.stopSkillsTask(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }),
-    onError: (e: any) => { console.error("停止失败:", e); setErrorMsg("停止失败: " + e); },
+    onError: (e: any) => { setErrorMsg("停止失败: " + e); },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, name, model, sourceType, sourceInfo }: { id: string; name: string; model: string; sourceType: string; sourceInfo: string }) =>
       analysisApi.updateSkillsTask(id, { name, model, source_type: sourceType, source_info: sourceInfo }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["skills-tasks"] }); setEditingTask(null); },
-    onError: (e: any) => { console.error("更新失败:", e); setErrorMsg("更新失败: " + e); },
+    onError: (e: any) => { setErrorMsg("更新失败: " + e); },
   });
 
   const tasks = tasksData || [];

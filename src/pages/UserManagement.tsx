@@ -127,7 +127,7 @@ function UserManagement() {
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <Users className="w-6 h-6 text-primary" />
-        <h2 className="text-xl font-bold">用户管理</h2>
+        <h2 className="text-xl font-bold">用户</h2>
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => refetch()}
@@ -313,6 +313,24 @@ function UserManagement() {
                     </p>
                   </div>
                   <div className="flex items-center gap-1">
+                    {user.status !== "active" && (
+                      <button
+                        onClick={() => updateMutation.mutate({ ...user, status: "active" })}
+                        className="p-1.5 text-muted-foreground hover:text-emerald-500"
+                        title="启用用户"
+                      >
+                        <ToggleRight className="w-4 h-4" />
+                      </button>
+                    )}
+                    {user.status === "active" && (
+                      <button
+                        onClick={() => { if (confirm(`确定要停用用户 ${user.username} 吗？停用后该用户将无法登录。`)) updateMutation.mutate({ ...user, status: "disabled" }); }}
+                        className="p-1.5 text-muted-foreground hover:text-red-500"
+                        title="停用用户"
+                      >
+                        <ToggleLeft className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
                       onClick={() => setEditingUser({ ...user })}
                       className="p-1.5 text-muted-foreground hover:text-primary"

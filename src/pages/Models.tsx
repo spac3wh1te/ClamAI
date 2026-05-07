@@ -138,7 +138,7 @@ export default function Models() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">模型管理</h1>
+          <h1 className="text-3xl font-bold">模型</h1>
           <p className="text-muted-foreground mt-2">
             从提供商API获取模型列表，控制模型开关
           </p>

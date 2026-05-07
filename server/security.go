@@ -21,7 +21,14 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 		cfg := secConfig
 		secConfigMu.Unlock()
 
-		if !cfg.Enabled || !strings.HasPrefix(r.URL.Path, "/v1/") {
+		if !cfg.Enabled {
+			next.ServeHTTP(w, r)
+			return
+		}
+		spec := specFromContext(r)
+		isProviderRoute := spec != nil
+		isV1Route := strings.HasPrefix(r.URL.Path, "/v1/")
+		if !isV1Route && !isProviderRoute {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -67,15 +74,35 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 						catLabel = cat
 					}
 					log.Printf("[SECURITY] input keyword %s: cat=%s level=%s keyword=%s", cfg.Input.Mode, cat, level, kw)
+				alert := &SecurityAlert{
+					Timestamp: time.Now(), Direction: "input", Mode: cfg.Input.Mode,
+					TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
+					ContentPreview: truncate(inputContent, 200), Model: reqModel,
+					APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: cfg.Input.Mode,
+					Severity: level,
+				}
+					dbInsertAlert(alert)
+					if cfg.Input.Mode == "block" {
+						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), fmt.Sprintf("input keyword [%s] blocked: %s", cat, kw))
+						sendBlockResponse(w, cfg.BlockMessage)
+						return
+					}
+				}
+			}
+			{
+				matched, tType, tSev, tMatch := checkThreatRules(inputContent)
+				if matched {
+					log.Printf("[SECURITY] input threat %s: type=%s match=%s", cfg.Input.Mode, tType, tMatch)
 					alert := &SecurityAlert{
 						Timestamp: time.Now(), Direction: "input", Mode: cfg.Input.Mode,
-						TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
+						TriggerType: "threat:" + tType, TriggerDetail: fmt.Sprintf("[%s] %s", tType, truncate(tMatch, 80)),
+						Severity: tSev,
 						ContentPreview: truncate(inputContent, 200), Model: reqModel,
 						APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: cfg.Input.Mode,
 					}
 					dbInsertAlert(alert)
 					if cfg.Input.Mode == "block" {
-						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), fmt.Sprintf("input keyword [%s] blocked: %s", cat, kw))
+						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), fmt.Sprintf("input threat [%s] blocked: %s", tType, tMatch))
 						sendBlockResponse(w, cfg.BlockMessage)
 						return
 					}
@@ -97,6 +124,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 									TriggerType: "semantic", TriggerDetail: fmt.Sprintf("%s (%.0f%%)", categoryLabel(cat), cr.Confidence*100),
 									ContentPreview: truncate(inputContent, 200), Model: reqModel,
 									APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "block",
+									Severity: "high",
 								}
 								dbInsertAlert(alert)
 							}
@@ -123,6 +151,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 							TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
 							ContentPreview: truncate(inputContent, 200), Model: reqModel,
 							APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "block",
+							Severity: "high",
 						}
 						dbInsertAlert(alert)
 						dbInsertBlockedLog(reqProvider, reqModel, clientIP, maskAPIKey(apiKey), r.URL.Path, r.Method, string(bodyBytes), "input vector blocked")
@@ -181,6 +210,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 							TriggerType: "buffer_overflow", TriggerDetail: "响应超过缓冲区限制",
 							ContentPreview: "", Model: reqModel,
 							APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "block",
+							Severity: "critical",
 						}
 						dbInsertAlert(alert)
 						w.Header().Set("Content-Type", "application/json")
@@ -206,6 +236,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 									TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
 									ContentPreview: truncate(outputContent, 200), Model: reqModel,
 									APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "replace",
+									Severity: level,
 								}
 								dbInsertAlert(alert)
 								w.Header().Set("Content-Type", "application/json")
@@ -227,6 +258,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 												TriggerType: "semantic", TriggerDetail: fmt.Sprintf("%s (%.0f%%)", categoryLabel(cat), cr.Confidence*100),
 												ContentPreview: truncate(outputContent, 200), Model: reqModel,
 												APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "replace",
+												Severity: "high",
 											}
 											dbInsertAlert(alert)
 										}
@@ -250,6 +282,7 @@ func (p *ProxyServer) securityMiddleware(next http.Handler) http.Handler {
 										TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
 										ContentPreview: truncate(outputContent, 200), Model: reqModel,
 										APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "replace",
+										Severity: "high",
 									}
 									dbInsertAlert(alert)
 									autoAddBlockedSample(truncate(outputContent, 500), "output_vector")
@@ -326,6 +359,7 @@ func (p *ProxyServer) asyncInputSemanticCheck(content, model, apiKey, clientIP s
 			TriggerType: "semantic", TriggerDetail: fmt.Sprintf("%s (%.0f%%)", categoryLabel(cat), cr.Confidence*100),
 			ContentPreview: truncate(content, 200), Model: model,
 			APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
+			Severity: "high",
 		}
 		dbInsertAlert(alert)
 	}
@@ -345,6 +379,7 @@ func (p *ProxyServer) asyncOutputCheck(content, model, apiKey, clientIP string, 
 				TriggerType: "keyword:" + cat, TriggerDetail: fmt.Sprintf("[%s/%s] %s", catLabel, level, kw),
 				ContentPreview: truncate(content, 200), Model: model,
 				APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
+				Severity: level,
 			}
 			dbInsertAlert(alert)
 		}
@@ -370,6 +405,7 @@ func (p *ProxyServer) asyncOutputCheck(content, model, apiKey, clientIP string, 
 				TriggerType: "semantic", TriggerDetail: fmt.Sprintf("%s (%.0f%%)", categoryLabel(cat), cr.Confidence*100),
 				ContentPreview: truncate(content, 200), Model: model,
 				APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
+				Severity: "high",
 			}
 			dbInsertAlert(alert)
 		}
@@ -397,6 +433,7 @@ func (p *ProxyServer) asyncInputVectorCheck(content, model, apiKey, clientIP str
 		TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
 		ContentPreview: truncate(content, 200), Model: model,
 		APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
+		Severity: "high",
 	}
 	dbInsertAlert(alert)
 	autoAddBlockedSample(truncate(content, 500), "input_vector")
@@ -418,6 +455,7 @@ func (p *ProxyServer) asyncOutputVectorCheck(content, model, apiKey, clientIP st
 		TriggerType: "vector", TriggerDetail: fmt.Sprintf("相似度 %.0f%% (%s)", best.Similarity*100, best.Category),
 		ContentPreview: truncate(content, 200), Model: model,
 		APIKeyUsed: maskAPIKey(apiKey), ClientIP: clientIP, Action: "alert",
+		Severity: "high",
 	}
 	dbInsertAlert(alert)
 	autoAddBlockedSample(truncate(content, 500), "output_vector")
@@ -482,14 +520,24 @@ func (p *ProxyServer) handleGetSecurityAlerts(w http.ResponseWriter, r *http.Req
 		v := int(rv[0] - '0')
 		resolved = &v
 	}
-	alerts, total := dbGetAlerts(limit, offset, resolved)
+	severity := r.URL.Query().Get("severity")
+	direction := r.URL.Query().Get("direction")
+	triggerType := r.URL.Query().Get("trigger_type")
+	search := r.URL.Query().Get("search")
+	alerts, total := dbGetAlerts(limit, offset, resolved, severity, direction, triggerType, search)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"alerts": alerts, "total": total})
 }
 
 func (p *ProxyServer) handleResolveAlert(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	db.Exec("UPDATE security_alerts SET resolved = 1 WHERE id = ?", id)
+	var current int
+	db.QueryRow("SELECT resolved FROM security_alerts WHERE id = ?", id).Scan(&current)
+	newVal := 1
+	if current == 1 {
+		newVal = 0
+	}
+	db.Exec("UPDATE security_alerts SET resolved = ? WHERE id = ?", newVal, id)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "resolved": newVal})
 }

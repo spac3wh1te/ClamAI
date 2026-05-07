@@ -121,6 +121,6 @@ func main() {
 	}
 }
 
-func (p *ProxyServer) internalChatCompletion(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, []byte, error) {
+func (p *ProxyServer) internalChatCompletion(model string, messages []map[string]interface{}, temperature float64, maxTokens int) (int, int, int, []byte, error) {
 	return p.directModelCall(model, messages, temperature, maxTokens)
 }

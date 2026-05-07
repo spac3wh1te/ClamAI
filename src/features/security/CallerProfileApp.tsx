@@ -290,25 +290,25 @@ function CallerProfileAnalysis() {
       setNewTask({ name: "", api_key_id: "", model: "", time_range: "7d", schedule_type: "once", interval_minutes: 60 });
       refetchTasks();
     },
-    onError: (e: any) => { console.error("创建失败:", e); setErrorMsg("创建失败: " + e); },
+    onError: (e: any) => { setErrorMsg("创建失败: " + e); },
   });
 
   const startMutation = useMutation({
     mutationFn: (taskId: string) => analysisApi.startTask(taskId),
     onSuccess: () => refetchTasks(),
-    onError: (e: any) => { console.error("启动失败:", e); setErrorMsg("启动失败: " + e); },
+    onError: (e: any) => { setErrorMsg("启动失败: " + e); },
   });
 
   const stopMutation = useMutation({
     mutationFn: (taskId: string) => analysisApi.stopTask(taskId),
     onSuccess: () => refetchTasks(),
-    onError: (e: any) => { console.error("停止失败:", e); setErrorMsg("停止失败: " + e); },
+    onError: (e: any) => { setErrorMsg("停止失败: " + e); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (taskId: string) => analysisApi.deleteTask(taskId),
     onSuccess: () => refetchTasks(),
-    onError: (e: any) => { console.error("删除失败:", e); setErrorMsg("删除失败: " + e); },
+    onError: (e: any) => { setErrorMsg("删除失败: " + e); },
   });
 
   const batchDeleteMutation = useMutation({
@@ -316,14 +316,14 @@ function CallerProfileAnalysis() {
       await Promise.all(ids.map((id) => analysisApi.deleteTask(id)));
     },
     onSuccess: () => { setSelectedIds(new Set()); refetchTasks(); },
-    onError: (e: any) => { console.error("批量删除失败:", e); setErrorMsg("批量删除失败: " + e); },
+    onError: (e: any) => { setErrorMsg("批量删除失败: " + e); },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ taskId, name, apiKeyId, model, timeRange }: { taskId: string; name: string; apiKeyId: string; model: string; timeRange: string }) =>
       analysisApi.updateTask(taskId, { name, api_key_id: apiKeyId, model, time_range: timeRange }),
     onSuccess: () => { refetchTasks(); setEditingTaskId(null); },
-    onError: (e: any) => { console.error("更新失败:", e); setErrorMsg("更新失败: " + e); },
+    onError: (e: any) => { setErrorMsg("更新失败: " + e); },
   });
 
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);

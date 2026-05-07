@@ -12,11 +12,13 @@ import (
 
 type capturingResponseWriter struct {
 	http.ResponseWriter
-	statusCode  int
-	body        bytes.Buffer
-	streaming   bool
-	wrote       bool
-	streamUsage bytes.Buffer
+	statusCode      int
+	body            bytes.Buffer
+	streaming       bool
+	wrote           bool
+	streamUsage     bytes.Buffer
+	upstreamProvider string
+	upstreamModel    string
 }
 
 func (w *capturingResponseWriter) WriteHeader(code int) {
@@ -351,6 +353,8 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 		}
 		entry.UserID = uid
 		entry.APIKeyID = apiKeyUsed
+		entry.UpstreamProvider = cw.upstreamProvider
+		entry.UpstreamModel = cw.upstreamModel
 		p.logBuffer.Add(entry)
 		dbInsertLog(entry)
 

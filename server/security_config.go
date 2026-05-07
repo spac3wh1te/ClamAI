@@ -51,6 +51,7 @@ type SecurityAlert struct {
 	Mode           string    `json:"mode"`
 	TriggerType    string    `json:"trigger_type"`
 	TriggerDetail  string    `json:"trigger_detail"`
+	Severity       string    `json:"severity"`
 	ContentPreview string    `json:"content_preview"`
 	Model          string    `json:"model"`
 	APIKeyUsed     string    `json:"api_key_used"`
@@ -316,27 +317,91 @@ func dbSaveSecurityConfig(cfg *SecurityConfig) {
 }
 
 func dbInsertAlert(alert *SecurityAlert) {
+	severity := alert.Severity
+	if severity == "" {
+		severity = severityFromTrigger(alert.TriggerType, alert.TriggerDetail)
+	}
 	_, err := db.Exec(`INSERT INTO security_alerts
-		(timestamp, direction, mode, trigger_type, trigger_detail, content_preview, model, api_key_used, client_ip, action, resolved)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		(timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		alert.Timestamp.UTC().Format(time.RFC3339), alert.Direction, alert.Mode,
-		alert.TriggerType, alert.TriggerDetail, alert.ContentPreview,
+		alert.TriggerType, alert.TriggerDetail, severity, alert.ContentPreview,
 		alert.Model, alert.APIKeyUsed, alert.ClientIP, alert.Action)
 	if err != nil {
 		log.Printf("[ERROR] dbInsertAlert: %v", err)
 	}
 }
 
-func dbGetAlerts(limit, offset int, resolved *int) ([]map[string]interface{}, int) {
-	var total int
-	query := "SELECT COUNT(*) FROM security_alerts"
-	if resolved != nil {
-		query += " WHERE resolved = ?"
+func severityFromTrigger(triggerType, triggerDetail string) string {
+	switch {
+	case strings.HasPrefix(triggerType, "keyword:"):
+		for _, level := range []string{"critical", "high", "medium", "low"} {
+			if strings.Contains(triggerDetail, "/"+level) || strings.Contains(triggerDetail, "/"+level+"]") {
+				return level
+			}
+		}
+		return "high"
+	case triggerType == "semantic":
+		return "high"
+	case triggerType == "vector":
+		return "high"
+	case triggerType == "buffer_overflow":
+		return "critical"
+	default:
+		return "high"
 	}
-	db.QueryRow(query, *resolved).Scan(&total)
+}
 
-	rows, err := db.Query(`SELECT id, timestamp, direction, mode, trigger_type, trigger_detail, content_preview, model, api_key_used, client_ip, action, resolved
-		FROM security_alerts ORDER BY id DESC LIMIT ? OFFSET ?`, limit, offset)
+func dbGetAlerts(limit, offset int, resolved *int, severity, direction, triggerType, search string) ([]map[string]interface{}, int) {
+	var total int
+	query := "SELECT COUNT(*) FROM security_alerts WHERE 1=1"
+	var args []interface{}
+	if resolved != nil {
+		query += " AND resolved = ?"
+		args = append(args, *resolved)
+	}
+	if severity != "" {
+		query += " AND severity = ?"
+		args = append(args, severity)
+	}
+	if direction != "" {
+		query += " AND direction = ?"
+		args = append(args, direction)
+	}
+	if triggerType != "" {
+		query += " AND trigger_type LIKE ?"
+		args = append(args, triggerType+"%")
+	}
+	if search != "" {
+		query += " AND (trigger_detail LIKE ? OR content_preview LIKE ? OR model LIKE ?)"
+		s := "%" + search + "%"
+		args = append(args, s, s, s)
+	}
+	db.QueryRow(query, args...).Scan(&total)
+
+	dataQuery := `SELECT id, timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved
+		FROM security_alerts WHERE 1=1`
+	dataArgs := make([]interface{}, len(args))
+	copy(dataArgs, args)
+	if resolved != nil {
+		dataQuery += " AND resolved = ?"
+	}
+	if severity != "" {
+		dataQuery += " AND severity = ?"
+	}
+	if direction != "" {
+		dataQuery += " AND direction = ?"
+	}
+	if triggerType != "" {
+		dataQuery += " AND trigger_type LIKE ?"
+	}
+	if search != "" {
+		dataQuery += " AND (trigger_detail LIKE ? OR content_preview LIKE ? OR model LIKE ?)"
+	}
+	dataQuery += " ORDER BY id DESC LIMIT ? OFFSET ?"
+	dataArgs = append(dataArgs, limit, offset)
+
+	rows, err := db.Query(dataQuery, dataArgs...)
 	if err != nil {
 		log.Printf("[ERROR] dbGetAlerts: %v", err)
 		return nil, 0
@@ -346,9 +411,9 @@ func dbGetAlerts(limit, offset int, resolved *int) ([]map[string]interface{}, in
 	var alerts []map[string]interface{}
 	for rows.Next() {
 		var id int
-		var ts, direction, mode, triggerType, triggerDetail, contentPreview, model, apiKeyUsed, clientIP, action string
+		var ts, direction, mode, triggerType, triggerDetail, severity, contentPreview, model, apiKeyUsed, clientIP, action string
 		var resolvedVal int
-		rows.Scan(&id, &ts, &direction, &mode, &triggerType, &triggerDetail, &contentPreview, &model, &apiKeyUsed, &clientIP, &action, &resolvedVal)
+		rows.Scan(&id, &ts, &direction, &mode, &triggerType, &triggerDetail, &severity, &contentPreview, &model, &apiKeyUsed, &clientIP, &action, &resolvedVal)
 		alerts = append(alerts, map[string]interface{}{
 			"id":              id,
 			"timestamp":       ts,
@@ -356,6 +421,7 @@ func dbGetAlerts(limit, offset int, resolved *int) ([]map[string]interface{}, in
 			"mode":            mode,
 			"trigger_type":    triggerType,
 			"trigger_detail":  triggerDetail,
+			"severity":        severity,
 			"content_preview": contentPreview,
 			"model":           model,
 			"api_key_used":    apiKeyUsed,

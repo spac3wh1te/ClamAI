@@ -156,7 +156,12 @@ export default function ApiKeys() {
     },
   });
 
-  const keys = keysData?.keys || [];
+  const rawKeys = keysData?.keys || [];
+  const keys = [...rawKeys].sort((a: any, b: any) => {
+    const dateCompare = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    if (dateCompare !== 0) return dateCompare;
+    return (a.id || "").localeCompare(b.id || "");
+  });
 
   const editingKeyIdRef = useRef<string | null>(null);
 
@@ -365,24 +370,6 @@ export default function ApiKeys() {
     if (allowedModelsForKey.length === 0) return true;
     return allowedModelsForKey.includes(model);
   });
-  console.log(
-    "[DIAG-MODELS] proxyModels raw:",
-    proxyModels?.length,
-    proxyModels?.slice(0, 5),
-  );
-  console.log(
-    "[DIAG-MODELS] testProxyKey:",
-    testProxyKey,
-    "selectedApiKey:",
-    selectedApiKey?.id,
-    "allowedModelsForKey:",
-    allowedModelsForKey,
-  );
-  console.log(
-    "[DIAG-MODELS] proxyModelsList after filter:",
-    proxyModelsList.length,
-    proxyModelsList.slice(0, 5),
-  );
 
   const editingModelsList = (() => {
     const allowedSet = new Set(editingAllowedModels);
@@ -465,7 +452,7 @@ export default function ApiKeys() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">API密钥管理</h1>
+          <h1 className="text-3xl font-bold">密钥</h1>
           <p className="text-muted-foreground mt-2">
             管理对外API密钥，供外部服务调用网关
           </p>
@@ -682,6 +669,12 @@ export default function ApiKeys() {
                       <span>
                         最后使用{" "}
                         {new Date(key.last_used).toLocaleString("zh-CN")}
+                      </span>
+                    )}
+                    {(key as any).last_synced && (
+                      <span>
+                        最后同步{" "}
+                        {new Date((key as any).last_synced).toLocaleString("zh-CN")}
                       </span>
                     )}
                   </div>

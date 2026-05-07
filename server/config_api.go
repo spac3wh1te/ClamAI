@@ -317,17 +317,6 @@ func saveFullConfigToDB(cfg *FullConfig) {
 
 func (ps *ProxyServer) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := buildFullConfig()
-	if cfg.Gateway.APIKey != "" {
-		cfg.Gateway.APIKey = maskAPIKey(cfg.Gateway.APIKey)
-	}
-	for id, prov := range cfg.Providers {
-		for i := range prov.ApiKeys {
-			if prov.ApiKeys[i].KeyValue != "" {
-				prov.ApiKeys[i].KeyValue = maskAPIKey(prov.ApiKeys[i].KeyValue)
-			}
-		}
-		cfg.Providers[id] = prov
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
 }

@@ -54,13 +54,55 @@ func initDB() error {
 		log.Printf("[WARN] initDB: migration api_keys_user_id failed (non-fatal): %v", err)
 	}
 
+	if err := migrateAPIKeysLastSynced(); err != nil {
+		log.Printf("[WARN] initDB: migration api_keys_last_synced failed (non-fatal): %v", err)
+	}
+
+	if err := migrateRequestLogsColumns(); err != nil {
+		log.Printf("[WARN] initDB: migration request_logs_columns failed (non-fatal): %v", err)
+	}
+
 	if err := migrateFromJSON(); err != nil {
 		log.Printf("[WARN] initDB: migration from JSON failed (non-fatal): %v", err)
 	}
 
 	log.Printf("[INFO] initDB: database initialized successfully")
 	initTaskCounters()
+
+	seedDefaultThreatRules()
+	loadThreatRules()
+
 	return nil
+}
+
+func backfillSeverity() {
+	rows, err := db.Query("SELECT id, trigger_type, trigger_detail FROM security_alerts WHERE severity = '' OR severity IS NULL")
+	if err != nil {
+		return
+	}
+	type row struct {
+		id            int64
+		triggerType   string
+		triggerDetail string
+	}
+	var updates []row
+	for rows.Next() {
+		var r row
+		if rows.Scan(&r.id, &r.triggerType, &r.triggerDetail) == nil {
+			updates = append(updates, r)
+		}
+	}
+	rows.Close()
+
+	for _, r := range updates {
+		sev := severityFromTrigger(r.triggerType, r.triggerDetail)
+		if sev != "" {
+			db.Exec("UPDATE security_alerts SET severity = ? WHERE id = ?", sev, r.id)
+		}
+	}
+	if len(updates) > 0 {
+		log.Printf("[INFO] backfillSeverity: updated %d alerts", len(updates))
+	}
 }
 
 func migrateProviderKeys() error {
@@ -125,6 +167,80 @@ func migrateAPIKeysUserID() error {
 			return fmt.Errorf("failed to add user_id column: %w", err)
 		}
 		log.Printf("[INFO] migrateAPIKeysUserID: added user_id column")
+	}
+	return nil
+}
+
+func migrateAPIKeysLastSynced() error {
+	rows, err := db.Query("PRAGMA table_info(api_keys)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasLastSynced := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue interface{}
+		var pk int
+		rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk)
+		if name == "last_synced" {
+			hasLastSynced = true
+			break
+		}
+	}
+	if !hasLastSynced {
+		_, err := db.Exec("ALTER TABLE api_keys ADD COLUMN last_synced DATETIME")
+		if err != nil {
+			return fmt.Errorf("failed to add last_synced column: %w", err)
+		}
+		log.Printf("[INFO] migrateAPIKeysLastSynced: added last_synced column")
+	}
+	return nil
+}
+
+func migrateRequestLogsColumns() error {
+	cols := map[string]string{
+		"is_proxy_call":      "INTEGER DEFAULT 0",
+		"upstream_request_headers":  "TEXT DEFAULT ''",
+		"upstream_response_headers": "TEXT DEFAULT ''",
+		"upstream_request_body":    "TEXT DEFAULT ''",
+		"upstream_response_body":    "TEXT DEFAULT ''",
+		"upstream_provider":  "TEXT DEFAULT ''",
+		"upstream_model":     "TEXT DEFAULT ''",
+	}
+	for colName, colDef := range cols {
+		rows, err := db.Query("PRAGMA table_info(request_logs)")
+		if err != nil {
+			return err
+		}
+		hasCol := false
+		for rows.Next() {
+			var cid int
+			var cname string
+			var ctype string
+			var cnotnull int
+			var cdflt_value interface{}
+			var cpk int
+			if err := rows.Scan(&cid, &cname, &ctype, &cnotnull, &cdflt_value, &cpk); err != nil {
+				rows.Close()
+				continue
+			}
+			if cname == colName {
+				hasCol = true
+				break
+			}
+		}
+		rows.Close()
+		if !hasCol {
+			_, err := db.Exec(fmt.Sprintf("ALTER TABLE request_logs ADD COLUMN %s %s", colName, colDef))
+			if err != nil {
+				log.Printf("[WARN] migrateRequestLogsColumns: failed to add %s: %v", colName, err)
+			} else {
+				log.Printf("[INFO] migrateRequestLogsColumns: added %s", colName)
+			}
+		}
 	}
 	return nil
 }
@@ -208,6 +324,17 @@ func createTables() error {
 			resolved INTEGER DEFAULT 0
 		)`, autoInc),
 		`CREATE INDEX IF NOT EXISTS idx_security_alerts_timestamp ON security_alerts(timestamp DESC)`,
+		`CREATE TABLE IF NOT EXISTS threat_rules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			threat_type TEXT NOT NULL,
+			name TEXT NOT NULL,
+			patterns_json TEXT NOT NULL,
+			severity TEXT DEFAULT 'high',
+			enabled INTEGER DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_threat_rules_type ON threat_rules(threat_type)`,
 		`CREATE TABLE IF NOT EXISTS rate_limit_config (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			config_json TEXT DEFAULT '{}'
@@ -364,6 +491,52 @@ func createTables() error {
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS system_analysis_config (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			enabled INTEGER DEFAULT 1,
+			model TEXT DEFAULT '',
+			api_key_id TEXT DEFAULT '',
+			time_range TEXT DEFAULT '7d',
+			interval_minutes INTEGER DEFAULT 60,
+			notify_on_high_risk INTEGER DEFAULT 1,
+			auto_block_risk_level TEXT DEFAULT '',
+			created_at TEXT DEFAULT '',
+			updated_at TEXT DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS system_analysis_tasks (
+			id TEXT PRIMARY KEY,
+			task_no TEXT NOT NULL,
+			name TEXT NOT NULL,
+			api_key_id TEXT DEFAULT '',
+			model TEXT DEFAULT '',
+			time_range TEXT DEFAULT '7d',
+			schedule_type TEXT DEFAULT 'once',
+			interval_minutes INTEGER DEFAULT 60,
+			status TEXT DEFAULT 'idle',
+			result_risk_level TEXT DEFAULT '',
+			result_summary TEXT DEFAULT '',
+			result_detail TEXT DEFAULT '',
+			result_dimensions TEXT DEFAULT '',
+			result_logs_analyzed INTEGER DEFAULT 0,
+			last_run_at TEXT DEFAULT '',
+			next_run_at TEXT DEFAULT '',
+			created_at TEXT DEFAULT '',
+			created_by TEXT DEFAULT '__system__'
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sat_status_next ON system_analysis_tasks(status, next_run_at)`,
+		`CREATE TABLE IF NOT EXISTS system_analysis_task_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			risk_level TEXT DEFAULT '',
+			summary TEXT DEFAULT '',
+			detail TEXT DEFAULT '',
+			dimensions TEXT DEFAULT '',
+			logs_analyzed INTEGER DEFAULT 0,
+			status TEXT DEFAULT '',
+			duration_ms INTEGER DEFAULT 0,
+			run_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sath_task ON system_analysis_task_history(task_id)`,
 		`CREATE TABLE IF NOT EXISTS user_settings (
 			user_id TEXT NOT NULL,
 			key TEXT NOT NULL,
@@ -382,6 +555,10 @@ func createTables() error {
 	db.Exec("ALTER TABLE security_config ADD COLUMN auto_ban_key INTEGER DEFAULT 0")
 	db.Exec("ALTER TABLE security_alerts ADD COLUMN mode TEXT DEFAULT 'block'")
 	db.Exec("ALTER TABLE security_alerts ADD COLUMN client_ip TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE security_alerts ADD COLUMN severity TEXT DEFAULT ''")
+
+	backfillSeverity()
+
 	db.Exec("ALTER TABLE request_logs ADD COLUMN request_content TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE request_logs ADD COLUMN response_content TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE request_logs ADD COLUMN user_id TEXT DEFAULT ''")

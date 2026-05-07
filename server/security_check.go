@@ -139,7 +139,7 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 		{"role": "user", "content": content},
 	}
 
-	statusCode, respBody, err := p.internalChatCompletion(cfg.SemanticModel, messages, 0.0, 200)
+	statusCode, inTok, outTok, respBody, err := p.internalChatCompletion(cfg.SemanticModel, messages, 0.0, 200)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +185,6 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 		result.Categories[cat] = cr
 	}
 
-	inTok, outTok := extractTokensFromSecurityResp(respData)
 	entry := &RequestLog{
 		Timestamp:       time.Now(),
 		Provider:        providerName,

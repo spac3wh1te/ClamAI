@@ -86,6 +86,16 @@ export const statsApi = {
     if (!resp.ok) throw new Error("导出失败");
     return resp.text();
   },
+
+  serviceLogs: async (params?: { level?: string; keyword?: string; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.level) query.set("level", params.level);
+    if (params?.keyword) query.set("keyword", params.keyword);
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.offset) query.set("offset", String(params.offset));
+    const qs = query.toString();
+    return apiRequest<{ lines: string[]; total: number }>("GET", `/stats/service-logs${qs ? "?" + qs : ""}`);
+  },
 };
 
 export interface ProxyModelsResult {

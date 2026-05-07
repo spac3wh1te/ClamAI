@@ -10,10 +10,9 @@ import (
 
 // ==================== Gemini提供商 ====================
 type GeminiProvider struct {
-	name          string
-	baseURL       string
-	apiKey        string
-	dynamicModels []string
+	name    string
+	baseURL string
+	apiKey  string
 }
 
 func NewGeminiProvider(apiKey string) *GeminiProvider {
@@ -24,17 +23,12 @@ func NewGeminiProvider(apiKey string) *GeminiProvider {
 	}
 }
 
-func (p *GeminiProvider) GetName() string    { return p.name }
-func (p *GeminiProvider) GetBaseURL() string { return p.baseURL }
-func (p *GeminiProvider) GetAPIKey() string  { return p.apiKey }
-func (p *GeminiProvider) GetModels() []string {
-	if len(p.dynamicModels) > 0 {
-		return p.dynamicModels
-	}
-	return []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"}
-}
-func (p *GeminiProvider) FetchModels()          {}
-func (p *GeminiProvider) TestConnection() error { return nil }
+func (p *GeminiProvider) GetName() string         { return p.name }
+func (p *GeminiProvider) GetBaseURL() string       { return p.baseURL }
+func (p *GeminiProvider) SetBaseURL(url string)    { p.baseURL = url }
+func (p *GeminiProvider) GetAPIKey() string        { return p.apiKey }
+func (p *GeminiProvider) FetchModels() []string    { return nil }
+func (p *GeminiProvider) TestConnection() error    { return nil }
 func (p *GeminiProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	path = strings.TrimPrefix(path, "/v1")
@@ -57,11 +51,10 @@ func (p *GeminiProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== MiniMax提供商 ====================
 type MiniMaxProvider struct {
-	name          string
-	baseURL       string
-	apiKey        string
-	groupID       string
-	dynamicModels []string
+	name    string
+	baseURL string
+	apiKey  string
+	groupID string
 }
 
 func NewMiniMaxProvider(apiKey, groupID string) *MiniMaxProvider {
@@ -73,21 +66,12 @@ func NewMiniMaxProvider(apiKey, groupID string) *MiniMaxProvider {
 	}
 }
 
-func (p *MiniMaxProvider) GetName() string    { return p.name }
-func (p *MiniMaxProvider) GetBaseURL() string { return p.baseURL }
-func (p *MiniMaxProvider) GetAPIKey() string  { return p.apiKey }
-func (p *MiniMaxProvider) GetModels() []string {
-	if len(p.dynamicModels) > 0 {
-		return p.dynamicModels
-	}
-	return []string{"MiniMax-Text-01", "abab6.5s-chat", "abab6.5g-chat"}
-}
-func (p *MiniMaxProvider) FetchModels() {
-	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
-		p.dynamicModels = models
-	}
-}
-func (p *MiniMaxProvider) TestConnection() error { return nil }
+func (p *MiniMaxProvider) GetName() string         { return p.name }
+func (p *MiniMaxProvider) GetBaseURL() string       { return p.baseURL }
+func (p *MiniMaxProvider) SetBaseURL(url string)    { p.baseURL = url }
+func (p *MiniMaxProvider) GetAPIKey() string        { return p.apiKey }
+func (p *MiniMaxProvider) FetchModels() []string    { return fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer") }
+func (p *MiniMaxProvider) TestConnection() error    { return nil }
 func (p *MiniMaxProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	upstreamURL := p.baseURL + r.URL.Path
 	body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
@@ -125,10 +109,9 @@ func (p *MiniMaxProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== GLM提供商 (智谱AI) ====================
 type GLMProvider struct {
-	name          string
-	baseURL       string
-	apiKey        string
-	dynamicModels []string
+	name    string
+	baseURL string
+	apiKey  string
 }
 
 func NewGLMProvider(apiKey string) *GLMProvider {
@@ -139,20 +122,11 @@ func NewGLMProvider(apiKey string) *GLMProvider {
 	}
 }
 
-func (p *GLMProvider) GetName() string    { return p.name }
-func (p *GLMProvider) GetBaseURL() string { return p.baseURL }
-func (p *GLMProvider) GetAPIKey() string  { return p.apiKey }
-func (p *GLMProvider) GetModels() []string {
-	if len(p.dynamicModels) > 0 {
-		return p.dynamicModels
-	}
-	return []string{"glm-4", "glm-4-plus", "glm-4v", "glm-3-turbo"}
-}
-func (p *GLMProvider) FetchModels() {
-	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
-		p.dynamicModels = models
-	}
-}
+func (p *GLMProvider) GetName() string         { return p.name }
+func (p *GLMProvider) GetBaseURL() string       { return p.baseURL }
+func (p *GLMProvider) SetBaseURL(url string)    { p.baseURL = url }
+func (p *GLMProvider) GetAPIKey() string        { return p.apiKey }
+func (p *GLMProvider) FetchModels() []string    { return fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer") }
 func (p *GLMProvider) TestConnection() error {
 	return testConnection(p.baseURL+"/models", p.apiKey, "Bearer")
 }
@@ -182,10 +156,9 @@ func (p *GLMProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // ==================== ArkCode 提供商 (OpenAI协议) ====================
 type ArkCodeProvider struct {
-	name          string
-	baseURL       string
-	apiKey        string
-	dynamicModels []string
+	name    string
+	baseURL string
+	apiKey  string
 }
 
 func NewArkCodeProvider(apiKey string) *ArkCodeProvider {
@@ -196,21 +169,12 @@ func NewArkCodeProvider(apiKey string) *ArkCodeProvider {
 	}
 }
 
-func (p *ArkCodeProvider) GetName() string    { return p.name }
-func (p *ArkCodeProvider) GetBaseURL() string { return p.baseURL }
-func (p *ArkCodeProvider) GetAPIKey() string  { return p.apiKey }
-func (p *ArkCodeProvider) GetModels() []string {
-	if len(p.dynamicModels) > 0 {
-		return p.dynamicModels
-	}
-	return []string{}
-}
-func (p *ArkCodeProvider) FetchModels() {
-	if models := fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer"); len(models) > 0 {
-		p.dynamicModels = models
-	}
-}
-func (p *ArkCodeProvider) TestConnection() error { return nil }
+func (p *ArkCodeProvider) GetName() string         { return p.name }
+func (p *ArkCodeProvider) GetBaseURL() string       { return p.baseURL }
+func (p *ArkCodeProvider) SetBaseURL(url string)    { p.baseURL = url }
+func (p *ArkCodeProvider) GetAPIKey() string        { return p.apiKey }
+func (p *ArkCodeProvider) FetchModels() []string    { return fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer") }
+func (p *ArkCodeProvider) TestConnection() error    { return nil }
 func (p *ArkCodeProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	path = strings.TrimPrefix(path, "/v1")

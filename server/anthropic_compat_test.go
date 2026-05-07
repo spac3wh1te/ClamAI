@@ -19,7 +19,7 @@ func (m *mockProvider) GetModels() []string                      { return m.mode
 func (m *mockProvider) GetAPIKey() string                        { return m.apiKey }
 func (m *mockProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {}
 func (m *mockProvider) TestConnection() error                    { return nil }
-func (m *mockProvider) FetchModels()                             {}
+func (m *mockProvider) FetchModels() []string                    { return nil }
 
 func newTestProxyServer() *ProxyServer {
 	return &ProxyServer{

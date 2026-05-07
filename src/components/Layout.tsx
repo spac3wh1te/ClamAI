@@ -8,16 +8,34 @@ import {
   Settings,
   FileText,
   Menu,
-  X,
-  Activity,
   Shield,
-  Gauge,
+  ChevronLeft,
   LogOut,
   Users,
+  Bell,
+  ShieldAlert,
+  ShieldCheck,
+  Gauge,
+  Bug,
+  Search,
+  BookOpen,
+  Brain,
+  Database,
+  Fingerprint,
+  Globe,
+  KeyRound,
+  Cpu,
+  ScanSearch,
+  Bot,
+  ClipboardList,
+  UserCheck,
+  Zap,
+  Sliders,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useSetup } from "../context/SetupContext";
 import { useCurrentUser } from "../context/UserContext";
+import StatusBar from "./StatusBar";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -30,119 +48,154 @@ function Layout({ children }: LayoutProps) {
   const { connected, deployMode } = useSetup();
   const { isAdmin, currentUser } = useCurrentUser();
 
-  const navigation = [
-    { name: "仪表盘", href: "/", icon: LayoutDashboard },
-    { name: "模型提供商", href: "/providers", icon: Server },
-    { name: "模型管理", href: "/models", icon: Layers },
-    { name: "API密钥", href: "/api-keys", icon: Key },
-    { name: "调用记录", href: "/logs", icon: FileText },
-    ...(isAdmin
-      ? [
-          { name: "安全广场", href: "/security-square", icon: Shield },
-          { name: "安全防护", href: "/security", icon: Shield },
-          { name: "模型限流", href: "/rate-limit", icon: Gauge },
-          { name: "用户管理", href: "/users", icon: Users },
-        ]
-      : []),
-    { name: "基本设置", href: "/settings", icon: Settings },
+  type Item = { name: string; href: string; icon: React.ElementType; matchPrefix?: boolean };
+  type Section = { label: string; items: Item[] };
+
+  const sections: Section[] = [
+    { label: "概览", items: [{ name: "安全总览", href: "/", icon: LayoutDashboard }] },
+    { label: "模型管理", items: [{ name: "模型管理", href: "/models-mgmt", icon: Layers, matchPrefix: true }] },
+    { label: "", items: [{ name: "日志中心", href: "/logs", icon: FileText }] },
+    ...(isAdmin ? [
+      {
+        label: "安全中心",
+        items: [
+          { name: "实时防护", href: "/alerts/realtime", icon: ShieldAlert },
+          { name: "威胁挖掘", href: "/alerts/threats", icon: Bug },
+          { name: "安全广场", href: "/security-tools", icon: ScanSearch },
+          { name: "管控中心", href: "/access-control", icon: Sliders, matchPrefix: true },
+          { name: "防护策略", href: "/security-policy", icon: ShieldCheck },
+        ],
+      },
+    ] : []),
+    { label: "系统中心", items: [{ name: "设置", href: "/settings", icon: Settings }] },
   ];
+
+  const allItems = sections.flatMap((s) => s.items);
+  const currentName =
+    allItems.find((item) => {
+      if (item.href === "/") return location.pathname === "/";
+      if (item.matchPrefix) return location.pathname.startsWith(item.href);
+      return location.pathname === item.href;
+    })?.name || "ClamAI";
 
   return (
     <div className="flex h-screen bg-background">
       <aside
         className={`${
-          sidebarOpen ? "w-64" : "w-16"
-        } bg-card border-r border-border transition-all duration-300 flex flex-col`}
+          sidebarOpen ? "w-56" : "w-14"
+        } bg-card border-r border-border transition-all duration-300 flex flex-col shrink-0`}
       >
-        <div className="flex items-center justify-between h-16 px-4 border-b border-border">
+        <div className="flex items-center justify-between h-14 px-3 border-b border-border">
           {sidebarOpen && (
-            <div className="flex items-center gap-2">
-              <Activity className="w-6 h-6 text-primary" />
-              <span className="text-lg font-bold">ClamAI</span>
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+                <Shield size={16} className="text-primary-foreground" />
+              </div>
+              <div>
+                <span className="text-sm font-bold text-foreground tracking-wide">ClamAI</span>
+                <span className="text-[10px] text-muted-foreground ml-1">Gateway</span>
+              </div>
             </div>
           )}
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-1 rounded hover:bg-secondary transition-colors"
+            className="p-1.5 rounded-md hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
           >
-            {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+            {sidebarOpen ? <ChevronLeft size={16} /> : <Menu size={16} />}
           </button>
         </div>
 
-        <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
-          {navigation.map((item) => {
-            const isActive = location.pathname === item.href;
-            return (
-              <NavLink
-                key={item.name}
-                to={item.href}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-                  isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                }`}
-              >
-                <item.icon size={20} />
-                {sidebarOpen && (
-                  <span className="font-medium">{item.name}</span>
+        <nav className="flex-1 py-2 overflow-y-auto">
+          {sections.map((section, si) =>
+            section.items.length > 0 ? (
+              <div key={si} className="mb-0.5">
+                {sidebarOpen && section.label && (
+                  <div className="px-4 pt-3 pb-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      {section.label}
+                    </span>
+                  </div>
                 )}
-              </NavLink>
-            );
-          })}
+                {section.items.map((item) => {
+                  const isActive = item.href === "/"
+                    ? location.pathname === "/"
+                    : item.matchPrefix
+                      ? location.pathname.startsWith(item.href)
+                      : location.pathname === item.href;
+                  return (
+                    <NavLink
+                      key={item.name + item.href}
+                      to={item.href}
+                      className={`flex items-center gap-3 mx-2 px-2.5 py-2 rounded-lg transition-all duration-150 group ${
+                        isActive
+                          ? "sidebar-active text-primary"
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                      }`}
+                    >
+                      <item.icon
+                        size={18}
+                        className={`shrink-0 ${isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"}`}
+                      />
+                      {sidebarOpen && (
+                        <span className={`text-[13px] ${isActive ? "font-semibold" : "font-medium"}`}>
+                          {item.name}
+                        </span>
+                      )}
+                      {isActive && sidebarOpen && (
+                        <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary sidebar-glow-dot" />
+                      )}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            ) : null
+          )}
         </nav>
 
         {sidebarOpen && (
-          <div className="p-4 border-t border-border space-y-2">
-            <div className="text-sm">
-              <p className="text-muted-foreground">ClamAI v1.0.0</p>
-              <p className="text-xs mt-1 text-muted-foreground">智能大模型网关</p>
+          <div className="px-3 pb-3 space-y-2">
+            <div className="border-t border-border pt-3">
               {currentUser && (
-                <div className="mt-2 px-2 py-1 bg-secondary rounded text-xs">
-                  <span className="text-muted-foreground">当前用户：</span>
-                  <span className="font-medium">{currentUser.displayName || currentUser.username}</span>
-                  <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${isAdmin ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                    {isAdmin ? '管理员' : '普通用户'}
-                  </span>
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-secondary mb-2">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${isAdmin ? 'bg-red-500/20 text-red-400' : 'bg-primary/20 text-primary'}`}>
+                    {(currentUser.displayName || currentUser.username).charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-foreground truncate">{currentUser.displayName || currentUser.username}</p>
+                    <p className="text-[10px] text-muted-foreground">{isAdmin ? '管理员' : '用户'}</p>
+                  </div>
                 </div>
               )}
+              <button
+                onClick={logout}
+                className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                退出登录
+              </button>
             </div>
-            <button
-              onClick={logout}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              退出登录
-            </button>
           </div>
         )}
       </aside>
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 bg-card border-b border-border flex items-center justify-between px-6">
-          <h1 className="text-xl font-semibold">
-            {navigation.find((item) => item.href === location.pathname)?.name ||
-              "ClamAI"}
-          </h1>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-sm">
-              {connected ? (
-                <>
-                  <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                  <span className="text-green-500">
-                    {deployMode === "pc" ? "本地服务正常" : "远程服务正常"}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-                  <span className="text-red-500">服务未连接</span>
-                </>
-              )}
-            </div>
+        <header className="h-14 bg-card/80 backdrop-blur-md border-b border-border flex items-center justify-between px-6 shrink-0">
+          <h1 className="text-sm font-semibold text-foreground">{currentName}</h1>
+          <div className="flex items-center gap-2 text-xs">
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${
+                connected ? "bg-emerald-400 status-dot-safe" : "bg-red-400 status-dot-danger"
+              }`}
+            />
+            <span className={connected ? "text-emerald-400" : "text-red-400"}>
+              {connected ? (deployMode === "pc" ? "本地服务正常" : "远程服务正常") : "服务未连接"}
+            </span>
           </div>
         </header>
-
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-[1400px] mx-auto p-6">{children}</div>
+        </main>
+        <StatusBar />
       </div>
     </div>
   );

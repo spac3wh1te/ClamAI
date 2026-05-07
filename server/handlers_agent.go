@@ -340,7 +340,7 @@ func (p *ProxyServer) handleAgentLogScan(w http.ResponseWriter, r *http.Request)
 					modelForGateway = prov.GetName() + ":" + modelForGateway
 				}
 			}
-			statusCode, respBody, err := p.internalChatCompletion(modelForGateway, aiMessages, 0.2, 500)
+			statusCode, _, _, respBody, err := p.internalChatCompletion(modelForGateway, aiMessages, 0.2, 500)
 			if err == nil && statusCode == 200 {
 				var aiResp map[string]interface{}
 				if json.Unmarshal(respBody, &aiResp) == nil {
@@ -705,7 +705,7 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 					{"role": "user", "content": skillsContent},
 				}
 				agentStart := time.Now()
-				statusCode, respBody, err := p.internalChatCompletion(req.Model, messages, 0.2, 1500)
+				statusCode, inTok2, outTok2, respBody, err := p.internalChatCompletion(req.Model, messages, 0.2, 1500)
 
 				provider2, resolvedName2 := p.resolveProvider(req.Model)
 				providerName2 := ""
@@ -715,20 +715,6 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 					providerName2 = req.Model
 					if idx := strings.Index(providerName2, ":"); idx > 0 {
 						providerName2 = providerName2[:idx]
-					}
-				}
-				inTok2, outTok2 := 0, 0
-				if statusCode >= 200 && statusCode < 300 {
-					var tmpResp map[string]interface{}
-					if json.Unmarshal(respBody, &tmpResp) == nil {
-						if usage, ok := tmpResp["usage"].(map[string]interface{}); ok {
-							if pt, ok := usage["prompt_tokens"].(float64); ok {
-								inTok2 = int(pt)
-							}
-							if ct, ok := usage["completion_tokens"].(float64); ok {
-								outTok2 = int(ct)
-							}
-						}
 					}
 				}
 				logEntry := &RequestLog{

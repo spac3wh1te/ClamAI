@@ -43,17 +43,22 @@ func (p *ProxyServer) resolveProvider(model string) (Provider, string) {
 		log.Printf("[DEBUG] resolveProvider: provider %s not found in registry", providerName)
 	}
 
-	p.mu.RLock()
-	for provName, prov := range p.providers {
-		for _, m := range prov.GetModels() {
-			if m == model {
-				p.mu.RUnlock()
-				log.Printf("[DEBUG] resolveProvider: fallback found model %s in provider %s", model, provName)
-				return prov, model
+	for _, pr := range dbListProviders() {
+		ptype, _ := pr["provider_type"].(string)
+		if ptype == "" {
+			continue
+		}
+		if modelList, ok := pr["models"].([]string); ok {
+			for _, m := range modelList {
+				if m == model {
+					p.mu.RLock()
+					prov := p.providers[ptype]
+					p.mu.RUnlock()
+					return prov, model
+				}
 			}
 		}
 	}
-	p.mu.RUnlock()
 
 	log.Printf("[DEBUG] resolveProvider: no provider found for model %s", model)
 	return nil, ""

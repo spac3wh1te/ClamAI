@@ -22,7 +22,8 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { useApp } from "../context/AppContext";
 import { useSetup } from "../context/SetupContext";
-import { User, Lock } from "lucide-react";
+import { useTheme, THEMES, type ThemeName } from "../context/ThemeContext";
+import { User, Lock, Palette } from "lucide-react";
 import { logInfo, logError, setFrontendLogLevel } from "../utils/log";
 
 interface AppConfig {
@@ -74,6 +75,7 @@ export default function Settings() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const { changePassword } = useAuth();
   const { setTheme, setLocale, setTimezone } = useApp();
+  const { theme: currentTheme, setTheme: setUITheme } = useTheme();
   const [oldPwd, setOldPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
   const [confirmPwd, setConfirmPwd] = useState("");
@@ -493,6 +495,42 @@ export default function Settings() {
                 )}
               </div>
             </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 主题风格 */}
+      <div className="bg-card rounded-lg p-6 border border-border">
+        <div className="flex items-center gap-2 mb-4">
+          <Palette className="w-5 h-5 text-primary" />
+          <h2 className="text-xl font-semibold">主题风格</h2>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          选择界面配色方案，即时生效
+        </p>
+        <div className="grid grid-cols-4 gap-3">
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setUITheme(t.id)}
+              className={`relative p-3 rounded-xl border-2 transition-all text-left ${
+                currentTheme === t.id
+                  ? "border-primary ring-2 ring-primary/20"
+                  : "border-border hover:border-primary/40"
+              }`}
+            >
+              <div className="flex gap-1.5 mb-2.5">
+                <div className="w-6 h-6 rounded-md" style={{ background: t.preview.bg, border: "1px solid " + t.preview.primary }} />
+                <div className="w-6 h-6 rounded-md" style={{ background: t.preview.card, border: "1px solid " + t.preview.primary }} />
+                <div className="w-4 h-6 rounded-md" style={{ background: t.preview.primary }} />
+                <div className="w-4 h-6 rounded-md" style={{ background: t.preview.fg }} />
+              </div>
+              <p className="text-sm font-semibold text-foreground">{t.name}</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">{t.desc}</p>
+              {currentTheme === t.id && (
+                <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-primary sidebar-glow-dot" />
+              )}
+            </button>
           ))}
         </div>
       </div>
