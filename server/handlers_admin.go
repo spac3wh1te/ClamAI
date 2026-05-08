@@ -126,6 +126,17 @@ func getProviderNames(providers map[string]Provider) []string {
 
 func (p *ProxyServer) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	providers := dbListProviders()
+	userID, isAdmin := getUserAndRole(r)
+	if !isAdmin && userID != "" {
+		filtered := make([]map[string]interface{}, 0, len(providers))
+		for _, pr := range providers {
+			cb, _ := pr["created_by"].(string)
+			if cb == userID {
+				filtered = append(filtered, pr)
+			}
+		}
+		providers = filtered
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"providers": providers,
@@ -171,7 +182,7 @@ func (p *ProxyServer) handleTestProvider(w http.ResponseWriter, r *http.Request)
 			models := provider.FetchModels()
 			modelsJSON, _ := json.Marshal(models)
 			dbMu.Lock()
-			db.Exec("UPDATE providers SET models=?, updated_at=? WHERE id=?", string(modelsJSON), time.Now().UTC().Format(time.RFC3339), req.ProviderID)
+			db.Exec("UPDATE providers SET models=?, updated_at=? WHERE id=?", string(modelsJSON), formatTimeNow(), req.ProviderID)
 			dbMu.Unlock()
 			invalidateProviderCache()
 			w.Header().Set("Content-Type", "application/json")
@@ -290,7 +301,7 @@ func (p *ProxyServer) SetProviderKeyWithBaseURL(name, apiKey, baseURL string) er
 		if hasRow {
 			db.Exec("UPDATE providers SET api_key = ? WHERE provider_type = ?", apiKey, name)
 		} else {
-			now := time.Now().UTC().Format(time.RFC3339)
+			now := formatTimeNow()
 			db.Exec(`INSERT INTO providers (id, name, provider_type, auth_type, enabled, base_url, api_key, models, disabled_models, oauth_config, rate_limits, priority, created_at, updated_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				fmt.Sprintf("%d", time.Now().UnixMilli()), name, name, "apikey", 1, baseURL, apiKey, "[]", "[]", "", "", 0, "", now, now)
@@ -315,9 +326,13 @@ func (p *ProxyServer) handleStatsUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] handleStatsUsage called, period=%d minutes", period)
-
-	dbStats := dbGetUsageStats(period)
+	userID, isAdmin := getUserAndRole(r)
+	var dbStats *DBUsageStats
+	if isAdmin {
+		dbStats = dbGetUsageStats(period)
+	} else {
+		dbStats = dbGetUsageStatsForUser(period, userID)
+	}
 	totalReqs := dbStats.TotalRequests
 	successReqs := dbStats.SuccessRequests
 	inputTok := dbStats.InputTokens
@@ -418,6 +433,8 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 		granularity = "day"
 	}
 
+	userID, isAdmin := getUserAndRole(r)
+
 	type AlertItem struct {
 		Date        string `json:"date"`
 		Total       int    `json:"total"`
@@ -431,7 +448,15 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 	hourly := make(map[string]*AlertItem)
 	minutely := make(map[string]*AlertItem)
 
-	rows, err := db.Query(`SELECT datetime(timestamp, 'localtime') as ts_local, direction, trigger_type FROM security_alerts WHERE timestamp >= ? ORDER BY timestamp ASC`, cutoff.Format(time.RFC3339))
+	query := `SELECT datetime(timestamp, 'localtime') as ts_local, direction, trigger_type FROM security_alerts WHERE timestamp >= ?`
+	args := []interface{}{cutoff.Format(time.RFC3339)}
+	if !isAdmin && userID != "" {
+		query += ` AND user_id = ?`
+		args = append(args, userID)
+	}
+	query += ` ORDER BY timestamp ASC`
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		log.Printf("[ERROR] handleAlertStats: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -534,7 +559,16 @@ func (p *ProxyServer) handleAlertSeverityStats(w http.ResponseWriter, r *http.Re
 	}
 	cutoff := time.Now().Add(-time.Duration(period) * time.Minute).UTC()
 
-	rows, err := db.Query(`SELECT severity, COUNT(*) FROM security_alerts WHERE timestamp >= ? AND (severity IS NOT NULL AND severity != '') GROUP BY severity`, cutoff.Format(time.RFC3339))
+	userID, isAdmin := getUserAndRole(r)
+	query := `SELECT severity, COUNT(*) FROM security_alerts WHERE timestamp >= ?`
+	args := []interface{}{cutoff.Format(time.RFC3339)}
+	if !isAdmin && userID != "" {
+		query += ` AND user_id = ?`
+		args = append(args, userID)
+	}
+	query += ` AND (severity IS NOT NULL AND severity != '') GROUP BY severity`
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		log.Printf("[ERROR] handleAlertSeverityStats: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -563,10 +597,13 @@ func (p *ProxyServer) handleCallerTop10(w http.ResponseWriter, r *http.Request) 
 			period = parsed
 		}
 	}
-	callers := dbGetCallerTop10(period)
+	userID, isAdmin := getUserAndRole(r)
+	callers := dbGetCallerTop10(period, userID, isAdmin)
+	ips := dbGetIPTop10(period, userID, isAdmin)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"callers": callers,
+		"ips":     ips,
 	})
 }
 
@@ -577,7 +614,8 @@ func (p *ProxyServer) handleSecurityTokenStats(w http.ResponseWriter, r *http.Re
 			period = parsed
 		}
 	}
-	stats := dbGetSecurityTokenStats(period)
+	userID, isAdmin := getUserAndRole(r)
+	stats := dbGetSecurityTokenStats(period, userID, isAdmin)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
@@ -635,10 +673,7 @@ func (p *ProxyServer) handleStatsLogs(w http.ResponseWriter, r *http.Request) {
 			limit = l
 		}
 	}
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		userID = userIDForQuery(r)
-	}
+	userID := userIDForQuery(r)
 
 	logs, totalCount := dbGetRecentLogs(limit, userID)
 

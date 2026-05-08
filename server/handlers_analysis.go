@@ -198,6 +198,7 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 		Method:          "POST",
 		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"user_profile","model":"%s"}`, modelName), 10000),
 		ResponseContent: truncateStr(string(respBody), 10000),
+		CallType:       "security",
 	}
 	claims := getUserFromContext(r)
 	if claims != nil {
@@ -352,6 +353,7 @@ func (p *ProxyServer) handleSkillsDetection(w http.ResponseWriter, r *http.Reque
 		Method:          "POST",
 		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"skills_detection","model":"%s"}`, modelName), 10000),
 		ResponseContent: truncateStr(string(respBody), 10000),
+		CallType:       "security",
 	}
 	claims := getUserFromContext(r)
 	if claims != nil {
@@ -483,24 +485,6 @@ func nextTaskNo() string {
 	return fmt.Sprintf("T%04d", n)
 }
 
-func initTaskCounters() {
-	var maxNo string
-	row := db.QueryRow("SELECT COALESCE(MAX(task_no), 'T0000') FROM analysis_tasks")
-	if err := row.Scan(&maxNo); err == nil && len(maxNo) > 1 {
-		var n int
-		if _, err := fmt.Sscanf(maxNo, "T%d", &n); err == nil && int64(n) > taskCounter {
-			taskCounter = int64(n)
-		}
-	}
-	row = db.QueryRow("SELECT COALESCE(MAX(task_no), 'T0000') FROM skills_tasks")
-	if err := row.Scan(&maxNo); err == nil && len(maxNo) > 1 {
-		var n int
-		if _, err := fmt.Sscanf(maxNo, "T%d", &n); err == nil && int64(n) > taskCounter {
-			taskCounter = int64(n)
-		}
-	}
-	log.Printf("[INFO] initTaskCounters: counter=%d", taskCounter)
-}
 
 
 func (p *ProxyServer) handleCreateAnalysisTask(w http.ResponseWriter, r *http.Request) {
@@ -983,6 +967,7 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 		ResponseContent: truncateStr(string(respBody), 10000),
 		UserID:    createdBy,
 		APIKeyID:  "",
+		CallType: "security",
 	}
 	p.logBuffer.Add(logEntry)
 	dbInsertLog(logEntry)
@@ -1173,6 +1158,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 		Method:          "POST",
 		RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"user_profile_task","task_id":"%s","model":"%s"}`, taskID, modelForGateway), 10000),
 		ResponseContent: truncateStr(string(respBody), 10000),
+		CallType:       "security",
 	}
 	logEntry.UserID, _ = task["created_by"].(string)
 	p.logBuffer.Add(logEntry)

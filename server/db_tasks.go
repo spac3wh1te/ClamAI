@@ -1,250 +1,296 @@
 package main
 
 import (
-	"database/sql"
+	"fmt"
+	"log"
 	"time"
 )
 
+func initTaskCounters() {
+	var maxNo string
+	var t DBAnalysisTask
+	if err := gormDB.Model(&t).Select("COALESCE(MAX(task_no), 'T0000')").Row().Scan(&maxNo); err == nil && len(maxNo) > 1 {
+		var n int
+		if _, err := fmt.Sscanf(maxNo, "T%d", &n); err == nil && int64(n) > taskCounter {
+			taskCounter = int64(n)
+		}
+	}
+	var st DBSkillsTask
+	if err := gormDB.Model(&st).Select("COALESCE(MAX(task_no), 'T0000')").Row().Scan(&maxNo); err == nil && len(maxNo) > 1 {
+		var n int
+		if _, err := fmt.Sscanf(maxNo, "T%d", &n); err == nil && int64(n) > taskCounter {
+			taskCounter = int64(n)
+		}
+	}
+	log.Printf("[INFO] initTaskCounters: counter=%d", taskCounter)
+}
+
 func dbCreateAnalysisTask(id, taskNo, name, apiKeyID, model, timeRange, scheduleType string, intervalMinutes int, createdBy string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
 	status := "idle"
-	nextRun := ""
+	var nextRun *time.Time
 	if scheduleType == "periodic" {
-		nextRun = time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
+		nr := now.Add(time.Duration(intervalMinutes) * time.Minute)
+		nextRun = &nr
 		status = "running"
 	}
-	_, err := db.Exec(`INSERT INTO analysis_tasks (id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, next_run_at, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, taskNo, name, apiKeyID, model, timeRange, scheduleType, intervalMinutes, status, nextRun, now, createdBy)
-	return err
+	task := DBAnalysisTask{
+		ID:              id,
+		TaskNo:          taskNo,
+		Name:            name,
+		APIKeyID:        apiKeyID,
+		Model:           model,
+		TimeRange:       timeRange,
+		ScheduleType:    scheduleType,
+		IntervalMinutes: intervalMinutes,
+		Status:          status,
+		NextRunAt:       nextRun,
+		CreatedAt:       now,
+		CreatedBy:       createdBy,
+	}
+	return gormDB.Create(&task).Error
 }
 
 func dbGetAnalysisTasks(userID string) ([]map[string]interface{}, error) {
-	query := "SELECT id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, last_run_at, next_run_at, created_at, result_summary, result_risk_level, result_detail, result_dimensions, result_logs_analyzed, progress FROM analysis_tasks"
-	var rows *sql.Rows
-	var err error
+	var tasks []DBAnalysisTask
+	q := gormDB.Model(&DBAnalysisTask{})
 	if userID != "" {
-		rows, err = db.Query(query+" WHERE created_by = ? OR created_by = '' ORDER BY created_at DESC", userID)
-	} else {
-		rows, err = db.Query(query + " ORDER BY created_at DESC")
+		q = q.Where("created_by = ? OR created_by = ''", userID)
 	}
-	if err != nil {
+	if err := q.Order("created_at DESC").Find(&tasks).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var tasks []map[string]interface{}
-	for rows.Next() {
-		var id, taskNo, name, apiKeyID, model, timeRange, scheduleType, status string
-		var intervalMinutes int
-		var lastRunAt, nextRunAt, createdAt sql.NullString
-		var resultSummary, resultRiskLevel, resultDetail, resultDimensions sql.NullString
-		var resultLogsAnalyzed int
-		var progress sql.NullString
-		if err := rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &scheduleType, &intervalMinutes, &status, &lastRunAt, &nextRunAt, &createdAt, &resultSummary, &resultRiskLevel, &resultDetail, &resultDimensions, &resultLogsAnalyzed, &progress); err != nil {
-			continue
+	var result []map[string]interface{}
+	for _, t := range tasks {
+		m := map[string]interface{}{
+			"id":               t.ID,
+			"task_no":          t.TaskNo,
+			"name":             t.Name,
+			"api_key_id":       t.APIKeyID,
+			"model":            t.Model,
+			"time_range":       t.TimeRange,
+			"schedule_type":    t.ScheduleType,
+			"interval_minutes": t.IntervalMinutes,
+			"status":           t.Status,
+			"created_at":       t.CreatedAt.Format(time.RFC3339),
+			"result_logs_analyzed": t.ResultLogsCount,
 		}
-		task := map[string]interface{}{
-			"id":                   id,
-			"task_no":              taskNo,
-			"name":                 name,
-			"api_key_id":           apiKeyID,
-			"model":                model,
-			"time_range":           timeRange,
-			"schedule_type":        scheduleType,
-			"interval_minutes":     intervalMinutes,
-			"status":               status,
-			"created_at":           createdAt,
-			"result_logs_analyzed": resultLogsAnalyzed,
+		if t.LastRunAt != nil {
+			m["last_run_at"] = t.LastRunAt.Format(time.RFC3339)
 		}
-		if lastRunAt.Valid {
-			task["last_run_at"] = lastRunAt.String
+		if t.NextRunAt != nil {
+			m["next_run_at"] = t.NextRunAt.Format(time.RFC3339)
 		}
-		if nextRunAt.Valid {
-			task["next_run_at"] = nextRunAt.String
+		if t.ResultSummary != "" {
+			m["result_summary"] = t.ResultSummary
 		}
-		if resultSummary.Valid {
-			task["result_summary"] = resultSummary.String
+		if t.ResultRiskLevel != "" {
+			m["result_risk_level"] = t.ResultRiskLevel
 		}
-		if resultRiskLevel.Valid {
-			task["result_risk_level"] = resultRiskLevel.String
+		if t.ResultDetail != "" {
+			m["result_detail"] = t.ResultDetail
 		}
-		if resultDetail.Valid {
-			task["result_detail"] = resultDetail.String
+		if t.ResultDims != "" {
+			m["result_dimensions"] = t.ResultDims
 		}
-		if resultDimensions.Valid && resultDimensions.String != "" {
-			task["result_dimensions"] = resultDimensions.String
+		if t.Progress != "" {
+			m["progress"] = t.Progress
 		}
-		if progress.Valid {
-			task["progress"] = progress.String
-		}
-		tasks = append(tasks, task)
+		result = append(result, m)
 	}
-	return tasks, nil
+	return result, nil
 }
 
 func dbGetSkillsTaskByID(taskID string) (map[string]interface{}, error) {
-	row := db.QueryRow(`SELECT id, task_no, name, model, source_type, source_info, schedule_type, status, progress, last_run_at, created_at, result_risk_level, result_summary, result_detail, result_dimensions, created_by FROM skills_tasks WHERE id = ?`, taskID)
-	var id, taskNo, name, model, sourceType, sourceInfo, scheduleType, status string
-	var lastRunAt, createdAt, createdBy sql.NullString
-	var resultRiskLevel, resultSummary, resultDetail, resultDimensions, progress sql.NullString
-	if err := row.Scan(&id, &taskNo, &name, &model, &sourceType, &sourceInfo, &scheduleType, &status, &progress, &lastRunAt, &createdAt, &resultRiskLevel, &resultSummary, &resultDetail, &resultDimensions, &createdBy); err != nil {
+	var t DBSkillsTask
+	if err := gormDB.Where("id = ?", taskID).First(&t).Error; err != nil {
 		return nil, err
 	}
-	task := map[string]interface{}{
-		"id": id, "task_no": taskNo, "name": name, "model": model,
-		"source_type": sourceType, "source_info": sourceInfo,
-		"schedule_type": scheduleType, "status": status,
-		"created_at": createdAt.String, "created_by": createdBy.String,
+	m := map[string]interface{}{
+		"id":            t.ID,
+		"task_no":       t.TaskNo,
+		"name":          t.Name,
+		"model":         t.Model,
+		"source_type":   t.SourceType,
+		"source_info":   t.SourceInfo,
+		"schedule_type": t.ScheduleType,
+		"status":        t.Status,
+		"created_at":    t.CreatedAt.Format(time.RFC3339),
+		"created_by":    t.CreatedBy,
 	}
-	if resultRiskLevel.Valid {
-		task["result_risk_level"] = resultRiskLevel.String
+	if t.LastRunAt != nil {
+		m["last_run_at"] = t.LastRunAt.Format(time.RFC3339)
 	}
-	if resultSummary.Valid {
-		task["result_summary"] = resultSummary.String
+	if t.RiskLevel != "" {
+		m["result_risk_level"] = t.RiskLevel
 	}
-	if resultDetail.Valid {
-		task["result_detail"] = resultDetail.String
+	if t.Summary != "" {
+		m["result_summary"] = t.Summary
 	}
-	if resultDimensions.Valid && resultDimensions.String != "" {
-		task["result_dimensions"] = resultDimensions.String
+	if t.Detail != "" {
+		m["result_detail"] = t.Detail
 	}
-	if progress.Valid {
-		task["progress"] = progress.String
+	if t.Dimensions != "" {
+		m["result_dimensions"] = t.Dimensions
 	}
-	return task, nil
+	if t.Progress != "" {
+		m["progress"] = t.Progress
+	}
+	return m, nil
 }
-
 
 func dbUpdateAnalysisTaskStatus(id, status string) error {
 	if status == "running" {
-		nextRun := time.Now().UTC().Format(time.RFC3339)
-		_, err := db.Exec(`UPDATE analysis_tasks SET status=?, next_run_at=?, progress='正在分析...' WHERE id=?`, status, nextRun, id)
-		return err
+		now := time.Now().UTC()
+		return gormDB.Model(&DBAnalysisTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"status":     status,
+			"next_run_at": &now,
+			"progress":   "正在分析...",
+		}).Error
 	}
-	_, err := db.Exec(`UPDATE analysis_tasks SET status=? WHERE id=?`, status, id)
-	return err
+	return gormDB.Model(&DBAnalysisTask{}).Where("id = ?", id).Update("status", status).Error
 }
 
 func dbUpdateAnalysisTaskProgress(id, progress string) error {
-	_, err := db.Exec(`UPDATE analysis_tasks SET progress=? WHERE id=?`, progress, id)
-	return err
+	return gormDB.Model(&DBAnalysisTask{}).Where("id = ?", id).Update("progress", progress).Error
 }
 
 func dbUpdateAnalysisTask(id, name, apiKeyID, model, timeRange, scheduleType string, intervalMinutes int) error {
-	_, err := db.Exec(`UPDATE analysis_tasks SET name=?, api_key_id=?, model=?, time_range=?, schedule_type=?, interval_minutes=? WHERE id=?`,
-		name, apiKeyID, model, timeRange, scheduleType, intervalMinutes, id)
-	return err
+	return gormDB.Model(&DBAnalysisTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"name":             name,
+		"api_key_id":       apiKeyID,
+		"model":            model,
+		"time_range":       timeRange,
+		"schedule_type":    scheduleType,
+		"interval_minutes": intervalMinutes,
+	}).Error
 }
 
 func dbUpdateAnalysisTaskResult(id, riskLevel, summary, detail, dimensions string, logsAnalyzed int) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`UPDATE analysis_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_dimensions=?, result_logs_analyzed=?, last_run_at=? WHERE id=?`,
-		riskLevel, summary, detail, dimensions, logsAnalyzed, now, id)
-	return err
+	now := time.Now().UTC()
+	return gormDB.Model(&DBAnalysisTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"result_risk_level":   riskLevel,
+		"result_summary":      summary,
+		"result_detail":       detail,
+		"result_dimensions":   dimensions,
+		"result_logs_analyzed": logsAnalyzed,
+		"last_run_at":         &now,
+	}).Error
 }
 
 func dbDeleteAnalysisTask(id, userID string) error {
+	q := gormDB.Where("id = ?", id)
 	if userID != "" {
-		_, err := db.Exec("DELETE FROM analysis_tasks WHERE id=? AND (created_by=? OR created_by='')", id, userID)
-		return err
+		q = q.Where("created_by = ? OR created_by = ''", userID)
 	}
-	_, err := db.Exec("DELETE FROM analysis_tasks WHERE id=?", id)
-	return err
+	return q.Delete(&DBAnalysisTask{}).Error
 }
 
 func dbGetDuePeriodicTasks() ([]map[string]interface{}, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, interval_minutes FROM analysis_tasks WHERE schedule_type='periodic' AND status='running' AND next_run_at <= ?", now)
-	if err != nil {
+	now := time.Now().UTC()
+	var tasks []DBAnalysisTask
+	if err := gormDB.Model(&DBAnalysisTask{}).
+		Select("id, task_no, name, api_key_id, model, time_range, interval_minutes").
+		Where("schedule_type = ? AND status = ? AND next_run_at <= ?", "periodic", "running", now).
+		Find(&tasks).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var tasks []map[string]interface{}
-	for rows.Next() {
-		var id, taskNo, name, apiKeyID, model, timeRange string
-		var intervalMinutes int
-		if rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &intervalMinutes) == nil {
-			tasks = append(tasks, map[string]interface{}{
-				"id": id, "task_no": taskNo, "name": name,
-				"api_key_id": apiKeyID, "model": model, "time_range": timeRange,
-				"interval_minutes": intervalMinutes,
-			})
-		}
+	var result []map[string]interface{}
+	for _, t := range tasks {
+		result = append(result, map[string]interface{}{
+			"id":              t.ID,
+			"task_no":         t.TaskNo,
+			"name":            t.Name,
+			"api_key_id":      t.APIKeyID,
+			"model":           t.Model,
+			"time_range":      t.TimeRange,
+			"interval_minutes": t.IntervalMinutes,
+		})
 	}
-	return tasks, nil
+	return result, nil
 }
 
 func dbSetTaskNextRun(id string, intervalMinutes int) error {
-	nextRun := time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
-	_, err := db.Exec("UPDATE analysis_tasks SET next_run_at=? WHERE id=?", nextRun, id)
-	return err
+	nextRun := time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC()
+	return gormDB.Model(&DBAnalysisTask{}).Where("id = ?", id).Update("next_run_at", &nextRun).Error
 }
 
 func dbCreateSkillsTask(id, taskNo, name, model, sourceType, sourceInfo, scheduleType string, createdBy string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`INSERT INTO skills_tasks (id, task_no, name, model, source_type, source_info, schedule_type, status, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
-		id, taskNo, name, model, sourceType, sourceInfo, scheduleType, now, createdBy)
-	return err
+	now := time.Now().UTC()
+	task := DBSkillsTask{
+		ID:           id,
+		TaskNo:       taskNo,
+		Name:         name,
+		Model:        model,
+		SourceType:   sourceType,
+		SourceInfo:   sourceInfo,
+		ScheduleType: scheduleType,
+		Status:       "idle",
+		CreatedAt:    now,
+		CreatedBy:    createdBy,
+	}
+	return gormDB.Create(&task).Error
 }
 
 func dbGetSkillsTasks(userID string) ([]map[string]interface{}, error) {
-	query := "SELECT id, task_no, name, model, source_type, source_info, schedule_type, status, progress, last_run_at, created_at, result_risk_level, result_summary, result_detail, result_dimensions, created_by FROM skills_tasks"
-	var rows *sql.Rows
-	var err error
+	var tasks []DBSkillsTask
+	q := gormDB.Model(&DBSkillsTask{})
 	if userID != "" {
-		rows, err = db.Query(query+" WHERE created_by = ? OR created_by = '' ORDER BY created_at DESC", userID)
-	} else {
-		rows, err = db.Query(query + " ORDER BY created_at DESC")
+		q = q.Where("created_by = ? OR created_by = ''", userID)
 	}
-	if err != nil {
+	if err := q.Order("created_at DESC").Find(&tasks).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var tasks []map[string]interface{}
-	for rows.Next() {
-var id, taskNo, name, model, sourceType, sourceInfo, scheduleType, status string
-		var lastRunAt, createdAt, createdBy sql.NullString
-		var resultRiskLevel, resultSummary, resultDetail, resultDimensions, progress sql.NullString
-		if err := rows.Scan(&id, &taskNo, &name, &model, &sourceType, &sourceInfo, &scheduleType, &status, &progress, &lastRunAt, &createdAt, &resultRiskLevel, &resultSummary, &resultDetail, &resultDimensions, &createdBy); err != nil {
-			continue
+	var result []map[string]interface{}
+	for _, t := range tasks {
+		m := map[string]interface{}{
+			"id":            t.ID,
+			"task_no":       t.TaskNo,
+			"name":          t.Name,
+			"model":         t.Model,
+			"source_type":   t.SourceType,
+			"source_info":   t.SourceInfo,
+			"schedule_type": t.ScheduleType,
+			"status":        t.Status,
+			"created_at":    t.CreatedAt.Format(time.RFC3339),
 		}
-		task := map[string]interface{}{
-			"id": id, "task_no": taskNo, "name": name, "model": model,
-			"source_type": sourceType, "source_info": sourceInfo,
-			"schedule_type": scheduleType, "status": status, "created_at": createdAt,
+		if t.CreatedBy != "" {
+			m["created_by"] = t.CreatedBy
 		}
-		if createdBy.Valid {
-			task["created_by"] = createdBy.String
+		if t.LastRunAt != nil {
+			m["last_run_at"] = t.LastRunAt.Format(time.RFC3339)
 		}
-		if lastRunAt.Valid {
-			task["last_run_at"] = lastRunAt.String
+		if t.RiskLevel != "" {
+			m["result_risk_level"] = t.RiskLevel
 		}
-		if resultRiskLevel.Valid {
-			task["result_risk_level"] = resultRiskLevel.String
+		if t.Summary != "" {
+			m["result_summary"] = t.Summary
 		}
-		if resultSummary.Valid {
-			task["result_summary"] = resultSummary.String
+		if t.Detail != "" {
+			m["result_detail"] = t.Detail
 		}
-		if resultDetail.Valid {
-			task["result_detail"] = resultDetail.String
+		if t.Dimensions != "" {
+			m["result_dimensions"] = t.Dimensions
 		}
-		if resultDimensions.Valid && resultDimensions.String != "" {
-			task["result_dimensions"] = resultDimensions.String
+		if t.Progress != "" {
+			m["progress"] = t.Progress
 		}
-		if progress.Valid {
-			task["progress"] = progress.String
-		}
-		tasks = append(tasks, task)
+		result = append(result, m)
 	}
-	return tasks, nil
+	return result, nil
 }
 
 func dbUpdateSkillsTaskResult(id, riskLevel, summary, detail, dimensions string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`UPDATE skills_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_dimensions=?, last_run_at=?, status='idle', progress='' WHERE id=?`,
-		riskLevel, summary, detail, dimensions, now, id)
-	return err
+	now := time.Now().UTC()
+	return gormDB.Model(&DBSkillsTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"result_risk_level": riskLevel,
+		"result_summary":    summary,
+		"result_detail":     detail,
+		"result_dimensions": dimensions,
+		"last_run_at":       &now,
+		"status":            "idle",
+		"progress":          "",
+	}).Error
 }
 
 func dbUpdateSkillsTaskStatus(id, status string) error {
@@ -252,78 +298,107 @@ func dbUpdateSkillsTaskStatus(id, status string) error {
 	if status == "running" {
 		progress = "正在检测..."
 	}
-	_, err := db.Exec(`UPDATE skills_tasks SET status=?, progress=? WHERE id=?`, status, progress, id)
-	return err
+	return gormDB.Model(&DBSkillsTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":   status,
+		"progress": progress,
+	}).Error
 }
 
 func dbDeleteSkillsTask(id, userID string) error {
+	q := gormDB.Where("id = ?", id)
 	if userID != "" {
-		_, err := db.Exec("DELETE FROM skills_tasks WHERE id=? AND (created_by=? OR created_by='')", id, userID)
-		return err
+		q = q.Where("created_by = ? OR created_by = ''", userID)
 	}
-	_, err := db.Exec("DELETE FROM skills_tasks WHERE id=?", id)
-	return err
+	return q.Delete(&DBSkillsTask{}).Error
 }
 
 func dbUpdateSkillsTask(id, name, model, sourceType, sourceInfo string) error {
-	_, err := db.Exec(`UPDATE skills_tasks SET name=?, model=?, source_type=?, source_info=? WHERE id=?`,
-		name, model, sourceType, sourceInfo, id)
-	return err
+	return gormDB.Model(&DBSkillsTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"name":        name,
+		"model":       model,
+		"source_type": sourceType,
+		"source_info": sourceInfo,
+	}).Error
 }
 
 func dbInsertSkillsTaskHistory(taskID, riskLevel, summary, detail, dimensions, status string, durationMs int64) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	db.Exec(`INSERT INTO skills_task_history (task_id, risk_level, summary, detail, dimensions, status, duration_ms, run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, riskLevel, summary, detail, dimensions, status, durationMs, now)
+	now := time.Now().UTC()
+	h := DBSkillsTaskHistory{
+		TaskID:     taskID,
+		RiskLevel:  riskLevel,
+		Summary:    summary,
+		Detail:     detail,
+		Dimensions: dimensions,
+		Status:     status,
+		DurationMs: durationMs,
+		RunAt:      now,
+	}
+	gormDB.Create(&h)
 }
 
 func dbGetSkillsTaskHistory(taskID string) ([]map[string]interface{}, error) {
-	rows, err := db.Query(`SELECT id, risk_level, summary, detail, dimensions, status, duration_ms, run_at FROM skills_task_history WHERE task_id=? ORDER BY run_at DESC LIMIT 50`, taskID)
-	if err != nil {
+	var histories []DBSkillsTaskHistory
+	if err := gormDB.Model(&DBSkillsTaskHistory{}).
+		Where("task_id = ?", taskID).
+		Order("run_at DESC").
+		Limit(50).
+		Find(&histories).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var results []map[string]interface{}
-	for rows.Next() {
-		var id int
-		var riskLevel, summary, detail, dimensions, status, runAt string
-		var durationMs int64
-		if err := rows.Scan(&id, &riskLevel, &summary, &detail, &dimensions, &status, &durationMs, &runAt); err != nil {
-			continue
-		}
-		results = append(results, map[string]interface{}{
-			"id": id, "risk_level": riskLevel, "summary": summary, "detail": detail,
-			"dimensions": dimensions, "status": status, "duration_ms": durationMs, "run_at": runAt,
+	var result []map[string]interface{}
+	for _, h := range histories {
+		result = append(result, map[string]interface{}{
+			"id":           h.ID,
+			"risk_level":   h.RiskLevel,
+			"summary":      h.Summary,
+			"detail":       h.Detail,
+			"dimensions":   h.Dimensions,
+			"status":       h.Status,
+			"duration_ms":  h.DurationMs,
+			"run_at":       h.RunAt.Format(time.RFC3339),
 		})
 	}
-	return results, nil
+	return result, nil
 }
 
 func dbInsertAnalysisTaskHistory(taskID, riskLevel, summary, detail, dimensions, status string, logsAnalyzed int, durationMs int64) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	db.Exec(`INSERT INTO analysis_task_history (task_id, risk_level, summary, detail, dimensions, logs_analyzed, status, duration_ms, run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, riskLevel, summary, detail, dimensions, logsAnalyzed, status, durationMs, now)
+	now := time.Now().UTC()
+	h := DBAnalysisTaskHistory{
+		TaskID:       taskID,
+		RiskLevel:    riskLevel,
+		Summary:      summary,
+		Detail:       detail,
+		Dimensions:   dimensions,
+		LogsAnalyzed: logsAnalyzed,
+		Status:       status,
+		DurationMs:   durationMs,
+		RunAt:        now,
+	}
+	gormDB.Create(&h)
 }
 
 func dbGetAnalysisTaskHistory(taskID string) ([]map[string]interface{}, error) {
-	rows, err := db.Query(`SELECT id, risk_level, summary, detail, dimensions, logs_analyzed, status, duration_ms, run_at FROM analysis_task_history WHERE task_id=? ORDER BY run_at DESC LIMIT 50`, taskID)
-	if err != nil {
+	var histories []DBAnalysisTaskHistory
+	if err := gormDB.Model(&DBAnalysisTaskHistory{}).
+		Where("task_id = ?", taskID).
+		Order("run_at DESC").
+		Limit(50).
+		Find(&histories).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var results []map[string]interface{}
-	for rows.Next() {
-		var id int
-		var riskLevel, summary, detail, dimensions, status, runAt string
-		var logsAnalyzed int
-		var durationMs int64
-		if err := rows.Scan(&id, &riskLevel, &summary, &detail, &dimensions, &logsAnalyzed, &status, &durationMs, &runAt); err != nil {
-			continue
-		}
-		results = append(results, map[string]interface{}{
-			"id": id, "risk_level": riskLevel, "summary": summary, "detail": detail,
-			"dimensions": dimensions, "logs_analyzed": logsAnalyzed, "status": status, "duration_ms": durationMs, "run_at": runAt,
+	var result []map[string]interface{}
+	for _, h := range histories {
+		result = append(result, map[string]interface{}{
+			"id":             h.ID,
+			"risk_level":     h.RiskLevel,
+			"summary":        h.Summary,
+			"detail":         h.Detail,
+			"dimensions":     h.Dimensions,
+			"logs_analyzed":  h.LogsAnalyzed,
+			"status":         h.Status,
+			"duration_ms":    h.DurationMs,
+			"run_at":         h.RunAt.Format(time.RFC3339),
 		})
 	}
-	return results, nil
+	return result, nil
 }

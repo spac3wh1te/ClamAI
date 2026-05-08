@@ -1,134 +1,107 @@
 package main
 
 import (
-	"database/sql"
 	"time"
 )
 
 func dbCreateUser(id, username, displayName, passwordHash, role string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`INSERT INTO users (id, username, display_name, password_hash, role, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
-		id, username, displayName, passwordHash, role, now, now)
-	return err
+	u := &DBUser{
+		ID: id, Username: username, DisplayName: displayName,
+		PasswordHash: passwordHash, Role: role, Status: "active",
+	}
+	return gormDB.Create(u).Error
 }
 
 func dbGetUserByUsername(username string) (map[string]interface{}, error) {
-	row := db.QueryRow("SELECT id, username, display_name, password_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE username = ?", username)
-	var id, uname, displayName, hash, role, status string
-	var createdAt, updatedAt string
-	var lastLogin sql.NullString
-	if err := row.Scan(&id, &uname, &displayName, &hash, &role, &status, &createdAt, &updatedAt, &lastLogin); err != nil {
+	var u DBUser
+	if err := gormDB.Where("username = ?", username).First(&u).Error; err != nil {
 		return nil, err
 	}
-	user := map[string]interface{}{
-		"id": id, "username": uname, "display_name": displayName,
-		"password_hash": hash, "role": role, "status": status,
-		"created_at": createdAt, "updated_at": updatedAt,
-	}
-	if lastLogin.Valid {
-		user["last_login_at"] = lastLogin.String
-	}
-	return user, nil
+	return dbUserToMap(&u), nil
 }
 
 func dbGetUserByID(id string) (map[string]interface{}, error) {
-	row := db.QueryRow("SELECT id, username, display_name, password_hash, role, status, created_at, updated_at, last_login_at FROM users WHERE id = ?", id)
-	var uid, uname, displayName, hash, role, status string
-	var createdAt, updatedAt string
-	var lastLogin sql.NullString
-	if err := row.Scan(&uid, &uname, &displayName, &hash, &role, &status, &createdAt, &updatedAt, &lastLogin); err != nil {
+	var u DBUser
+	if err := gormDB.Where("id = ?", id).First(&u).Error; err != nil {
 		return nil, err
 	}
-	user := map[string]interface{}{
-		"id": uid, "username": uname, "display_name": displayName,
-		"password_hash": hash, "role": role, "status": status,
-		"created_at": createdAt, "updated_at": updatedAt,
-	}
-	if lastLogin.Valid {
-		user["last_login_at"] = lastLogin.String
-	}
-	return user, nil
+	return dbUserToMap(&u), nil
 }
 
 func dbListUsers() ([]map[string]interface{}, error) {
-	rows, err := db.Query("SELECT id, username, display_name, role, status, created_at, updated_at, last_login_at FROM users ORDER BY created_at ASC")
-	if err != nil {
+	var users []DBUser
+	if err := gormDB.Order("created_at ASC").Find(&users).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var users []map[string]interface{}
-	for rows.Next() {
-		var id, username, displayName, role, status string
-		var createdAt, updatedAt string
-		var lastLogin sql.NullString
-		if err := rows.Scan(&id, &username, &displayName, &role, &status, &createdAt, &updatedAt, &lastLogin); err != nil {
-			continue
-		}
-		user := map[string]interface{}{
-			"id": id, "username": username, "display_name": displayName,
-			"role": role, "status": status, "created_at": createdAt, "updated_at": updatedAt,
-		}
-		if lastLogin.Valid {
-			user["last_login_at"] = lastLogin.String
-		}
-		users = append(users, user)
+	result := make([]map[string]interface{}, 0, len(users))
+	for i := range users {
+		result = append(result, dbUserToMap(&users[i]))
 	}
-	return users, nil
+	return result, nil
+}
+
+func getUserNameByID(id string) string {
+	if id == "" {
+		return ""
+	}
+	var u DBUser
+	if err := gormDB.Select("display_name, username").Where("id = ?", id).First(&u).Error; err != nil {
+		return ""
+	}
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	return u.Username
 }
 
 func dbUpdateUser(id, displayName, role, status string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`UPDATE users SET display_name=?, role=?, status=?, updated_at=? WHERE id=?`,
-		displayName, role, status, now, id)
-	return err
+	return gormDB.Model(&DBUser{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"display_name": displayName, "role": role, "status": status,
+	}).Error
 }
 
 func dbUpdateUserPassword(id, passwordHash string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := db.Exec(`UPDATE users SET password_hash=?, updated_at=? WHERE id=?`, passwordHash, now, id)
-	return err
+	return gormDB.Model(&DBUser{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"password_hash": passwordHash,
+	}).Error
 }
 
 func dbUpdateUserLastLogin(id string) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	db.Exec(`UPDATE users SET last_login_at=? WHERE id=?`, now, id)
+	now := time.Now()
+	gormDB.Model(&DBUser{}).Where("id = ?", id).Update("last_login_at", &now)
 }
 
 func dbDeleteUser(id string) error {
-	_, err := db.Exec("DELETE FROM users WHERE id=?", id)
-	return err
+	return gormDB.Where("id = ?", id).Delete(&DBUser{}).Error
 }
 
 func dbUserExists() bool {
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	var count int64
+	gormDB.Model(&DBUser{}).Count(&count)
 	return count > 0
 }
 
 func dbAdminExists() bool {
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM users WHERE role = 'admin'").Scan(&count)
+	var count int64
+	gormDB.Model(&DBUser{}).Where("role = ?", "admin").Count(&count)
 	return count > 0
 }
 
 func dbAnyUserExists() bool {
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
-	return count > 0
+	return dbUserExists()
 }
 
 func dbGetSystemSetting(key string) string {
-	var val string
-	err := db.QueryRow("SELECT value FROM system_settings WHERE key = ?", key).Scan(&val)
-	if err != nil {
+	var s DBSystemSetting
+	if err := gormDB.Where("key = ?", key).First(&s).Error; err != nil {
 		return ""
 	}
-	return val
+	return s.Value
 }
 
 func dbSetSystemSetting(key, value string) {
-	db.Exec(`INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)`, key, value)
+	s := DBSystemSetting{Key: key, Value: value}
+	gormDB.Save(&s)
 }
 
 func dbIsRegistrationOpen() bool {
@@ -141,4 +114,17 @@ func dbSetRegistrationOpen(open bool) {
 		val = "true"
 	}
 	dbSetSystemSetting("registration_open", val)
+}
+
+func dbUserToMap(u *DBUser) map[string]interface{} {
+	m := map[string]interface{}{
+		"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
+		"password_hash": u.PasswordHash, "role": u.Role, "status": u.Status,
+		"created_at": u.CreatedAt.UTC().Format(time.RFC3339),
+		"updated_at": u.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+	if u.LastLoginAt != nil {
+		m["last_login_at"] = u.LastLoginAt.UTC().Format(time.RFC3339)
+	}
+	return m
 }

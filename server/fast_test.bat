@@ -22,7 +22,6 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-Stop-Process -Name "ClamAI-service" -Force -ErrorAction SilentlyContinue 2>$null; Start-Sleep 1; Write-Output "Stopped"
-Start-Process -FilePath ".\ClamAI-service.exe" -ArgumentList "--port","38080","--admin-port","38085","--host","0.0.0.0" -WindowStyle Hidden
-echo Done: Start-Process -FilePath ".\ClamAI-service.exe" -ArgumentList "--port","38080","--admin-port","38085","--host","0.0.0.0" -WindowStyle Hidden
+taskkill /f /im ClamAI-service.exe >nul 2>nul & timeout /t 1 /nobreak >nul & echo Stopped
+start /b "" ".\ClamAI-service.exe" --port 38080 --admin-port 38085 --host 0.0.0.0
 

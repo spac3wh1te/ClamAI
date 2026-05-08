@@ -66,7 +66,14 @@ function Layout({ children }: LayoutProps) {
           { name: "防护策略", href: "/security-policy", icon: ShieldCheck },
         ],
       },
-    ] : []),
+    ] : [
+      {
+        label: "安全中心",
+        items: [
+          { name: "安全广场", href: "/security-tools", icon: ScanSearch },
+        ],
+      },
+    ]),
     { label: "系统中心", items: [{ name: "设置", href: "/settings", icon: Settings }] },
   ];
 

@@ -3,6 +3,7 @@ import Providers from "./Providers";
 import Models from "./Models";
 import ApiKeys from "./ApiKeys";
 import { Server, Layers, Key } from "lucide-react";
+import { useCurrentUser } from "../context/UserContext";
 
 const TABS = [
   { id: "providers", label: "服务商管理", icon: Server },
@@ -12,12 +13,16 @@ const TABS = [
 
 export default function ModelManagement() {
   const [tab, setTab] = useState<string>("providers");
+  const { isAdmin } = useCurrentUser();
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">模型管理</h1>
-        <p className="text-sm text-muted-foreground mt-1">管理服务商、模型配置与授权密钥</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          管理服务商、模型配置与授权密钥
+          {!isAdmin && " · 仅显示您创建的资源"}
+        </p>
       </div>
       <div className="flex gap-2">
         {TABS.map((t) => (

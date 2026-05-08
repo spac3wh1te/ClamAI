@@ -18,6 +18,7 @@ import {
   Settings,
 } from "lucide-react";
 import { useApiKeySecrets } from "../context/ApiKeySecretsContext";
+import { useCurrentUser } from "../context/UserContext";
 import { logInfo, logError } from "../utils/log";
 
 interface ApiKey {
@@ -25,6 +26,8 @@ interface ApiKey {
   name: string;
   key?: string;
   key_preview?: string;
+  user_id?: string;
+  created_by_name?: string;
   created_at: string;
   active: boolean;
   request_count: number;
@@ -103,6 +106,7 @@ function formatTestResult(data: TestResultData): {
 
 export default function ApiKeys() {
   const queryClient = useQueryClient();
+  const { isAdmin, currentUser } = useCurrentUser();
   const {
     secrets: apiKeySecrets,
     revealKey,
@@ -664,6 +668,9 @@ export default function ApiKeys() {
                     <span>
                       创建于 {new Date(key.created_at).toLocaleString("zh-CN")}
                     </span>
+                    {key.created_by_name && (
+                      <span>创建者: {key.created_by_name}</span>
+                    )}
                     <span>调用 {key.request_count} 次</span>
                     {key.last_used && (
                       <span>
@@ -727,6 +734,7 @@ export default function ApiKeys() {
                     )}
                   </div>
                 </div>
+                {(isAdmin || key.user_id === currentUser?.userId) && (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => {
@@ -746,6 +754,7 @@ export default function ApiKeys() {
                     <Trash2 size={18} />
                   </button>
                 </div>
+                )}
               </div>
             </div>
           ))}

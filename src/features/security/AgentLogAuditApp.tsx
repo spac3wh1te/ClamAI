@@ -472,6 +472,7 @@ registerSecurityApp({
   icon: FolderSearch,
   component: AgentLogAuditApp,
   order: 3,
+  adminOnly: true,
 });
 
 export default AgentLogAuditApp;

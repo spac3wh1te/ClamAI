@@ -108,6 +108,7 @@ func (p *ProxyServer) handleProxyModeTestChat(w http.ResponseWriter, req struct 
 		anthropicReq := map[string]interface{}{
 			"model":      modelName,
 			"max_tokens": 256,
+			"stream":     false,
 			"messages": []map[string]interface{}{
 				{"role": "user", "content": req.Message},
 			},
@@ -121,6 +122,7 @@ func (p *ProxyServer) handleProxyModeTestChat(w http.ResponseWriter, req struct 
 				{"role": "user", "content": req.Message},
 			},
 			"max_tokens": 256,
+			"stream":     false,
 		}
 		bodyBytes, _ = json.Marshal(openaiReq)
 		url = fmt.Sprintf("%s://%s%s/chat/completions", scheme, p.proxyAddr, spec.PathPrefix)
@@ -300,15 +302,37 @@ func (p *ProxyServer) handleDirectModeTestChat(w http.ResponseWriter, req struct
 	if idx := strings.Index(modelToSend, ":"); idx >= 0 {
 		modelToSend = modelToSend[idx+1:]
 	}
-	openaiReq := map[string]interface{}{
-		"model": modelToSend,
-		"messages": []map[string]interface{}{
-			{"role": "user", "content": req.Message},
-		},
-		"max_tokens": 256,
+
+	isAnthropicCompat := req.ProviderType == "minimax-tokenplan" || req.ProviderType == "anthropic" || req.ProviderType == "glm-coding"
+
+	var bodyBytes []byte
+	var endpoint string
+
+	if isAnthropicCompat {
+		anthropicReq := map[string]interface{}{
+			"model":      modelToSend,
+			"max_tokens": 256,
+			"stream":     false,
+			"messages": []map[string]interface{}{
+				{"role": "user", "content": req.Message},
+			},
+		}
+		bodyBytes, _ = json.Marshal(anthropicReq)
+		endpoint = baseURL + "/v1/messages"
+	} else {
+		openaiReq := map[string]interface{}{
+			"model": modelToSend,
+			"messages": []map[string]interface{}{
+				{"role": "user", "content": req.Message},
+			},
+			"max_tokens": 256,
+			"stream":     false,
+		}
+		bodyBytes, _ = json.Marshal(openaiReq)
+		endpoint = baseURL + "/v1/chat/completions"
 	}
-	bodyBytes, _ := json.Marshal(openaiReq)
-	httpReq, err := http.NewRequest("POST", baseURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
+
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		log.Printf("[ERROR] handleDirectModeTestChat: failed to create request: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -318,13 +342,34 @@ func (p *ProxyServer) handleDirectModeTestChat(w http.ResponseWriter, req struct
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if isAnthropicCompat {
+		httpReq.Header.Set("x-api-key", apiKey)
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(httpReq)
 	latency := time.Since(startTime).Milliseconds()
 
 	if err != nil {
 		log.Printf("[ERROR] handleDirectModeTestChat: request failed: %v", err)
+		dbInsertLog(&RequestLog{
+			Timestamp:    startTime,
+			Provider:    req.ProviderType,
+			Model:       modelToSend,
+			InputTokens: 0,
+			OutputTokens: 0,
+			LatencyMs:   int64(latency),
+			Success:     false,
+			ErrorMessage: err.Error(),
+			ClientIP:    "direct-test",
+			APIKeyUsed:  maskAPIKeyForLog(apiKey),
+			StatusCode:  0,
+			Path:        endpoint,
+			Method:      "POST",
+			CallType:   "direct-call",
+		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false, "message": "Request failed", "latency_ms": latency, "input_tokens": 0, "output_tokens": 0,
@@ -336,6 +381,22 @@ func (p *ProxyServer) handleDirectModeTestChat(w http.ResponseWriter, req struct
 
 	if resp.StatusCode >= 400 {
 		log.Printf("[ERROR] handleDirectModeTestChat: upstream returned HTTP %d", resp.StatusCode)
+		dbInsertLog(&RequestLog{
+			Timestamp:    startTime,
+			Provider:    req.ProviderType,
+			Model:       modelToSend,
+			InputTokens: 0,
+			OutputTokens: 0,
+			LatencyMs:   int64(latency),
+			Success:     false,
+			ErrorMessage: fmt.Sprintf("HTTP %d", resp.StatusCode),
+			ClientIP:    "direct-test",
+			APIKeyUsed:  maskAPIKeyForLog(apiKey),
+			StatusCode:  resp.StatusCode,
+			Path:        endpoint,
+			Method:      "POST",
+			CallType:   "direct-call",
+		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -349,6 +410,22 @@ func (p *ProxyServer) handleDirectModeTestChat(w http.ResponseWriter, req struct
 	json.Unmarshal(respBody, &result)
 	usage, ok := result["usage"].(map[string]interface{})
 	if !ok {
+		dbInsertLog(&RequestLog{
+			Timestamp:    startTime,
+			Provider:    req.ProviderType,
+			Model:       modelToSend,
+			InputTokens: 0,
+			OutputTokens: 0,
+			LatencyMs:   int64(latency),
+			Success:     false,
+			ErrorMessage: "No usage in response",
+			ClientIP:    "direct-test",
+			APIKeyUsed:  maskAPIKeyForLog(apiKey),
+			StatusCode:  200,
+			Path:        endpoint,
+			Method:      "POST",
+			CallType:   "direct-call",
+		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false, "message": "No usage in response", "latency_ms": latency, "input_tokens": 0, "output_tokens": 0,
@@ -358,10 +435,30 @@ func (p *ProxyServer) handleDirectModeTestChat(w http.ResponseWriter, req struct
 	var inputTokens, outputTokens int
 	if v, ok := usage["prompt_tokens"].(float64); ok {
 		inputTokens = int(v)
+	} else if v, ok := usage["input_tokens"].(float64); ok {
+		inputTokens = int(v)
 	}
 	if v, ok := usage["completion_tokens"].(float64); ok {
 		outputTokens = int(v)
+	} else if v, ok := usage["output_tokens"].(float64); ok {
+		outputTokens = int(v)
 	}
+
+	dbInsertLog(&RequestLog{
+		Timestamp:    startTime,
+		Provider:    req.ProviderType,
+		Model:       modelToSend,
+		InputTokens: inputTokens,
+		OutputTokens: outputTokens,
+		LatencyMs:   int64(latency),
+		Success:     true,
+		ClientIP:    "direct-test",
+		APIKeyUsed:  maskAPIKeyForLog(apiKey),
+		StatusCode:  200,
+		Path:        endpoint,
+		Method:      "POST",
+		CallType:   "direct-call",
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

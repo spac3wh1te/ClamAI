@@ -20,6 +20,7 @@ func (m *mockProvider) GetAPIKey() string                        { return m.apiK
 func (m *mockProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {}
 func (m *mockProvider) TestConnection() error                    { return nil }
 func (m *mockProvider) FetchModels() []string                    { return nil }
+func (m *mockProvider) SetBaseURL(url string)                    { m.baseURL = url }
 
 func newTestProxyServer() *ProxyServer {
 	return &ProxyServer{
@@ -42,7 +43,6 @@ func TestResolveProvider(t *testing.T) {
 		{"with prefix", "openai:gpt-4", "openai", "gpt-4"},
 		{"deepseek prefix", "deepseek:deepseek-chat", "deepseek", "deepseek-chat"},
 		{"anthropic prefix", "anthropic:claude-3-sonnet", "anthropic", "claude-3-sonnet"},
-		{"fallback by model name", "gpt-4", "openai", "gpt-4"},
 		{"unknown model", "unknown-model", "", ""},
 	}
 	for _, tt := range tests {

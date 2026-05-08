@@ -6,42 +6,32 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 func dbGetSetting(key string) string {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	var val string
-	err := db.QueryRow("SELECT value FROM system_settings WHERE key = ?", key).Scan(&val)
-	if err != nil {
+	var s DBSystemSetting
+	if err := gormDB.Where("key = ?", key).First(&s).Error; err != nil {
 		return ""
 	}
-	return val
+	return s.Value
 }
 
 func dbSetSetting(key, value string) {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec("INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)", key, value)
-	if err != nil {
+	s := DBSystemSetting{Key: key, Value: value}
+	if err := gormDB.Save(&s).Error; err != nil {
 		log.Printf("[ERROR] dbSetSetting %s: %v", key, err)
 	}
 }
 
 func dbGetSettingsByPrefix(prefix string) map[string]string {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	rows, err := db.Query("SELECT key, value FROM system_settings WHERE key LIKE ?", prefix+"%")
-	if err != nil {
+	var settings []DBSystemSetting
+	if err := gormDB.Where("key LIKE ?", prefix+"%").Find(&settings).Error; err != nil {
 		return map[string]string{}
 	}
-	defer rows.Close()
 	m := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if rows.Scan(&k, &v) == nil {
-			m[strings.TrimPrefix(k, prefix)] = v
-		}
+	for _, s := range settings {
+		m[strings.TrimPrefix(s.Key, prefix)] = s.Value
 	}
 	return m
 }
@@ -86,58 +76,52 @@ func dbListProviders() []map[string]interface{} {
 	}
 	providerCacheMu.RUnlock()
 
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	rows, err := db.Query("SELECT id, name, provider_type, auth_type, enabled, base_url, api_key, models, disabled_models, oauth_config, rate_limits, priority, created_by, created_at, updated_at FROM providers ORDER BY priority ASC, name ASC")
-	if err != nil {
+	var providers []DBProvider
+	if gormDB == nil {
 		return []map[string]interface{}{}
 	}
-	defer rows.Close()
-	var result []map[string]interface{}
-	for rows.Next() {
-		var id, name, ptype, authType, baseURL, apiKey, models, disabled, oauthCfg, rateLimits, createdBy, createdAt, updatedAt string
-		var enabled int
-		var priority int
-		if err := rows.Scan(&id, &name, &ptype, &authType, &enabled, &baseURL, &apiKey, &models, &disabled, &oauthCfg, &rateLimits, &priority, &createdBy, &createdAt, &updatedAt); err != nil {
-			continue
-		}
+	if err := gormDB.Order("priority ASC, name ASC").Find(&providers).Error; err != nil {
+		return []map[string]interface{}{}
+	}
+
+	result := make([]map[string]interface{}, 0, len(providers))
+	for _, p := range providers {
 		var modelsArr []string
-		json.Unmarshal([]byte(models), &modelsArr)
+		json.Unmarshal([]byte(p.Models), &modelsArr)
 		if modelsArr == nil {
 			modelsArr = []string{}
 		}
 		var disabledArr []string
-		json.Unmarshal([]byte(disabled), &disabledArr)
+		json.Unmarshal([]byte(p.DisabledModels), &disabledArr)
 		if disabledArr == nil {
 			disabledArr = []string{}
 		}
 		var oauth interface{}
-		if oauthCfg != "" && oauthCfg != "null" {
-			json.Unmarshal([]byte(oauthCfg), &oauth)
+		if p.OAuthConfig != "" && p.OAuthConfig != "null" {
+			json.Unmarshal([]byte(p.OAuthConfig), &oauth)
 		}
 		var rl interface{}
-		if rateLimits != "" && rateLimits != "null" {
-			json.Unmarshal([]byte(rateLimits), &rl)
+		if p.RateLimits != "" && p.RateLimits != "null" {
+			json.Unmarshal([]byte(p.RateLimits), &rl)
 		}
 		apiKeys := []map[string]interface{}{}
-		if apiKey != "" {
+		if p.APIKey != "" {
 			apiKeys = append(apiKeys, map[string]interface{}{
-				"id": id + "_key1", "key_value": apiKey, "name": "默认密钥",
-				"is_active": true, "created_at": createdAt, "usage_count": 0,
+				"id": p.ID + "_key1", "key_value": p.APIKey, "name": "默认密钥",
+				"is_active": true, "created_at": p.CreatedAt.Format(time.RFC3339), "usage_count": 0,
 			})
 		}
 		m := map[string]interface{}{
-			"id": id, "name": name, "provider_type": ptype, "auth_type": authType,
-			"enabled": enabled == 1, "base_url": baseURL, "api_keys": apiKeys,
+			"id": p.ID, "name": p.Name, "provider_type": p.ProviderType, "auth_type": p.AuthType,
+			"enabled": p.Enabled, "base_url": p.BaseURL, "api_keys": apiKeys,
 			"models": modelsArr, "disabled_models": disabledArr,
-			"oauth_config": oauth, "rate_limits": rl, "priority": priority,
-			"created_by": createdBy, "created_at": createdAt, "updated_at": updatedAt,
+			"oauth_config": oauth, "rate_limits": rl, "priority": p.Priority,
+			"created_by": p.CreatedBy, "created_by_name": getUserNameByID(p.CreatedBy),
+			"created_at": p.CreatedAt.Format(time.RFC3339), "updated_at": p.UpdatedAt.Format(time.RFC3339),
 		}
 		result = append(result, m)
 	}
-	if result == nil {
-		result = []map[string]interface{}{}
-	}
+
 	providerCacheMu.Lock()
 	providerCache = result
 	providerCacheMu.Unlock()
@@ -152,8 +136,6 @@ func invalidateProviderCache() {
 
 func dbAddProvider(p map[string]interface{}) error {
 	invalidateProviderCache()
-	dbMu.Lock()
-	defer dbMu.Unlock()
 	models, _ := json.Marshal(sliceOrNil(p["models"]))
 	disabled, _ := json.Marshal(sliceOrNil(p["disabled_models"]))
 	oauth, _ := json.Marshal(p["oauth_config"])
@@ -166,23 +148,23 @@ func dbAddProvider(p map[string]interface{}) error {
 			}
 		}
 	}
-	enabled := 0
+	enabled := false
 	if e, ok := p["enabled"].(bool); ok && e {
-		enabled = 1
+		enabled = true
 	}
-	_, err := db.Exec(`INSERT OR REPLACE INTO providers (id, name, provider_type, auth_type, enabled, base_url, api_key, models, disabled_models, oauth_config, rate_limits, priority, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p["id"], p["name"], p["provider_type"], strOr(p["auth_type"], "apikey"),
-		enabled, strOr(p["base_url"], ""), apiKey, string(models), string(disabled),
-		string(oauth), string(rates), intOr(p["priority"], 0), strOr(p["created_by"], ""),
-		strOr(p["created_at"], ""), strOr(p["updated_at"], ""))
-	return err
+	rec := &DBProvider{
+		ID: strOr(p["id"], ""), Name: strOr(p["name"], ""),
+		ProviderType: strOr(p["provider_type"], ""), AuthType: strOr(p["auth_type"], "apikey"),
+		Enabled: enabled, BaseURL: strOr(p["base_url"], ""), APIKey: apiKey,
+		Models: string(models), DisabledModels: string(disabled),
+		OAuthConfig: string(oauth), RateLimits: string(rates),
+		Priority: intOr(p["priority"], 0), CreatedBy: strOr(p["created_by"], ""),
+	}
+	return gormDB.Save(rec).Error
 }
 
 func dbUpdateProvider(id string, p map[string]interface{}) error {
 	invalidateProviderCache()
-	dbMu.Lock()
-	defer dbMu.Unlock()
 	models, _ := json.Marshal(sliceOrNil(p["models"]))
 	disabled, _ := json.Marshal(sliceOrNil(p["disabled_models"]))
 	oauth, _ := json.Marshal(p["oauth_config"])
@@ -195,88 +177,65 @@ func dbUpdateProvider(id string, p map[string]interface{}) error {
 			}
 		}
 	}
-	enabled := 0
+	enabled := false
 	if e, ok := p["enabled"].(bool); ok && e {
-		enabled = 1
+		enabled = true
 	}
-	_, err := db.Exec(`UPDATE providers SET name=?, provider_type=?, auth_type=?, enabled=?, base_url=?, api_key=?, models=?, disabled_models=?, oauth_config=?, rate_limits=?, priority=?, created_by=?, updated_at=? WHERE id=?`,
-		p["name"], p["provider_type"], strOr(p["auth_type"], "apikey"),
-		enabled, strOr(p["base_url"], ""), apiKey, string(models), string(disabled),
-		string(oauth), string(rates), intOr(p["priority"], 0), strOr(p["created_by"], ""),
-		strOr(p["updated_at"], ""), id)
-	return err
+	return gormDB.Model(&DBProvider{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"name": p["name"], "provider_type": p["provider_type"],
+		"auth_type": strOr(p["auth_type"], "apikey"), "enabled": enabled,
+		"base_url": strOr(p["base_url"], ""), "api_key": apiKey,
+		"models": string(models), "disabled_models": string(disabled),
+		"oauth_config": string(oauth), "rate_limits": string(rates),
+		"priority": intOr(p["priority"], 0),
+		"updated_at": time.Now(),
+	}).Error
 }
 
 func dbDeleteProvider(id string) error {
 	invalidateProviderCache()
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec("DELETE FROM providers WHERE id = ?", id)
-	return err
+	return gormDB.Where("id = ?", id).Delete(&DBProvider{}).Error
 }
 
 func dbListModelMappings() []map[string]interface{} {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	rows, err := db.Query("SELECT alias, provider_id, model, description FROM model_mappings")
-	if err != nil {
+	var mappings []DBModelMapping
+	if err := gormDB.Find(&mappings).Error; err != nil {
 		return []map[string]interface{}{}
 	}
-	defer rows.Close()
-	var result []map[string]interface{}
-	for rows.Next() {
-		var alias, providerID, model, desc string
-		if rows.Scan(&alias, &providerID, &model, &desc) == nil {
-			result = append(result, map[string]interface{}{
-				"alias": alias, "provider_id": providerID, "model": model, "description": desc,
-			})
-		}
-	}
-	if result == nil {
-		result = []map[string]interface{}{}
+	result := make([]map[string]interface{}, 0, len(mappings))
+	for _, m := range mappings {
+		result = append(result, map[string]interface{}{
+			"alias": m.Alias, "provider_id": m.ProviderID, "model": m.Model, "description": m.Description,
+		})
 	}
 	return result
 }
 
 func dbSetModelMapping(alias, providerID, model, desc string) error {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec("INSERT OR REPLACE INTO model_mappings (alias, provider_id, model, description) VALUES (?, ?, ?, ?)",
-		alias, providerID, model, desc)
-	return err
+	rec := &DBModelMapping{
+		Alias: alias, ProviderID: providerID, Model: model, Description: desc,
+	}
+	return gormDB.Save(rec).Error
 }
 
 func dbDeleteModelMapping(alias string) error {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec("DELETE FROM model_mappings WHERE alias = ?", alias)
-	return err
+	return gormDB.Where("alias = ?", alias).Delete(&DBModelMapping{}).Error
 }
 
 func dbListProfiles() []map[string]interface{} {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	rows, err := db.Query("SELECT id, name, providers_json, mappings_json, gateway_json, advanced_json, service_json, is_active, created_at, updated_at FROM profiles ORDER BY created_at")
-	if err != nil {
+	var profiles []DBProfile
+	if err := gormDB.Order("created_at").Find(&profiles).Error; err != nil {
 		return []map[string]interface{}{}
 	}
-	defer rows.Close()
-	var result []map[string]interface{}
-	for rows.Next() {
-		var id, name, provJ, mapJ, gwJ, advJ, svcJ string
-		var isActive int
-		var createdAt, updatedAt string
-		if rows.Scan(&id, &name, &provJ, &mapJ, &gwJ, &advJ, &svcJ, &isActive, &createdAt, &updatedAt) == nil {
-			result = append(result, map[string]interface{}{
-				"id": id, "name": name, "is_active": isActive == 1,
-				"providers_json": provJ, "mappings_json": mapJ, "gateway_json": gwJ,
-				"advanced_json": advJ, "service_json": svcJ,
-				"created_at": createdAt, "updated_at": updatedAt,
-			})
-		}
-	}
-	if result == nil {
-		result = []map[string]interface{}{}
+	result := make([]map[string]interface{}, 0, len(profiles))
+	for _, p := range profiles {
+		result = append(result, map[string]interface{}{
+			"id": p.ID, "name": p.Name, "is_active": p.IsActive,
+			"providers_json": p.ProvidersJSON, "mappings_json": p.MappingsJSON,
+			"gateway_json": p.GatewayJSON, "advanced_json": p.AdvancedJSON,
+			"service_json": p.ServiceJSON,
+			"created_at": p.CreatedAt.Format(time.RFC3339), "updated_at": p.UpdatedAt.Format(time.RFC3339),
+		})
 	}
 	return result
 }
@@ -287,100 +246,79 @@ func dbSaveProfile(id, name string, prov, mappings, gateway, advanced, service m
 	gj, _ := json.Marshal(gateway)
 	aj, _ := json.Marshal(advanced)
 	sj, _ := json.Marshal(service)
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec(`INSERT OR REPLACE INTO profiles (id, name, providers_json, mappings_json, gateway_json, advanced_json, service_json, is_active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`,
-		id, name, string(pj), string(mj), string(gj), string(aj), string(sj))
-	return err
+	p := &DBProfile{
+		ID: id, Name: name,
+		ProvidersJSON: string(pj), MappingsJSON: string(mj),
+		GatewayJSON: string(gj), AdvancedJSON: string(aj), ServiceJSON: string(sj),
+		IsActive: false,
+	}
+	return gormDB.Save(p).Error
 }
 
 func dbLoadProfile(id string) (map[string]interface{}, error) {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	var name, provJ, mapJ, gwJ, advJ, svcJ string
-	err := db.QueryRow("SELECT name, providers_json, mappings_json, gateway_json, advanced_json, service_json FROM profiles WHERE id = ?", id).
-		Scan(&name, &provJ, &mapJ, &gwJ, &advJ, &svcJ)
-	if err != nil {
+	var p DBProfile
+	if err := gormDB.Where("id = ?", id).First(&p).Error; err != nil {
 		return nil, fmt.Errorf("profile not found")
 	}
 	var prov, mappings, gateway, advanced, service map[string]interface{}
-	json.Unmarshal([]byte(provJ), &prov)
-	json.Unmarshal([]byte(mapJ), &mappings)
-	json.Unmarshal([]byte(gwJ), &gateway)
-	json.Unmarshal([]byte(advJ), &advanced)
-	json.Unmarshal([]byte(svcJ), &service)
+	json.Unmarshal([]byte(p.ProvidersJSON), &prov)
+	json.Unmarshal([]byte(p.MappingsJSON), &mappings)
+	json.Unmarshal([]byte(p.GatewayJSON), &gateway)
+	json.Unmarshal([]byte(p.AdvancedJSON), &advanced)
+	json.Unmarshal([]byte(p.ServiceJSON), &service)
 	return map[string]interface{}{
-		"name": name, "providers": prov, "mappings": mappings,
+		"name": p.Name, "providers": prov, "mappings": mappings,
 		"gateway": gateway, "advanced": advanced, "service": service,
 	}, nil
 }
 
 func dbDeleteProfile(id string) error {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec("DELETE FROM profiles WHERE id = ?", id)
-	return err
+	return gormDB.Where("id = ?", id).Delete(&DBProfile{}).Error
 }
 
 func dbRenameProfile(id, newName string) error {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec("UPDATE profiles SET name = ?, updated_at = datetime('now') WHERE id = ?", newName, id)
-	return err
+	return gormDB.Model(&DBProfile{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"name": newName, "updated_at": time.Now(),
+	}).Error
 }
 
 func dbSetActiveProfile(id string) error {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	db.Exec("UPDATE profiles SET is_active = 0")
-	_, err := db.Exec("UPDATE profiles SET is_active = 1, updated_at = datetime('now') WHERE id = ?", id)
-	return err
+	gormDB.Model(&DBProfile{}).Where("is_active = ?", true).Update("is_active", false)
+	return gormDB.Model(&DBProfile{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"is_active": true, "updated_at": time.Now(),
+	}).Error
 }
 
 func dbGetActiveProfile() string {
-	dbMu.Lock()
-	defer dbMu.Unlock()
 	var id string
-	err := db.QueryRow("SELECT id FROM profiles WHERE is_active = 1").Scan(&id)
-	if err != nil {
+	gormDB.Raw("SELECT id FROM profiles WHERE is_active = true ORDER BY id LIMIT 1").Scan(&id)
+	if id == "" {
 		return "default"
 	}
 	return id
 }
 
 func dbGetUserSetting(userID, key string) string {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	var val string
-	err := db.QueryRow("SELECT value FROM user_settings WHERE user_id = ? AND key = ?", userID, key).Scan(&val)
-	if err != nil {
+	var s DBUserSetting
+	if err := gormDB.Where("user_id = ? AND key = ?", userID, key).First(&s).Error; err != nil {
 		return ""
 	}
-	return val
+	return s.Value
 }
 
 func dbSetUserSetting(userID, key, value string) error {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	_, err := db.Exec("INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)", userID, key, value)
-	return err
+	s := DBUserSetting{UserID: userID, Key: key, Value: value}
+	return gormDB.Save(&s).Error
 }
 
 func dbGetAllUserSettings(userID string) map[string]string {
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	rows, err := db.Query("SELECT key, value FROM user_settings WHERE user_id = ?", userID)
-	if err != nil {
+	var settings []DBUserSetting
+	if err := gormDB.Where("user_id = ?", userID).Find(&settings).Error; err != nil {
 		return map[string]string{}
 	}
-	defer rows.Close()
 	m := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if rows.Scan(&k, &v) == nil {
-			m[k] = v
-		}
+	for _, s := range settings {
+		m[s.Key] = s.Value
 	}
 	return m
 }
@@ -423,15 +361,12 @@ func sliceOrNil(v interface{}) []string {
 
 func dbUpdateProviderModels(providerType string, models []string) {
 	modelsJSON, _ := json.Marshal(models)
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	result, err := db.Exec("UPDATE providers SET models = ? WHERE provider_type = ?", string(modelsJSON), providerType)
-	if err != nil {
-		log.Printf("[ERROR] dbUpdateProviderModels(%s): %v", providerType, err)
+	result := gormDB.Model(&DBProvider{}).Where("provider_type = ?", providerType).Update("models", string(modelsJSON))
+	if result.Error != nil {
+		log.Printf("[ERROR] dbUpdateProviderModels(%s): %v", providerType, result.Error)
 		return
 	}
-	rows, _ := result.RowsAffected()
-	if rows > 0 {
+	if result.RowsAffected > 0 {
 		invalidateProviderCache()
 	}
 }

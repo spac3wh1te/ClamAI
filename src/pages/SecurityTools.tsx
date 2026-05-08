@@ -1,10 +1,12 @@
 import { useState } from "react";
 import "../features/security";
 import { getSecurityApps } from "../features/security/registry";
+import { useCurrentUser } from "../context/UserContext";
 import { Shield, Search } from "lucide-react";
 
 export default function SecurityTools() {
-  const apps = getSecurityApps();
+  const { isAdmin } = useCurrentUser();
+  const apps = getSecurityApps(isAdmin);
   const [activeTab, setActiveTab] = useState(apps[0]?.id || "");
 
   return (

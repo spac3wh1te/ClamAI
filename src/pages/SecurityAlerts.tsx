@@ -4,6 +4,7 @@ import { securityApi, type SecurityAlert } from "../api/security";
 import {
   ShieldAlert,
   ShieldCheck,
+  Shield,
   CheckCircle,
   Bell,
   Search,
@@ -13,6 +14,9 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Activity,
+  Zap,
+  Clock,
 } from "lucide-react";
 
 const SEVERITY_CONFIG: Record<string, { label: string; color: string; bg: string; border: string }> = {
@@ -29,6 +33,8 @@ const TRIGGER_TYPE_OPTIONS = [
   { value: "vector", label: "向量检测" },
 ];
 
+const TRIGGER_TYPE_CONTENT = ["keyword", "semantic", "vector"];
+
 const DIRECTION_OPTIONS = [
   { value: "", label: "全部方向" },
   { value: "input", label: "输入" },
@@ -44,6 +50,26 @@ const SEVERITY_OPTIONS = [
 ];
 
 const PAGE_SIZE = 20;
+
+const SOURCE_OPTIONS = [
+  { value: "content", label: "内容安全" },
+  { value: "system_analysis", label: "威胁分析" },
+];
+
+function StatCard({ icon: Icon, label, value, sub, color }: { icon: React.ElementType; label: string; value: string | number; sub?: string; color: string }) {
+  return (
+    <div className="bg-card rounded-lg border border-border p-4 flex items-start gap-3">
+      <div className={`p-2 rounded-lg ${color}`}>
+        <Icon size={18} />
+      </div>
+      <div>
+        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">{label}</p>
+        <p className="text-xl font-bold mt-0.5">{value}</p>
+        {sub && <p className="text-[10px] text-muted-foreground mt-0.5">{sub}</p>}
+      </div>
+    </div>
+  );
+}
 
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -80,7 +106,7 @@ function highlightMatch(text: string, keyword: string): React.ReactNode {
   );
 }
 
-export default function SecurityAlerts({ hideHeader }: { hideHeader?: boolean }) {
+export default function SecurityAlerts({ hideHeader, defaultSource = "content" }: { hideHeader?: boolean; defaultSource?: "content" | "system_analysis" }) {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
   const [severity, setSeverity] = useState("");
@@ -89,23 +115,35 @@ export default function SecurityAlerts({ hideHeader }: { hideHeader?: boolean })
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [source, setSource] = useState<"content" | "system_analysis">(defaultSource);
+
+  const effectiveTriggerType = source === "content" ? triggerType : "system_analysis";
+
+  const { data: statsData } = useQuery({
+    queryKey: ["security-stats", source],
+    queryFn: () => securityApi.getStats(source) as unknown as Promise<{ total: number; unresolved: number; today: number; hour24: number }>,
+    staleTime: 5000,
+    refetchInterval: 10000,
+  });
 
   const { data: alertsData } = useQuery({
-    queryKey: ["security-alerts", page, severity, direction, triggerType, search],
+    queryKey: ["security-alerts", page, severity, direction, effectiveTriggerType, search, source],
     queryFn: () =>
       securityApi.getLogs({
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
         severity: severity || undefined,
         direction: direction || undefined,
-        trigger_type: triggerType || undefined,
+        trigger_type: effectiveTriggerType || undefined,
+        exclude_trigger_type: source === "content" && !triggerType ? "system_analysis" : undefined,
         search: search || undefined,
       }) as unknown as Promise<{ alerts: SecurityAlert[]; total: number }>,
     staleTime: 0,
     refetchInterval: 10000,
   });
 
-  const alerts = (alertsData?.alerts || []) as SecurityAlert[];
+  const rawAlerts = (alertsData?.alerts || []) as SecurityAlert[];
+  const alerts = source === "content" ? rawAlerts.filter(a => a.trigger_type !== "system_analysis") : rawAlerts;
   const total = alertsData?.total || 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const unresolvedCount = alerts.filter((a) => a.resolved === 0).length;
@@ -158,27 +196,48 @@ export default function SecurityAlerts({ hideHeader }: { hideHeader?: boolean })
     );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {!hideHeader && (
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">安全告警</h1>
-            <p className="text-muted-foreground mt-2">
-              内容安全拦截与检测告警记录
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            {unresolvedCount > 0 && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
-                <Bell size={16} />
-                <span>{unresolvedCount} 条未处理</span>
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold">{source === "content" ? "实时防护" : "威胁分析"}</h1>
+              <p className="text-muted-foreground mt-2">
+                {source === "content" ? "内容安全实时拦截与检测告警记录" : "AI威胁分析告警记录"}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              {unresolvedCount > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+                  <Bell size={16} />
+                  <span>{unresolvedCount} 条未处理</span>
+                </div>
+              )}
+              <div className="text-sm text-muted-foreground">
+                共 {total} 条记录
               </div>
-            )}
-            <div className="text-sm text-muted-foreground">
-              共 {total} 条记录
             </div>
           </div>
-        </div>
+          <div className="flex gap-1 bg-secondary/30 rounded-lg p-1 w-fit">
+            {SOURCE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => { setSource(opt.value as "content" | "system_analysis"); setPage(0); }}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  source === opt.value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-4 gap-3">
+            <StatCard icon={ShieldAlert} label="总告警数" value={total} color="bg-blue-500/10 text-blue-400" />
+            <StatCard icon={Bell} label="未处理" value={unresolvedCount} color="bg-red-500/10 text-red-400" />
+            <StatCard icon={Zap} label="今日新增" value={statsData?.today ?? "-"} color="bg-amber-500/10 text-amber-400" />
+            <StatCard icon={Clock} label="近24小时" value={statsData?.hour24 ?? "-"} color="bg-purple-500/10 text-purple-400" />
+          </div>
+        </>
       )}
 
       <div className="bg-card rounded-lg border border-border p-4 space-y-3">
@@ -193,33 +252,48 @@ export default function SecurityAlerts({ hideHeader }: { hideHeader?: boolean })
           )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          <select
-            value={severity}
-            onChange={(e) => { setSeverity(e.target.value); setPage(0); }}
-            className="bg-secondary border border-border rounded-md px-3 py-1.5 text-sm text-foreground"
-          >
-            {SEVERITY_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <select
-            value={direction}
-            onChange={(e) => { setDirection(e.target.value); setPage(0); }}
-            className="bg-secondary border border-border rounded-md px-3 py-1.5 text-sm text-foreground"
-          >
-            {DIRECTION_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <select
-            value={triggerType}
-            onChange={(e) => { setTriggerType(e.target.value); setPage(0); }}
-            className="bg-secondary border border-border rounded-md px-3 py-1.5 text-sm text-foreground"
-          >
-            {TRIGGER_TYPE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          {source === "content" && (
+            <>
+              <select
+                value={severity}
+                onChange={(e) => { setSeverity(e.target.value); setPage(0); }}
+                className="bg-secondary border border-border rounded-md px-3 py-1.5 text-sm text-foreground"
+              >
+                {SEVERITY_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <select
+                value={direction}
+                onChange={(e) => { setDirection(e.target.value); setPage(0); }}
+                className="bg-secondary border border-border rounded-md px-3 py-1.5 text-sm text-foreground"
+              >
+                {DIRECTION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <select
+                value={triggerType}
+                onChange={(e) => { setTriggerType(e.target.value); setPage(0); }}
+                className="bg-secondary border border-border rounded-md px-3 py-1.5 text-sm text-foreground"
+              >
+                {TRIGGER_TYPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </>
+          )}
+          {source === "system_analysis" && (
+            <select
+              value={severity}
+              onChange={(e) => { setSeverity(e.target.value); setPage(0); }}
+              className="bg-secondary border border-border rounded-md px-3 py-1.5 text-sm text-foreground"
+            >
+              {SEVERITY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          )}
           <div className="flex items-center gap-1 flex-1 min-w-[200px]">
             <div className="relative flex-1">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />

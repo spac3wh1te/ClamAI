@@ -20,12 +20,16 @@ func (p *ProxyServer) handleListAPIKeys(w http.ResponseWriter, r *http.Request) 
 	apiKeysMu.Lock()
 	keys := make([]map[string]interface{}, 0, len(apiKeys))
 	for _, info := range apiKeys {
-		if !isAdmin && userID != "" && info.UserID != userID {
-			continue
+		if !isAdmin {
+			if userID == "" || info.UserID != userID {
+				continue
+			}
 		}
 		entry := map[string]interface{}{
 			"id":             info.ID,
 			"name":           info.Name,
+			"user_id":        info.UserID,
+			"created_by_name": getUserNameByID(info.UserID),
 			"created_at":     info.CreatedAt,
 			"active":         info.Active,
 			"request_count":  info.RequestCount,
@@ -78,7 +82,7 @@ func (p *ProxyServer) handleCreateAPIKey(w http.ResponseWriter, r *http.Request)
 		ID:            id,
 		Key:           key,
 		Name:          req.Name,
-		UserID:        userIDForQuery(r),
+		UserID:        getUserIDFromRequest(r),
 		AllowedModels: req.AllowedModels,
 		ProviderKeys:  req.ProviderKeys,
 		CreatedAt:     now,

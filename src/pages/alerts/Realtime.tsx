@@ -13,7 +13,7 @@ export default function AlertRealtime() {
           <p className="text-sm text-muted-foreground mt-1">安全事件的告警及拦截情况展示</p>
         </div>
       </div>
-      <SecurityAlerts hideHeader />
+      <SecurityAlerts hideHeader defaultSource="content" />
     </div>
   );
 }

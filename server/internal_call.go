@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 func isAnthropicProvider(provider Provider) bool {
@@ -110,10 +111,24 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 		}
 	}
 
+	startTime := time.Now()
 	client := getSharedClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[INTERNAL] ERROR upstream call failed: %v", err)
+		dbInsertLog(&RequestLog{
+			Timestamp:      startTime,
+			Provider:       provider.GetName(),
+			Model:          modelName,
+			LatencyMs:      time.Since(startTime).Milliseconds(),
+			Success:        false,
+			ErrorMessage:   err.Error(),
+			CallType:       "security",
+			APIKeyUsed:     "",
+			Path:           "/system-analysis/internal",
+			Method:         "POST",
+			RequestContent: truncateStr(string(body), 5000),
+		})
 		return 0, 0, 0, nil, fmt.Errorf("upstream call failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -132,6 +147,23 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 	usageSpec := p.getUsageSpecForProvider(provider.GetName())
 	inputTokens, outputTokens := extractTokensFromBody(respBody, &usageSpec)
 	log.Printf("[INTERNAL] extracted tokens: input=%d output=%d", inputTokens, outputTokens)
+
+	dbInsertLog(&RequestLog{
+		Timestamp:       startTime,
+		Provider:        provider.GetName(),
+		Model:           modelName,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		LatencyMs:       time.Since(startTime).Milliseconds(),
+		Success:         resp.StatusCode >= 200 && resp.StatusCode < 300,
+		CallType:        "security",
+		APIKeyUsed:      "",
+		StatusCode:      resp.StatusCode,
+		Path:            "/system-analysis/internal",
+		Method:          "POST",
+		RequestContent:  truncateStr(string(body), 5000),
+		ResponseContent: truncateStr(string(respBody), 5000),
+	})
 
 	_ = preview
 	return resp.StatusCode, inputTokens, outputTokens, respBody, nil

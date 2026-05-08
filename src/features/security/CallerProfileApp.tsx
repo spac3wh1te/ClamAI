@@ -626,6 +626,7 @@ registerSecurityApp({
   icon: User,
   component: CallerProfileAnalysis,
   order: 1,
+  adminOnly: true,
 });
 
 export default CallerProfileAnalysis;

@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"log"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
@@ -57,6 +58,7 @@ type SecurityAlert struct {
 	APIKeyUsed     string    `json:"api_key_used"`
 	ClientIP       string    `json:"client_ip"`
 	Action         string    `json:"action"`
+	UserID         string    `json:"user_id"`
 }
 
 var (
@@ -317,18 +319,36 @@ func dbSaveSecurityConfig(cfg *SecurityConfig) {
 }
 
 func dbInsertAlert(alert *SecurityAlert) {
+	if alert.UserID == "" && alert.APIKeyUsed != "" {
+		apiKeysMu.Lock()
+		for _, info := range apiKeys {
+			if maskAPIKey(info.Key) == alert.APIKeyUsed || info.Key == alert.APIKeyUsed {
+				alert.UserID = info.UserID
+				break
+			}
+		}
+		apiKeysMu.Unlock()
+	}
 	severity := alert.Severity
 	if severity == "" {
 		severity = severityFromTrigger(alert.TriggerType, alert.TriggerDetail)
 	}
 	_, err := db.Exec(`INSERT INTO security_alerts
-		(timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-		alert.Timestamp.UTC().Format(time.RFC3339), alert.Direction, alert.Mode,
+		(timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved, user_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+		alert.Timestamp.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z"), alert.Direction, alert.Mode,
 		alert.TriggerType, alert.TriggerDetail, severity, alert.ContentPreview,
-		alert.Model, alert.APIKeyUsed, alert.ClientIP, alert.Action)
+		alert.Model, alert.APIKeyUsed, alert.ClientIP, alert.Action, alert.UserID)
 	if err != nil {
 		log.Printf("[ERROR] dbInsertAlert: %v", err)
+	}
+}
+
+func newAlertFromRequest(r *http.Request) *SecurityAlert {
+	return &SecurityAlert{
+		UserID:     resolveUserIDFromRequest(r),
+		ClientIP:   getClientIP(r),
+		APIKeyUsed: extractAPIKeyFromRequest(r),
 	}
 }
 
@@ -352,56 +372,46 @@ func severityFromTrigger(triggerType, triggerDetail string) string {
 	}
 }
 
-func dbGetAlerts(limit, offset int, resolved *int, severity, direction, triggerType, search string) ([]map[string]interface{}, int) {
+func dbGetAlerts(limit, offset int, resolved *int, severity, direction, triggerType, search, excludeTriggerType, userID string, isAdmin bool) ([]map[string]interface{}, int) {
 	var total int
-	query := "SELECT COUNT(*) FROM security_alerts WHERE 1=1"
+	where := " WHERE 1=1"
 	var args []interface{}
 	if resolved != nil {
-		query += " AND resolved = ?"
+		where += " AND resolved = ?"
 		args = append(args, *resolved)
 	}
 	if severity != "" {
-		query += " AND severity = ?"
+		where += " AND severity = ?"
 		args = append(args, severity)
 	}
 	if direction != "" {
-		query += " AND direction = ?"
+		where += " AND direction = ?"
 		args = append(args, direction)
 	}
 	if triggerType != "" {
-		query += " AND trigger_type LIKE ?"
+		where += " AND trigger_type LIKE ?"
 		args = append(args, triggerType+"%")
 	}
+	if excludeTriggerType != "" {
+		where += " AND trigger_type NOT LIKE ?"
+		args = append(args, excludeTriggerType+"%")
+	}
 	if search != "" {
-		query += " AND (trigger_detail LIKE ? OR content_preview LIKE ? OR model LIKE ?)"
+		where += " AND (trigger_detail LIKE ? OR content_preview LIKE ? OR model LIKE ?)"
 		s := "%" + search + "%"
 		args = append(args, s, s, s)
 	}
-	db.QueryRow(query, args...).Scan(&total)
+	if !isAdmin && userID != "" {
+		where += " AND user_id = ?"
+		args = append(args, userID)
+	}
+	db.QueryRow("SELECT COUNT(*) FROM security_alerts"+where, args...).Scan(&total)
 
-	dataQuery := `SELECT id, timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved
-		FROM security_alerts WHERE 1=1`
 	dataArgs := make([]interface{}, len(args))
 	copy(dataArgs, args)
-	if resolved != nil {
-		dataQuery += " AND resolved = ?"
-	}
-	if severity != "" {
-		dataQuery += " AND severity = ?"
-	}
-	if direction != "" {
-		dataQuery += " AND direction = ?"
-	}
-	if triggerType != "" {
-		dataQuery += " AND trigger_type LIKE ?"
-	}
-	if search != "" {
-		dataQuery += " AND (trigger_detail LIKE ? OR content_preview LIKE ? OR model LIKE ?)"
-	}
-	dataQuery += " ORDER BY id DESC LIMIT ? OFFSET ?"
 	dataArgs = append(dataArgs, limit, offset)
 
-	rows, err := db.Query(dataQuery, dataArgs...)
+	rows, err := db.Query("SELECT id, timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved FROM security_alerts"+where+" ORDER BY id DESC LIMIT ? OFFSET ?", dataArgs...)
 	if err != nil {
 		log.Printf("[ERROR] dbGetAlerts: %v", err)
 		return nil, 0
@@ -431,4 +441,32 @@ func dbGetAlerts(limit, offset int, resolved *int, severity, direction, triggerT
 		})
 	}
 	return alerts, total
+}
+
+type AlertStats struct {
+	Total      int `json:"total"`
+	Unresolved int `json:"unresolved"`
+	Today      int `json:"today"`
+	Hour24     int `json:"hour24"`
+}
+
+func dbGetAlertStats(source string) AlertStats {
+	var stats AlertStats
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	hour24Start := now.Add(-24 * time.Hour)
+
+	var triggerTypeFilter string
+	if source == "content" {
+		triggerTypeFilter = " AND trigger_type != 'system_analysis'"
+	} else if source == "system_analysis" {
+		triggerTypeFilter = " AND trigger_type = 'system_analysis'"
+	}
+
+	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE 1=1" + triggerTypeFilter).Scan(&stats.Total)
+	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE resolved = 0"+triggerTypeFilter).Scan(&stats.Unresolved)
+	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE timestamp >= ?"+triggerTypeFilter, todayStart.UTC().Format(time.RFC3339)).Scan(&stats.Today)
+	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE timestamp >= ?"+triggerTypeFilter, hour24Start.UTC().Format(time.RFC3339)).Scan(&stats.Hour24)
+
+	return stats
 }

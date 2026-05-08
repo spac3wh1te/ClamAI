@@ -10,6 +10,8 @@ export interface ApiKeyInfo {
   last_used: string | null;
   created_at: string;
   allowed_models: string[];
+  user_id?: string;
+  created_by_name?: string;
 }
 
 export interface ApiKeyListResult {

@@ -355,8 +355,11 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 		entry.APIKeyID = apiKeyUsed
 		entry.UpstreamProvider = cw.upstreamProvider
 		entry.UpstreamModel = cw.upstreamModel
-		p.logBuffer.Add(entry)
-		dbInsertLog(entry)
+		entry.CallType = "client"
+		if provider == "" {
+			p.logBuffer.Add(entry)
+			dbInsertLog(entry)
+		}
 
 		log.Printf("%s %s %d %dms in=%d out=%d provider=%s model=%s ip=%s",
 			r.Method, r.URL.Path, cw.statusCode, latencyMs,
@@ -404,9 +407,13 @@ func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 				log.Printf("[DEBUG] authMiddleware: /api/v1/ path, authHeader=%s, expectedAuth=%s, match=%v",
 					authHeader, expectedAuth[:min(len(expectedAuth), 20)]+"...", authHeader == expectedAuth)
 				if authHeader != expectedAuth {
-					log.Printf("[WARN] authMiddleware: /api/v1/ auth failed")
-					http.Error(w, "Unauthorized", http.StatusUnauthorized)
-					return
+					tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+					if tokenStr == authHeader || !isValidJWT(tokenStr) {
+						log.Printf("[WARN] authMiddleware: /api/v1/ auth failed")
+						http.Error(w, "Unauthorized", http.StatusUnauthorized)
+						return
+					}
+					log.Printf("[DEBUG] authMiddleware: /api/v1/ JWT valid, allowing")
 				}
 			}
 			log.Printf("[DEBUG] authMiddleware: /api/v1/ allowed (no auth required or auth passed)")

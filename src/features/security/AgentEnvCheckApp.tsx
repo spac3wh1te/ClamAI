@@ -509,6 +509,7 @@ registerSecurityApp({
   icon: Shield,
   component: AgentEnvCheckApp,
   order: 4,
+  adminOnly: true,
 });
 
 export default AgentEnvCheckApp;

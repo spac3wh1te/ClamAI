@@ -732,6 +732,7 @@ func (p *ProxyServer) handleAgentDeepCheck(w http.ResponseWriter, r *http.Reques
 					Method:          "POST",
 					RequestContent:  truncateStr(fmt.Sprintf(`{"analysis_type":"agent_deep_check","agent":"%s","model":"%s"}`, req.AgentName, req.Model), 10000),
 					ResponseContent: truncateStr(string(respBody), 10000),
+					CallType:       "security",
 				}
 				p.logBuffer.Add(logEntry)
 				dbInsertLog(logEntry)

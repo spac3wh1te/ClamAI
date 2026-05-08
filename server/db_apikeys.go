@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"log"
 	"time"
@@ -17,22 +16,23 @@ func boolToInt(b bool) int {
 func dbSaveAPIKey(info *APIKeyInfo) {
 	modelsJSON, _ := json.Marshal(info.AllowedModels)
 	providerKeysJSON, _ := json.Marshal(info.ProviderKeys)
-	var lastUsed interface{}
+
+	k := &DBAPIKey{
+		ID: info.ID, Key: info.Key, Name: info.Name, UserID: info.UserID,
+		AllowedModels: string(modelsJSON), ProviderKeys: string(providerKeysJSON),
+		CreatedAt: info.CreatedAt, Active: info.Active, RequestCount: info.RequestCount,
+	}
 	if info.LastUsed != nil {
-		lastUsed = info.LastUsed.UTC().Format(time.RFC3339)
+		k.LastUsed = info.LastUsed
 	}
-	var lastSynced interface{}
 	if info.LastSynced != nil {
-		lastSynced = info.LastSynced.UTC().Format(time.RFC3339)
+		k.LastSynced = info.LastSynced
 	}
-	_, err := db.Exec(`INSERT OR REPLACE INTO api_keys (id, key, name, user_id, allowed_models, provider_keys, created_at, active, request_count, last_used, last_synced)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		info.ID, info.Key, info.Name, info.UserID, string(modelsJSON), string(providerKeysJSON),
-		info.CreatedAt.UTC().Format(time.RFC3339), boolToInt(info.Active),
-		info.RequestCount, lastUsed, lastSynced)
-	if err != nil {
+
+	if err := gormDB.Save(k).Error; err != nil {
 		log.Printf("[ERROR] dbSaveAPIKey: %v", err)
 	}
+
 	apiKeysMu.Lock()
 	apiKeys[info.Key] = info
 	apiKeysByID[info.ID] = info
@@ -46,53 +46,41 @@ func dbDeleteAPIKey(id string) {
 		delete(apiKeysByID, id)
 	}
 	apiKeysMu.Unlock()
-	db.Exec("DELETE FROM api_keys WHERE id = ?", id)
+	gormDB.Where("id = ?", id).Delete(&DBAPIKey{})
 }
 
 func dbUpdateAPIKeyUsage(id string, requestCount int64, lastUsed time.Time) {
-	db.Exec("UPDATE api_keys SET request_count = ?, last_used = ? WHERE id = ?",
-		requestCount, lastUsed.UTC().Format(time.RFC3339), id)
+	gormDB.Model(&DBAPIKey{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"request_count": requestCount, "last_used": &lastUsed,
+	})
 }
 
 func dbLoadAPIKeys() (map[string]*APIKeyInfo, map[string]*APIKeyInfo) {
 	keys := make(map[string]*APIKeyInfo)
 	byID := make(map[string]*APIKeyInfo)
 
-	rows, err := db.Query("SELECT id, key, name, COALESCE(user_id,'') as user_id, allowed_models, provider_keys, created_at, active, request_count, last_used, last_synced FROM api_keys")
-	if err != nil {
+	var dbKeys []DBAPIKey
+	if err := gormDB.Find(&dbKeys).Error; err != nil {
 		log.Printf("[ERROR] dbLoadAPIKeys: %v", err)
 		return keys, byID
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		info := &APIKeyInfo{}
-		var modelsJSON string
-		var providerKeysJSON string
-		var createdAt string
-		var active int
-		var lastUsed sql.NullString
-		var lastSynced sql.NullString
-
-		if err := rows.Scan(&info.ID, &info.Key, &info.Name, &info.UserID, &modelsJSON, &providerKeysJSON, &createdAt, &active, &info.RequestCount, &lastUsed, &lastSynced); err != nil {
-			log.Printf("[ERROR] dbLoadAPIKeys scan: %v", err)
-			continue
+	for i := range dbKeys {
+		k := &dbKeys[i]
+		info := &APIKeyInfo{
+			ID: k.ID, Key: k.Key, Name: k.Name, UserID: k.UserID,
+			CreatedAt: k.CreatedAt, Active: k.Active, RequestCount: k.RequestCount,
 		}
-
-		json.Unmarshal([]byte(modelsJSON), &info.AllowedModels)
-		json.Unmarshal([]byte(providerKeysJSON), &info.ProviderKeys)
+		json.Unmarshal([]byte(k.AllowedModels), &info.AllowedModels)
+		json.Unmarshal([]byte(k.ProviderKeys), &info.ProviderKeys)
 		if info.ProviderKeys == nil {
 			info.ProviderKeys = make(map[string]string)
 		}
-		info.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		info.Active = active == 1
-		if lastUsed.Valid {
-			t, _ := time.Parse(time.RFC3339, lastUsed.String)
-			info.LastUsed = &t
+		if k.LastUsed != nil {
+			info.LastUsed = k.LastUsed
 		}
-		if lastSynced.Valid && lastSynced.String != "" {
-			t, _ := time.Parse(time.RFC3339, lastSynced.String)
-			info.LastSynced = &t
+		if k.LastSynced != nil {
+			info.LastSynced = k.LastSynced
 		}
 
 		keys[info.Key] = info

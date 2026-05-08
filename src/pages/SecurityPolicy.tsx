@@ -6,11 +6,11 @@ import { systemAnalysisApi, type SystemAnalysisConfig, type SystemAnalysisTask, 
 import { proxyApi } from "../api/stats";
 
 const TABS = [
-  { id: "config", label: "安全配置", icon: Shield },
+  { id: "config", label: "实时防护配置", icon: Shield },
   { id: "keyword", label: "关键词词库", icon: BookOpen },
   { id: "semantic", label: "语义检测", icon: Brain },
   { id: "vector", label: "向量样本库", icon: Database },
-  { id: "advanced", label: "高级策略", icon: Zap },
+  { id: "advanced", label: "威胁分析配置", icon: Zap },
 ] as const;
 
 const TIME_RANGE_OPTIONS = [

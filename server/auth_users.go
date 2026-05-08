@@ -120,10 +120,24 @@ func (p *ProxyServer) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
+	if req.Role != "admin" {
+		var adminCount int64
+		gormDB.Model(&DBUser{}).Where("role = ? AND id != ?", "admin", id).Count(&adminCount)
+		if adminCount == 0 {
+			user, _ := dbGetUserByID(id)
+			if user != nil {
+				if currentRole, _ := user["role"].(string); currentRole == "admin" {
+					http.Error(w, "无法降级最后一个管理员", http.StatusBadRequest)
+					return
+				}
+			}
+		}
+	}
 	if err := dbUpdateUser(id, req.DisplayName, req.Role, req.Status); err != nil {
 		http.Error(w, "更新失败", http.StatusInternalServerError)
 		return
 	}
+	gormDB.Where("username IN (SELECT username FROM users WHERE id = ?)", id).Delete(&DBRefreshToken{})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }

@@ -190,7 +190,7 @@ func dbGetDueSystemAnalysisTasks() ([]map[string]interface{}, error) {
 }
 
 func dbSetSystemTaskNextRun(id string, intervalMinutes int) error {
-	nextRun := time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
+	nextRun := formatTimeUTC(time.Now().Add(time.Duration(intervalMinutes) * time.Minute))
 	_, err := db.Exec("UPDATE system_analysis_tasks SET next_run_at=? WHERE id=?", nextRun, id)
 	return err
 }
@@ -495,7 +495,7 @@ func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
 
 	historyID := dbInsertSystemAnalysisTaskHistory(taskID, maxRisk, summary, string(detailJSON), "", maxRisk, totalLogs, durationMs, maxThreatScore, string(historySignalsJSON), analyzedCount, skippedCount)
 
-	runAt := time.Now().UTC().Format(time.RFC3339)
+	runAt := formatTimeNow()
 	for _, kr := range keyResults {
 		gormDB.Create(&DBSystemAnalysisKeyResult{
 			TaskID:        taskID,
@@ -523,14 +523,13 @@ func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
 
 	if notifyCfg.NotifyOnHighRisk && (maxRisk == "高" || maxRisk == "极高") {
 		log.Printf("[SYS-ANALYSIS] HIGH RISK DETECTED task=%s risk=%s", taskID, maxRisk)
-		dbInsertSecurityAlertFromSystem(taskID, maxRisk, summary, model, "", "system_analysis")
 	}
 
 	_ = notifyCfg
 }
 
 func dbUpdateSystemAnalysisTaskResult(id, riskLevel, summary, detail, dimensions string, logsAnalyzed int) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := formatTimeNow()
 	_, err := db.Exec(`UPDATE system_analysis_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_dimensions=?, result_logs_analyzed=?, last_run_at=? WHERE id=?`,
 		riskLevel, summary, detail, dimensions, logsAnalyzed, now, id)
 	return err
@@ -581,7 +580,7 @@ func dbInsertSecurityAlertFromSystem(taskID, riskLevel, summary, model, apiKey, 
 	contentPreview := fmt.Sprintf("[系统分析] 风险等级: %s, 摘要: %s", riskLevel, summary)
 	_, err := db.Exec(`INSERT INTO security_alerts (timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, action, resolved, client_ip)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'system')`,
-		now.UTC().Format(time.RFC3339), direction, mode, triggerType, fmt.Sprintf("[系统/%s]", riskLevel), severity, contentPreview, model, maskAPIKeyForLog(apiKey), "记录告警")
+		formatTimeUTC(now), direction, mode, triggerType, fmt.Sprintf("[系统/%s]", riskLevel), severity, contentPreview, model, maskAPIKeyForLog(apiKey), "记录告警")
 	if err != nil {
 		log.Printf("[ERROR] dbInsertSecurityAlertFromSystem: %v", err)
 	}
@@ -650,10 +649,10 @@ func ensureSystemAnalysisTask() {
 	if row.Scan(&count) == nil && count == 0 {
 		id := fmt.Sprintf("sys_%d", time.Now().UnixNano())
 		taskNo := nextSystemTaskNo()
-		nextRun := time.Now().Add(time.Duration(cfg.IntervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
+		nextRun := formatTimeUTC(time.Now().Add(time.Duration(cfg.IntervalMinutes) * time.Minute))
 		db.Exec(`INSERT INTO system_analysis_tasks (id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, next_run_at, created_at, created_by)
 			VALUES (?, ?, ?, ?, ?, ?, 'periodic', ?, 'running', ?, ?, '__system__')`,
-			id, taskNo, "系统行为分析", cfg.APIKeyID, cfg.Model, cfg.TimeRange, cfg.IntervalMinutes, nextRun, time.Now().UTC().Format(time.RFC3339))
+			id, taskNo, "系统行为分析", cfg.APIKeyID, cfg.Model, cfg.TimeRange, cfg.IntervalMinutes, nextRun, formatTimeNow())
 		log.Printf("[INFO] ensureSystemAnalysisTask: created system task id=%s", id)
 	} else {
 		db.Exec(`UPDATE system_analysis_tasks SET api_key_id=?, model=?, time_range=?, interval_minutes=?, status='running' WHERE created_by='__system__'`,
@@ -715,7 +714,7 @@ func (p *ProxyServer) handleListSystemAnalysisTasks(w http.ResponseWriter, r *ht
 }
 
 func (p *ProxyServer) handleGetSystemAnalysisTaskHistory(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, risk_level, summary, detail, dimensions, logs_analyzed, status, duration_ms, run_at FROM system_analysis_task_history ORDER BY run_at DESC LIMIT 50")
+	rows, err := db.Query("SELECT id, risk_level, summary, detail, dimensions, logs_analyzed, status, duration_ms, run_at FROM system_analysis_task_history ORDER BY id DESC LIMIT 50")
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -820,7 +819,7 @@ func (p *ProxyServer) handleGetKeyResults(w http.ResponseWriter, r *http.Request
 	riskFilter := r.URL.Query().Get("risk")
 	historyFilter := r.URL.Query().Get("history_id")
 	var results []DBSystemAnalysisKeyResult
-	q := gormDB.Order("run_at DESC, id DESC")
+	q := gormDB.Order("id DESC")
 	if riskFilter != "" {
 		q = q.Where("risk_level = ?", riskFilter)
 	}

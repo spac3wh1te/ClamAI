@@ -41,10 +41,10 @@ export interface SecurityAlert {
 }
 
 export interface SecurityStats {
-  total_checks: number;
-  blocked: number;
-  allowed: number;
-  by_type: Record<string, number>;
+  total: number;
+  unresolved: number;
+  today: number;
+  hour24: number;
 }
 
 export interface AlertFilterParams {
@@ -54,6 +54,7 @@ export interface AlertFilterParams {
   severity?: string;
   direction?: string;
   trigger_type?: string;
+  exclude_trigger_type?: string;
   search?: string;
 }
 
@@ -71,10 +72,13 @@ export const securityApi = {
     if (params?.severity) query.set("severity", params.severity);
     if (params?.direction) query.set("direction", params.direction);
     if (params?.trigger_type) query.set("trigger_type", params.trigger_type);
+    if (params?.exclude_trigger_type) query.set("exclude_trigger_type", params.exclude_trigger_type);
     if (params?.search) query.set("search", params.search);
     const qs = query.toString();
     return apiRequest<{ alerts: SecurityAlert[]; total: number }>("GET", `/security/alerts${qs ? "?" + qs : ""}`);
   },
+
+  getStats: (source = "content") => apiRequest<SecurityStats>("GET", `/security/stats?source=${source}`),
 
   checkContent: (content: string, caller?: string) =>
     apiRequest<{ safe: boolean; issues: any[] }>("POST", "/security/check", { content, caller }),

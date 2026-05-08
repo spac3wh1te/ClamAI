@@ -11,7 +11,6 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	_ "modernc.org/sqlite"
 )
 
 var (
@@ -20,51 +19,16 @@ var (
 )
 
 func initDB() error {
-	var err error
-	initDBDriver()
-
-	if isPostgres() {
-		dsn := os.Getenv("CLAMAI_DATABASE_URL")
-		if dsn == "" {
-			return fmt.Errorf("server mode with postgres requires CLAMAI_DATABASE_URL env var")
-		}
-		db, err = sql.Open("postgres", dsn)
-		if err != nil {
-			return fmt.Errorf("failed to open postgres: %w", err)
-		}
-	} else {
-		dbPath := filepath.Join(getDataDir(), "clamai.db")
-		log.Printf("[INFO] initDB: opening database at %s", dbPath)
-		db, err = sql.Open("sqlite", dbPath)
-		if err != nil {
-			return fmt.Errorf("failed to open database: %w", err)
-		}
-		db.SetMaxOpenConns(1)
-	}
-
-	if err := createTables(); err != nil {
-		return fmt.Errorf("failed to create tables: %w", err)
-	}
-
-	if err := migrateProviderKeys(); err != nil {
-		log.Printf("[WARN] initDB: migration provider_keys failed (non-fatal): %v", err)
-	}
-
-	if err := migrateAPIKeysUserID(); err != nil {
-		log.Printf("[WARN] initDB: migration api_keys_user_id failed (non-fatal): %v", err)
-	}
-
-	if err := migrateAPIKeysLastSynced(); err != nil {
-		log.Printf("[WARN] initDB: migration api_keys_last_synced failed (non-fatal): %v", err)
-	}
-
-	if err := migrateRequestLogsColumns(); err != nil {
-		log.Printf("[WARN] initDB: migration request_logs_columns failed (non-fatal): %v", err)
+	if err := initGormDB(); err != nil {
+		return fmt.Errorf("initGormDB: %w", err)
 	}
 
 	if err := migrateFromJSON(); err != nil {
 		log.Printf("[WARN] initDB: migration from JSON failed (non-fatal): %v", err)
 	}
+
+	migrateAdminToUsers()
+	backfillSeverity()
 
 	log.Printf("[INFO] initDB: database initialized successfully")
 	initTaskCounters()
@@ -203,6 +167,7 @@ func migrateAPIKeysLastSynced() error {
 func migrateRequestLogsColumns() error {
 	cols := map[string]string{
 		"is_proxy_call":      "INTEGER DEFAULT 0",
+		"call_type":          "TEXT DEFAULT ''",
 		"upstream_request_headers":  "TEXT DEFAULT ''",
 		"upstream_response_headers": "TEXT DEFAULT ''",
 		"upstream_request_body":    "TEXT DEFAULT ''",

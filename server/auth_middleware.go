@@ -60,20 +60,12 @@ func isNoAuthPath(path string) bool {
 
 func isAdminPath(path string) bool {
 	adminPrefixes := []string{
-		"/api/v1/providers",
-		"/api/v1/api-keys",
-		"/api/v1/keys",
-		"/api/v1/stats/usage",
-		"/api/v1/stats/alerts",
-		"/api/v1/stats/callers",
-		"/api/v1/stats/security-tokens",
 		"/api/v1/users",
 		"/api/v1/security/config",
-		"/api/v1/security/alerts",
 		"/api/v1/security/vectors",
 		"/api/v1/ratelimit/",
-		"/api/v1/proxy/test",
 		"/api/v1/agent/",
+		"/api/v1/stats/service-logs",
 	}
 	for _, prefix := range adminPrefixes {
 		if strings.HasPrefix(path, prefix) {
@@ -205,6 +197,65 @@ func userIDForQuery(r *http.Request) string {
 	return claims.UserID
 }
 
+func resolveUserIDFromRequest(r *http.Request) string {
+	if claims := getUserFromContext(r); claims != nil {
+		return claims.UserID
+	}
+	rawKey := extractAPIKeyFromRequest(r)
+	if rawKey != "" {
+		apiKeysMu.Lock()
+		if info, ok := apiKeys[rawKey]; ok && info.UserID != "" {
+			apiKeysMu.Unlock()
+			return info.UserID
+		}
+		apiKeysMu.Unlock()
+	}
+	return ""
+}
+
+func resolveAPIKeyIDFromRequest(r *http.Request) string {
+	rawKey := extractAPIKeyFromRequest(r)
+	if rawKey != "" {
+		apiKeysMu.Lock()
+		if info, ok := apiKeys[rawKey]; ok {
+			apiKeysMu.Unlock()
+			return info.ID
+		}
+		apiKeysMu.Unlock()
+	}
+	return ""
+}
+
+func getUserAndRole(r *http.Request) (string, bool) {
+	claims := getUserFromContext(r)
+	if claims == nil {
+		return "", false
+	}
+	return claims.UserID, claims.Role == "admin"
+}
+
+func getAdminUserIDs() []string {
+	users, _ := dbListUsers()
+	var ids []string
+	for _, u := range users {
+		if role, ok := u["role"].(string); ok && role == "admin" {
+			if id, ok := u["id"].(string); ok {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 func requireTaskOwnership(w http.ResponseWriter, r *http.Request, taskID string, taskTable string) bool {
 	uid := userIDForQuery(r)
 	if uid == "" {
@@ -292,7 +343,7 @@ func generateRefreshTokenString() string {
 }
 
 func storeRefreshToken(username, token string) error {
-	expiresAt := time.Now().Add(refreshTokenExpiry).UTC().Format(time.RFC3339)
+	expiresAt := formatTimeUTC(time.Now().Add(refreshTokenExpiry))
 	_, err := db.Exec(`INSERT OR REPLACE INTO refresh_tokens (token, username, expires_at) VALUES (?, ?, ?)`,
 		token, username, expiresAt)
 	return err

@@ -129,7 +129,7 @@ func (s *SQLiteVecDB) InsertSample(sample *VectorSample) (int64, error) {
 	result, err := db.Exec(`INSERT INTO vector_samples (content, category, source, embedding, created_at, auto_added)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		sample.Content, sample.Category, sample.Source,
-		embBytes, sample.CreatedAt.UTC().Format(time.RFC3339), autoAdded)
+		embBytes, formatTimeUTC(sample.CreatedAt), autoAdded)
 	if err != nil {
 		return 0, err
 	}

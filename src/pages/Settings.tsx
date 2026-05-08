@@ -20,6 +20,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { useCurrentUser } from "../context/UserContext";
 import { useApp } from "../context/AppContext";
 import { useSetup } from "../context/SetupContext";
 import { useTheme, THEMES, type ThemeName } from "../context/ThemeContext";
@@ -74,6 +75,7 @@ export default function Settings() {
   const [hasChanges, setHasChanges] = useState(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const { changePassword } = useAuth();
+  const { isAdmin } = useCurrentUser();
   const { setTheme, setLocale, setTimezone } = useApp();
   const { theme: currentTheme, setTheme: setUITheme } = useTheme();
   const [oldPwd, setOldPwd] = useState("");
@@ -374,6 +376,7 @@ export default function Settings() {
         </button>
       </div>
 
+      {isAdmin && (<>
       <div className="bg-card rounded-lg p-6 border border-border">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -500,6 +503,7 @@ export default function Settings() {
       </div>
 
       {/* 主题风格 */}
+      </>)}
       <div className="bg-card rounded-lg p-6 border border-border">
         <div className="flex items-center gap-2 mb-4">
           <Palette className="w-5 h-5 text-primary" />
@@ -535,6 +539,7 @@ export default function Settings() {
         </div>
       </div>
 
+      {isAdmin && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 服务连接管理 */}
         <div className="bg-card rounded-lg p-6 border border-border lg:col-span-2">
@@ -977,6 +982,26 @@ export default function Settings() {
           </div>
         </div>
       </div>
+      )}
+
+      {!isAdmin && (
+      <div className="bg-card rounded-lg p-6 border border-border">
+        <h2 className="text-xl font-semibold mb-4">界面配置</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">语言</label>
+            <select
+              value={config.ui.language}
+              onChange={(e) => updateConfig("ui", "language", e.target.value)}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option value="zh-CN">中文</option>
+              <option value="en-US">English</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      )}
 
       <div className="bg-card rounded-lg p-6 border border-border">
         <h2 className="text-xl font-semibold mb-4">修改密码</h2>

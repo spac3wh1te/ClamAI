@@ -292,7 +292,7 @@ func (p *ProxyServer) handleUpdateThreatRule(w http.ResponseWriter, r *http.Requ
 	}
 
 	patternsJSON, _ := sonic.Marshal(input.Patterns)
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := formatTimeNow()
 	db.Exec(`UPDATE threat_rules SET threat_type=?, name=?, patterns_json=?, severity=?, enabled=?, updated_at=? WHERE id=?`,
 		input.ThreatType, input.Name, string(patternsJSON), input.Severity, input.Enabled, now, id)
 

@@ -416,6 +416,16 @@ func (ps *ProxyServer) handleUpdateProviderByID(w http.ResponseWriter, r *http.R
 		http.Error(w, "missing provider id", http.StatusBadRequest)
 		return
 	}
+	userID, isAdmin := getUserAndRole(r)
+	if !isAdmin && userID != "" {
+		var p DBProvider
+		if err := gormDB.Select("created_by").Where("id = ?", id).First(&p).Error; err == nil {
+			if p.CreatedBy != userID {
+				http.Error(w, "Forbidden: not your provider", http.StatusForbidden)
+				return
+			}
+		}
+	}
 	var provider map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&provider); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -446,6 +456,16 @@ func (ps *ProxyServer) handleDeleteProviderByID(w http.ResponseWriter, r *http.R
 	if id == "" {
 		http.Error(w, "missing provider id", http.StatusBadRequest)
 		return
+	}
+	userID, isAdmin := getUserAndRole(r)
+	if !isAdmin && userID != "" {
+		var p DBProvider
+		if err := gormDB.Select("created_by").Where("id = ?", id).First(&p).Error; err == nil {
+			if p.CreatedBy != userID {
+				http.Error(w, "Forbidden: not your provider", http.StatusForbidden)
+				return
+			}
+		}
 	}
 	if err := dbDeleteProvider(id); err != nil {
 		log.Printf("[ERROR] handleDeleteProviderByID: dbDeleteProvider failed: %v", err)

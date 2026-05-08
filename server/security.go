@@ -465,6 +465,7 @@ func (p *ProxyServer) setupSecurityRoutes(api *mux.Router) {
 	api.HandleFunc("/security/config", p.handleGetSecurityConfig).Methods("GET")
 	api.HandleFunc("/security/config", p.handleUpdateSecurityConfig).Methods("PUT")
 	api.HandleFunc("/security/alerts", p.handleGetSecurityAlerts).Methods("GET")
+	api.HandleFunc("/security/stats", p.handleGetSecurityStats).Methods("GET")
 	api.HandleFunc("/security/alerts/{id}/resolve", p.handleResolveAlert).Methods("PUT")
 }
 
@@ -523,10 +524,22 @@ func (p *ProxyServer) handleGetSecurityAlerts(w http.ResponseWriter, r *http.Req
 	severity := r.URL.Query().Get("severity")
 	direction := r.URL.Query().Get("direction")
 	triggerType := r.URL.Query().Get("trigger_type")
+	excludeTriggerType := r.URL.Query().Get("exclude_trigger_type")
 	search := r.URL.Query().Get("search")
-	alerts, total := dbGetAlerts(limit, offset, resolved, severity, direction, triggerType, search)
+	uid, isAdmin := getUserAndRole(r)
+	alerts, total := dbGetAlerts(limit, offset, resolved, severity, direction, triggerType, search, excludeTriggerType, uid, isAdmin)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"alerts": alerts, "total": total})
+}
+
+func (p *ProxyServer) handleGetSecurityStats(w http.ResponseWriter, r *http.Request) {
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		source = "content"
+	}
+	stats := dbGetAlertStats(source)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 func (p *ProxyServer) handleResolveAlert(w http.ResponseWriter, r *http.Request) {

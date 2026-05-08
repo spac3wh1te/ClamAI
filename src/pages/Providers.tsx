@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { providersApi, ProviderConfig } from "../api/providers";
 import { logInfo, logError } from "../utils/log";
+import { useCurrentUser } from "../context/UserContext";
 import {
   Plus,
   Trash2,
@@ -11,6 +12,7 @@ import {
   X,
   Server,
   Key,
+  User,
 } from "lucide-react";
 
 interface TestProviderResult {
@@ -22,6 +24,7 @@ interface TestProviderResult {
 
 export default function Providers() {
   const queryClient = useQueryClient();
+  const { isAdmin, currentUser } = useCurrentUser();
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editProvider, setEditProvider] = useState<ProviderConfig | null>(null);
@@ -174,6 +177,8 @@ export default function Providers() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
+                  {(isAdmin || provider.created_by === currentUser?.userId) && (
+                  <>
                   <button
                     onClick={() => testMutation.mutate(provider.id)}
                     className="p-1 hover:bg-secondary rounded transition-colors"
@@ -195,6 +200,8 @@ export default function Providers() {
                   >
                     <Trash2 size={16} />
                   </button>
+                  </>
+                  )}
                 </div>
               </div>
 
@@ -233,6 +240,17 @@ export default function Providers() {
                   </span>
                   <span className="text-sm">{(provider.models || []).length} 个</span>
                 </div>
+
+                {/* 创建者 */}
+                {provider.created_by_name && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">创建者</span>
+                  <span className="text-sm flex items-center gap-1">
+                    <User size={12} />
+                    {provider.created_by_name}
+                  </span>
+                </div>
+                )}
 
                 {/* 基础URL */}
                 <div className="text-xs text-muted-foreground truncate">

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { statsApi } from "../api/stats";
 import { apiRequest } from "../api/client";
+import { useCurrentUser } from "../context/UserContext";
 import {
   Activity,
   Zap,
@@ -16,6 +17,7 @@ import {
   FileSearch,
   Gauge,
   Users,
+  Globe,
 } from "lucide-react";
 import {
   Bar,
@@ -92,6 +94,7 @@ function getProviderType(name: string): string {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { isAdmin } = useCurrentUser();
   const [timeRange, setTimeRange] = useState<"10m" | "1h" | "1d" | "7d" | "30d">("1d");
 
   const periodMap: Record<string, number> = { "10m": 10, "1h": 60, "1d": 1440, "7d": 10080, "30d": 43200 };
@@ -117,7 +120,7 @@ export default function Dashboard() {
 
   const { data: callerTop10 } = useQuery({
     queryKey: ["caller-top10", period],
-    queryFn: () => apiRequest<{ callers: { api_key_used: string; client_ip: string; requests: number; input_tokens: number; output_tokens: number }[] }>("GET", `/stats/callers?period=${period}`),
+    queryFn: () => apiRequest<{ callers: { api_key_used: string; requests: number; input_tokens: number; output_tokens: number }[]; ips: { client_ip: string; requests: number; input_tokens: number; output_tokens: number }[] }>("GET", `/stats/callers?period=${period}`),
     staleTime: 0, refetchInterval: 15000,
   });
 
@@ -196,12 +199,13 @@ export default function Dashboard() {
 
   const xAxisInterval = timeRange === "1h" ? 4 : timeRange === "1d" ? 3 : timeRange === "30d" ? 2 : 0;
 
-  const quickActions = [
-    { icon: Eye, label: "调用者分析", desc: "分析API调用行为", href: "/security-square", color: "from-violet-500/20 to-purple-500/10", iconColor: "text-violet-400", border: "border-violet-500/20" },
-    { icon: FileSearch, label: "Skills检测", desc: "检测文档注入风险", href: "/security-square", color: "from-amber-500/20 to-yellow-500/10", iconColor: "text-amber-400", border: "border-amber-500/20" },
-    { icon: Shield, label: "安全防护", desc: "配置内容过滤规则", href: "/security", color: "from-primary/20 to-primary/5", iconColor: "text-primary", border: "border-primary/20" },
-    { icon: Gauge, label: "流量控制", desc: "模型限流与配额", href: "/rate-limit", color: "from-emerald-500/20 to-green-500/10", iconColor: "text-emerald-400", border: "border-emerald-500/20" },
+  const allQuickActions = [
+    { icon: Eye, label: "调用者分析", desc: "分析API调用行为", href: "/security-tools", color: "from-violet-500/20 to-purple-500/10", iconColor: "text-violet-400", border: "border-violet-500/20", adminOnly: true },
+    { icon: FileSearch, label: "Skills检测", desc: "检测文档注入风险", href: "/security-tools", color: "from-amber-500/20 to-yellow-500/10", iconColor: "text-amber-400", border: "border-amber-500/20", adminOnly: false },
+    { icon: Shield, label: "安全防护", desc: "配置内容过滤规则", href: "/security", color: "from-primary/20 to-primary/5", iconColor: "text-primary", border: "border-primary/20", adminOnly: true },
+    { icon: Gauge, label: "流量控制", desc: "模型限流与配额", href: "/rate-limit", color: "from-emerald-500/20 to-green-500/10", iconColor: "text-emerald-400", border: "border-emerald-500/20", adminOnly: true },
   ];
+  const quickActions = allQuickActions.filter((a) => isAdmin || !a.adminOnly);
 
   return (
     <div className="space-y-6">
@@ -444,27 +448,50 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Caller Top 10 */}
-      {callerTop10?.callers && callerTop10.callers.length > 0 && (
-        <div className="bg-card rounded-xl p-6 border border-border">
-          <div className="flex items-center gap-2 mb-4">
-            <Users className="w-4 h-4 text-amber-400" />
-            <h3 className="text-sm font-semibold text-foreground">调用者 TOP 10</h3>
-          </div>
-          <div className="grid grid-cols-2 gap-x-6">
-            {callerTop10.callers.slice(0, 10).map((c, i) => (
-              <div key={i} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[11px] text-muted-foreground w-5 shrink-0">{i + 1}</span>
-                  <div className="min-w-0">
-                    <p className="text-xs text-foreground truncate font-mono">{getCallerDisplayName(c.api_key_used)}</p>
-                    <p className="text-[10px] text-muted-foreground">{c.client_ip}</p>
-                  </div>
-                </div>
-                <span className="text-xs text-muted-foreground shrink-0 ml-3">{c.requests} 次</span>
+      {/* Caller Top 10 & IP Top 10 */}
+      {(callerTop10?.callers || callerTop10?.ips) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Caller Top 10 */}
+          {callerTop10?.callers && callerTop10.callers.length > 0 && (
+            <div className="bg-card rounded-xl p-6 border border-border">
+              <div className="flex items-center gap-2 mb-4">
+                <Users className="w-4 h-4 text-amber-400" />
+                <h3 className="text-sm font-semibold text-foreground">授权密钥调用 TOP 10</h3>
               </div>
-            ))}
-          </div>
+              <div className="space-y-1">
+                {callerTop10.callers.slice(0, 10).map((c, i) => (
+                  <div key={i} className="flex items-center justify-between py-1.5 border-b border-border last:border-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[11px] text-muted-foreground w-5 shrink-0">{i + 1}</span>
+                      <p className="text-xs text-foreground truncate font-mono">{getCallerDisplayName(c.api_key_used)}</p>
+                    </div>
+                    <span className="text-xs text-muted-foreground shrink-0 ml-3">{c.requests} 次</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* IP Top 10 */}
+          {callerTop10?.ips && callerTop10.ips.length > 0 && (
+            <div className="bg-card rounded-xl p-6 border border-border">
+              <div className="flex items-center gap-2 mb-4">
+                <Globe className="w-4 h-4 text-blue-400" />
+                <h3 className="text-sm font-semibold text-foreground">调用地址 TOP 10</h3>
+              </div>
+              <div className="space-y-1">
+                {callerTop10.ips.slice(0, 10).map((c, i) => (
+                  <div key={i} className="flex items-center justify-between py-1.5 border-b border-border last:border-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[11px] text-muted-foreground w-5 shrink-0">{i + 1}</span>
+                      <p className="text-xs text-foreground truncate font-mono">{c.client_ip}</p>
+                    </div>
+                    <span className="text-xs text-muted-foreground shrink-0 ml-3">{c.requests} 次</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

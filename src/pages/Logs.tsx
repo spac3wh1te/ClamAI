@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { statsApi } from "../api/stats";
+import { useCurrentUser } from "../context/UserContext";
 import {
   FileText,
   Search,
@@ -32,6 +33,7 @@ interface RequestLog {
   path: string;
   method: string;
   is_proxy_call?: boolean;
+  call_type?: string;
   upstream_request_headers?: string;
   upstream_response_headers?: string;
   upstream_request_body?: string;
@@ -175,19 +177,21 @@ const STATUS_OPTIONS = [
 
 const TYPE_OPTIONS = [
   { value: "", label: "全部类型" },
-  { value: "direct", label: "直连" },
-  { value: "proxy", label: "代理" },
+  { value: "direct-call", label: "直接调用" },
+  { value: "model-call", label: "模型调用" },
+  { value: "security", label: "安全分析" },
 ];
 
 export default function Logs() {
   const [tab, setTab] = useState<"request" | "service">("request");
+  const { isAdmin } = useCurrentUser();
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">日志</h1>
-          <p className="text-muted-foreground mt-2">调用记录与服务日志查询</p>
+          <p className="text-muted-foreground mt-2">调用记录{isAdmin && "与服务日志"}查询</p>
         </div>
       </div>
 
@@ -198,16 +202,18 @@ export default function Logs() {
         >
           <span className="flex items-center gap-2"><FileText size={14} /> 调用日志</span>
         </button>
+        {isAdmin && (
         <button
           onClick={() => setTab("service")}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${tab === "service" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
         >
           <span className="flex items-center gap-2"><Server size={14} /> 服务日志</span>
         </button>
+        )}
       </div>
 
       {tab === "request" && <RequestLogsTab />}
-      {tab === "service" && <ServiceLogsTab />}
+      {tab === "service" && isAdmin && <ServiceLogsTab />}
     </div>
   );
 }
@@ -252,8 +258,9 @@ function RequestLogsTab() {
         });
       const matchesType =
         selectedType === "" ||
-        (selectedType === "direct" && !log.is_proxy_call) ||
-        (selectedType === "proxy" && !!log.is_proxy_call);
+        (selectedType === "security" && ((log.call_type || "").includes("security") || (log.path || "").includes("security"))) ||
+        (selectedType === "model-call" && ((log.call_type === "model-call") || log.is_proxy_call || !!log.upstream_provider)) ||
+        (selectedType === "direct-call" && log.call_type === "direct-call");
       return matchesSearch && matchesStatus && matchesType;
     }) || [];
 
@@ -346,7 +353,7 @@ function RequestLogsTab() {
         <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
       ) : filteredLogs.length > 0 ? (
         <div className="bg-card rounded-lg border border-border overflow-hidden">
-          <div className="grid grid-cols-[40px_140px_55px_80px_1fr_65px_55px_90px_30px] gap-1 px-4 py-2.5 bg-secondary font-medium text-[11px] text-muted-foreground items-center">
+          <div className="grid grid-cols-[40px_140px_75px_80px_1fr_65px_55px_90px_30px] gap-1 px-4 py-2.5 bg-secondary font-medium text-[11px] text-muted-foreground items-center">
             <span>ID</span><span>时间</span><span>类型</span><span>提供商</span><span>模型</span><span>延迟</span><span>状态</span><span>Token</span><span></span>
           </div>
           <div className="divide-y divide-border">
@@ -356,16 +363,20 @@ function RequestLogsTab() {
               return (
                 <div key={log.id}>
                   <div
-                    className={`grid grid-cols-[40px_140px_55px_80px_1fr_65px_55px_90px_30px] gap-1 px-4 py-2 hover:bg-secondary/50 transition-colors items-center text-sm cursor-pointer ${isExpanded ? "bg-secondary/30" : ""}`}
+                    className={`grid grid-cols-[40px_140px_75px_80px_1fr_65px_55px_90px_30px] gap-1 px-4 py-2 hover:bg-secondary/50 transition-colors items-center text-sm cursor-pointer ${isExpanded ? "bg-secondary/30" : ""}`}
                     onClick={() => setExpandedId(isExpanded ? null : String(log.id))}
                   >
                     <span className="text-xs text-muted-foreground">{log.id}</span>
                     <span className="text-[11px] text-muted-foreground">{formatTimestamp(log.timestamp)}</span>
                     <span>
-                      {log.is_proxy_call ? (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400">代理</span>
+                      {log.call_type === "security" || (log.path || "").includes("security") ? (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400">安全分析</span>
+                      ) : (log.call_type === "model-call" || log.is_proxy_call || log.upstream_provider) ? (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400">模型调用</span>
+                      ) : log.call_type === "direct-call" ? (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400">直接调用</span>
                       ) : (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400">直连</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-500/10 text-gray-400">客户端请求</span>
                       )}
                     </span>
                     <span className="text-xs font-medium truncate">{log.provider}</span>
@@ -384,10 +395,91 @@ function RequestLogsTab() {
                         </div>
                       )}
 
-                      {!log.is_proxy_call ? (
+                      {(log.call_type === "security" || (log.path || "").includes("security")) ? (
                         <div className="space-y-3">
                           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400" /> 客户端 → ClamAI (直连)
+                            <span className="w-2 h-2 rounded-full bg-purple-400" /> 安全分析
+                          </h4>
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                            <SectionPanel
+                              title="Request"
+                              titleColor="bg-blue-500/10 text-blue-400"
+                              method={log.method || "POST"}
+                              path={log.path || "/security/semantic-check"}
+                              body={log.request_content}
+                            />
+                            <SectionPanel
+                              title="Response"
+                              titleColor="bg-emerald-500/10 text-emerald-400"
+                              body={log.response_content}
+                            />
+                          </div>
+                        </div>
+                      ) : (log.call_type === "model-call" || log.is_proxy_call || log.upstream_provider) ? (
+                          <div className="space-y-4">
+                            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-blue-400" /> 模型调用
+                            </h4>
+                          <div className="grid grid-cols-1 gap-4">
+                            <div>
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className="text-xs font-semibold text-emerald-400">① 客户端请求</span>
+                                <span className="text-[10px] text-muted-foreground">(原始请求)</span>
+                              </div>
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                                <SectionPanel
+                                  title="Request"
+                                  titleColor="bg-blue-500/10 text-blue-400"
+                                  method={log.method || "POST"}
+                                  path={log.path || "/v1/chat/completions"}
+                                  headers={log.upstream_request_headers}
+                                  body={log.request_content}
+                                />
+                                <SectionPanel
+                                  title="Response"
+                                  titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`}
+                                  headers={JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" })}
+                                  body={log.response_content}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 px-2">
+                              <div className="flex-1 border-t border-border" />
+                              <ArrowRight size={14} className="text-muted-foreground" />
+                              <span className="text-[10px] text-muted-foreground">→ {log.upstream_provider || "上游"}</span>
+                              <ArrowRight size={14} className="text-muted-foreground" />
+                              <div className="flex-1 border-t border-border" />
+                            </div>
+
+                            <div>
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className="text-xs font-semibold text-purple-400">② 上游转发</span>
+                                <span className="text-[10px] text-muted-foreground">(→ {log.upstream_model || log.model})</span>
+                              </div>
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                                <SectionPanel
+                                  title="Request"
+                                  titleColor="bg-blue-500/10 text-blue-400"
+                                  method="POST"
+                                  path="/v1/chat/completions"
+                                  headers={log.upstream_request_headers}
+                                  body={log.upstream_request_body || log.request_content}
+                                />
+                                <SectionPanel
+                                  title="Response"
+                                  titleColor="bg-emerald-500/10 text-emerald-400"
+                                  headers={log.upstream_response_headers}
+                                  body={log.upstream_response_body || log.response_content}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : log.call_type === "direct-call" ? (
+                        <div className="space-y-3">
+                          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" /> 直接调用
                           </h4>
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                             <SectionPanel
@@ -412,72 +504,34 @@ function RequestLogsTab() {
                               body={log.response_content}
                             />
                           </div>
-                          {log.upstream_provider && (
-                            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs">
-                              <span className="font-medium text-blue-400">关联上游:</span>
-                              <span className="ml-2 text-muted-foreground">{log.upstream_provider} / {log.upstream_model}</span>
-                            </div>
-                          )}
                         </div>
                       ) : (
-                        <div className="space-y-4">
+                        <div className="space-y-3">
                           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-blue-400" /> 代理转发详情
+                            <span className="w-2 h-2 rounded-full bg-gray-400" /> 客户端请求
                           </h4>
-                          <div className="grid grid-cols-1 gap-4">
-                            <div>
-                              <div className="flex items-center gap-2 mb-2">
-                                <span className="text-xs font-semibold text-emerald-400">① 客户端 → ClamAI</span>
-                                <span className="text-[10px] text-muted-foreground">(外部调用)</span>
-                              </div>
-                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                                <SectionPanel
-                                  title="Request"
-                                  titleColor="bg-blue-500/10 text-blue-400"
-                                  method={log.method || "POST"}
-                                  path={log.path || "/v1/chat/completions"}
-                                  headers={JSON.stringify({ "Content-Type": "application/json", "X-API-Key": log.api_key_used ? log.api_key_used.slice(0, 10) + "..." : "", "X-Client-IP": log.client_ip || "" })}
-                                  body={log.request_content}
-                                />
-                                <SectionPanel
-                                  title="Response"
-                                  titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`}
-                                  headers={JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" })}
-                                  body={log.response_content}
-                                />
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2 px-2">
-                              <div className="flex-1 border-t border-border" />
-                              <ArrowRight size={14} className="text-muted-foreground" />
-                              <span className="text-[10px] text-muted-foreground">ClamAI 转发至 {log.upstream_provider || "上游"}</span>
-                              <ArrowRight size={14} className="text-muted-foreground" />
-                              <div className="flex-1 border-t border-border" />
-                            </div>
-
-                            <div>
-                              <div className="flex items-center gap-2 mb-2">
-                                <span className="text-xs font-semibold text-purple-400">② ClamAI → {log.upstream_provider || "上游服务商"}</span>
-                                <span className="text-[10px] text-muted-foreground">(上游调用 → {log.upstream_model || log.model})</span>
-                              </div>
-                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                                <SectionPanel
-                                  title="Request"
-                                  titleColor="bg-blue-500/10 text-blue-400"
-                                  method="POST"
-                                  path="/v1/chat/completions"
-                                  headers={log.upstream_request_headers}
-                                  body={log.upstream_request_body || log.request_content}
-                                />
-                                <SectionPanel
-                                  title="Response"
-                                  titleColor="bg-emerald-500/10 text-emerald-400"
-                                  headers={log.upstream_response_headers}
-                                  body={log.upstream_response_body || log.response_content}
-                                />
-                              </div>
-                            </div>
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                            <SectionPanel
+                              title="Request"
+                              titleColor="bg-blue-500/10 text-blue-400"
+                              method={log.method || "POST"}
+                              path={log.path || "/v1/chat/completions"}
+                              headers={(() => {
+                                try {
+                                  const body = JSON.parse(log.request_content || "{}");
+                                  return JSON.stringify({ "Content-Type": "application/json", "X-API-Key": log.api_key_used ? log.api_key_used.slice(0, 10) + "..." : "", "X-Client-IP": log.client_ip || "" });
+                                } catch { return ""; }
+                              })()}
+                              body={log.request_content}
+                            />
+                            <SectionPanel
+                              title="Response"
+                              titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`}
+                              headers={(() => {
+                                return JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" });
+                              })()}
+                              body={log.response_content}
+                            />
                           </div>
                         </div>
                       )}

@@ -199,6 +199,7 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 		Method:          "POST",
 		RequestContent:  truncateStr(content, 500),
 		ResponseContent: truncateStr(string(respBody), 5000),
+		CallType:       "security",
 	}
 	dbInsertLog(entry)
 

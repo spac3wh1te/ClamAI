@@ -17,6 +17,14 @@ const (
 	maxCaptureSize = 1 << 20
 )
 
+func formatTimeUTC(t time.Time) string {
+	return t.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z")
+}
+
+func formatTimeNow() string {
+	return formatTimeUTC(time.Now())
+}
+
 func generateID() string {
 	b := make([]byte, 12)
 	rand.Read(b)
@@ -194,8 +202,9 @@ type RequestLog struct {
 	RequestContent  string    `json:"request_content"`
 	ResponseContent string    `json:"response_content"`
 	UserID          string    `json:"user_id"`
-	APIKeyID        string    `json:"api_key_id"`
-	IsProxyCall     bool      `json:"is_proxy_call"`
+	APIKeyID        string `json:"api_key_id"`
+	IsProxyCall     bool   `json:"is_proxy_call"`
+	CallType        string `json:"call_type"`
 	UpstreamReqHeaders  string `json:"upstream_request_headers"`
 	UpstreamRespHeaders string `json:"upstream_response_headers"`
 	UpstreamReqBody     string `json:"upstream_request_body"`

@@ -9,6 +9,7 @@ export interface SecurityApp {
   component: React.ComponentType;
   order?: number;
   enabled?: boolean;
+  adminOnly?: boolean;
 }
 
 const registry: SecurityApp[] = [];
@@ -22,9 +23,9 @@ export function registerSecurityApp(app: SecurityApp) {
   }
 }
 
-export function getSecurityApps(): SecurityApp[] {
+export function getSecurityApps(admin?: boolean): SecurityApp[] {
   return registry
-    .filter((a) => a.enabled !== false)
+    .filter((a) => a.enabled !== false && (admin !== false || !a.adminOnly))
     .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
 }
 
