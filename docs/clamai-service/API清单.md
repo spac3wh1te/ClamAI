@@ -139,7 +139,8 @@
 |------|------|------|--------|------|
 | GET | `/config` | 获取安全配置 | - | `{enabled, keywords, keyword_levels, block_message, semantic_model}` |
 | PUT | `/config` | 更新安全配置 | `{enabled?, keywords?, ...}` | `{success}` |
-| GET | `/alerts` | 获取安全告警列表 | `limit`, `offset`, `severity`, `direction`, `trigger_type`, `search` | `{alerts: [{id, timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved}], total}` |
+| GET | `/alerts` | 获取安全告警列表 | `limit`, `offset`, `severity`, `direction`, `trigger_type`, `search`, `exclude_trigger_type`, `source` | `{alerts: [{id, timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved}], total}` |
+| GET | `/stats` | 获取安全告警统计 | `source`（content/system_analysis） | `{total, unresolved, today, hour24}` |
 | PUT | `/alerts/{id}/resolve` | 标记告警已处理 | `{resolved: bool}` | `{success}` |
 
 ---
@@ -194,7 +195,7 @@
 
 > **前缀**：`/api/v1/system-analysis`
 > **鉴权**：Bearer Token
-> **说明**：系统级 AI 行为分析，采用两层威胁检测架构。Stage 1 基于规则的特征评分（零 AI 成本），Stage 2 AI 深度分析（仅 Stage 1 触发阈值时调用），节省算力。
+> **说明**：系统级 AI 行为分析，采用两层威胁检测架构。Stage 1 基于规则的特征评分（零 AI 成本），Stage 2 AI 深度分析（仅 Stage 1 触发阈值时调用），节省算力。分析结果通过 KeyResult 展示在威胁挖掘页面，不再写入 security_alerts。
 
 | 方法 | 路径 | 功能 | 请求体 | 响应 |
 |------|------|------|--------|------|
