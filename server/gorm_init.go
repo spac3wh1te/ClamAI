@@ -105,5 +105,7 @@ func autoMigrateAll() error {
 		&DBStatByModel{},
 		&DBStatDaily{},
 		&DBAdminUser{},
+		&DBVectorSample{},
+		&DBVectorConfig{},
 	)
 }

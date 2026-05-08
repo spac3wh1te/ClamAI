@@ -161,7 +161,7 @@ func (p *ProxyServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if username != "" {
-		db.Exec(`DELETE FROM refresh_tokens WHERE username = ?`, username)
+		gormDB.Where("username = ?", username).Delete(&DBRefreshToken{})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})

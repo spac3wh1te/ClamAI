@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -74,39 +73,17 @@ func initVectorDB() error {
 }
 
 func (s *SQLiteVecDB) createTables() error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS vector_samples (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		content TEXT NOT NULL,
-		category TEXT DEFAULT 'general',
-		source TEXT DEFAULT 'manual',
-		embedding BLOB,
-		created_at DATETIME NOT NULL,
-		auto_added INTEGER DEFAULT 0
-	)`)
-	if err != nil {
-		return fmt.Errorf("create vector_samples: %w", err)
-	}
+	gormDB.AutoMigrate(&DBVectorSample{}, &DBVectorConfig{})
 
-	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_vector_samples_category ON vector_samples(category)`)
-	if err != nil {
-		log.Printf("[WARN] createTables: index on vector_samples.category: %v", err)
-	}
-
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS vector_config (
-		id INTEGER PRIMARY KEY CHECK (id = 1),
-		embedding_model TEXT DEFAULT '',
-		vector_dim INTEGER DEFAULT 1024,
-		similarity_threshold REAL DEFAULT 0.85,
-		updated_at DATETIME
-	)`)
-	if err != nil {
-		log.Printf("[WARN] createTables: vector_config: %v", err)
-	}
-
-	_, err = db.Exec(`INSERT OR IGNORE INTO vector_config (id, embedding_model, vector_dim, similarity_threshold, updated_at)
-		VALUES (1, '', 1024, 0.85, datetime('now'))`)
-	if err != nil {
-		log.Printf("[WARN] createTables: insert default vector_config: %v", err)
+	var count int64
+	gormDB.Model(&DBVectorConfig{}).Where("id = 1").Count(&count)
+	if count == 0 {
+		gormDB.Create(&DBVectorConfig{
+			ID:                  1,
+			EmbeddingModel:      "",
+			VectorDim:           1024,
+			SimilarityThreshold: 0.85,
+		})
 	}
 
 	return nil
@@ -121,62 +98,56 @@ func (s *SQLiteVecDB) InsertSample(sample *VectorSample) (int64, error) {
 		return 0, fmt.Errorf("serialize embedding: %w", err)
 	}
 
-	autoAdded := 0
-	if sample.AutoAdded {
-		autoAdded = 1
+	record := DBVectorSample{
+		Content:   sample.Content,
+		Category:  sample.Category,
+		Source:    sample.Source,
+		Embedding: embBytes,
+		CreatedAt: sample.CreatedAt.UTC(),
+		AutoAdded: sample.AutoAdded,
 	}
-
-	result, err := db.Exec(`INSERT INTO vector_samples (content, category, source, embedding, created_at, auto_added)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		sample.Content, sample.Category, sample.Source,
-		embBytes, formatTimeUTC(sample.CreatedAt), autoAdded)
-	if err != nil {
+	if err := gormDB.Create(&record).Error; err != nil {
 		return 0, err
 	}
 
-	id, _ := result.LastInsertId()
-	log.Printf("[INFO] InsertVectorSample: id=%d, category=%s, source=%s, auto=%v", id, sample.Category, sample.Source, sample.AutoAdded)
-	return id, nil
+	log.Printf("[INFO] InsertVectorSample: id=%d, category=%s, source=%s, auto=%v", record.ID, sample.Category, sample.Source, sample.AutoAdded)
+	return record.ID, nil
 }
 
 func (s *SQLiteVecDB) DeleteSample(id int64) error {
-	_, err := db.Exec("DELETE FROM vector_samples WHERE id = ?", id)
-	return err
+	return gormDB.Where("id = ?", id).Delete(&DBVectorSample{}).Error
 }
 
 func (s *SQLiteVecDB) ListSamples(category string, limit, offset int) ([]VectorSample, int, error) {
-	var total int
+	q := gormDB.Model(&DBVectorSample{})
 	if category != "" {
-		db.QueryRow("SELECT COUNT(*) FROM vector_samples WHERE category = ?", category).Scan(&total)
-	} else {
-		db.QueryRow("SELECT COUNT(*) FROM vector_samples").Scan(&total)
+		q = q.Where("category = ?", category)
 	}
 
-	var rows *sql.Rows
-	var err error
+	var total int64
+	q.Count(&total)
+
+	var records []DBVectorSample
+	query := gormDB.Model(&DBVectorSample{}).Order("id DESC").Limit(limit).Offset(offset)
 	if category != "" {
-		rows, err = db.Query("SELECT id, content, category, source, created_at, auto_added FROM vector_samples WHERE category = ? ORDER BY id DESC LIMIT ? OFFSET ?", category, limit, offset)
-	} else {
-		rows, err = db.Query("SELECT id, content, category, source, created_at, auto_added FROM vector_samples ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
+		query = query.Where("category = ?", category)
 	}
-	if err != nil {
+	if err := query.Find(&records).Error; err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
 
-	var samples []VectorSample
-	for rows.Next() {
-		var s VectorSample
-		var createdAt string
-		var autoAdded int
-		if err := rows.Scan(&s.ID, &s.Content, &s.Category, &s.Source, &createdAt, &autoAdded); err != nil {
-			continue
+	samples := make([]VectorSample, len(records))
+	for i, r := range records {
+		samples[i] = VectorSample{
+			ID:        r.ID,
+			Content:   r.Content,
+			Category:  r.Category,
+			Source:    r.Source,
+			CreatedAt: r.CreatedAt,
+			AutoAdded: r.AutoAdded,
 		}
-		s.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		s.AutoAdded = autoAdded == 1
-		samples = append(samples, s)
 	}
-	return samples, total, nil
+	return samples, int(total), nil
 }
 
 func (s *SQLiteVecDB) Search(queryVec []float32, topK int, threshold float64) ([]VectorSearchResult, error) {
@@ -187,11 +158,10 @@ func (s *SQLiteVecDB) Search(queryVec []float32, topK int, threshold float64) ([
 		return nil, nil
 	}
 
-	rows, err := db.Query("SELECT id, content, category, embedding FROM vector_samples WHERE embedding IS NOT NULL LIMIT 10000")
-	if err != nil {
+	var records []DBVectorSample
+	if err := gormDB.Where("embedding IS NOT NULL").Limit(10000).Find(&records).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	type candidate struct {
 		id         int64
@@ -201,22 +171,15 @@ func (s *SQLiteVecDB) Search(queryVec []float32, topK int, threshold float64) ([
 	}
 	var candidates []candidate
 
-	for rows.Next() {
-		var id int64
-		var content, category string
-		var embBlob []byte
-		if err := rows.Scan(&id, &content, &category, &embBlob); err != nil {
-			continue
-		}
-
-		embVec, err := bytesToFloat32(embBlob)
+	for _, r := range records {
+		embVec, err := bytesToFloat32(r.Embedding)
 		if err != nil || len(embVec) == 0 {
 			continue
 		}
 
 		sim := cosineSimilarity(queryVec, embVec)
 		if sim >= threshold {
-			candidates = append(candidates, candidate{id: id, content: content, category: category, similarity: sim})
+			candidates = append(candidates, candidate{id: r.ID, content: r.Content, category: r.Category, similarity: sim})
 		}
 	}
 
@@ -360,31 +323,32 @@ func dbLoadVectorConfig() VectorConfig {
 		VectorDim:           defaultVectorDim,
 		SimilarityThreshold: 0.85,
 	}
-	row := db.QueryRow("SELECT embedding_model, vector_dim, similarity_threshold FROM vector_config WHERE id = 1")
-	var embModel string
-	var dim int
-	var threshold float64
-	if err := row.Scan(&embModel, &dim, &threshold); err != nil {
-		if err != sql.ErrNoRows {
-			log.Printf("[WARN] dbLoadVectorConfig: %v", err)
-		}
+
+	var record DBVectorConfig
+	if err := gormDB.Where("id = 1").First(&record).Error; err != nil {
 		return cfg
 	}
-	cfg.EmbeddingModel = embModel
-	if dim > 0 {
-		cfg.VectorDim = dim
+
+	cfg.EmbeddingModel = record.EmbeddingModel
+	if record.VectorDim > 0 {
+		cfg.VectorDim = record.VectorDim
 	}
-	if threshold > 0 {
-		cfg.SimilarityThreshold = threshold
+	if record.SimilarityThreshold > 0 {
+		cfg.SimilarityThreshold = record.SimilarityThreshold
 	}
 	return cfg
 }
 
 func dbSaveVectorConfig(cfg *VectorConfig) {
-	_, err := db.Exec(`INSERT OR REPLACE INTO vector_config (id, embedding_model, vector_dim, similarity_threshold, updated_at)
-		VALUES (1, ?, ?, ?, datetime('now'))`,
-		cfg.EmbeddingModel, cfg.VectorDim, cfg.SimilarityThreshold)
-	if err != nil {
+	now := time.Now().UTC()
+	record := DBVectorConfig{
+		ID:                  1,
+		EmbeddingModel:      cfg.EmbeddingModel,
+		VectorDim:           cfg.VectorDim,
+		SimilarityThreshold: cfg.SimilarityThreshold,
+		UpdatedAt:           &now,
+	}
+	if err := gormDB.Save(&record).Error; err != nil {
 		log.Printf("[ERROR] dbSaveVectorConfig: %v", err)
 	}
 }

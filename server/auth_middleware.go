@@ -267,7 +267,7 @@ func requireTaskOwnership(w http.ResponseWriter, r *http.Request, taskID string,
 		return false
 	}
 	var owner string
-	err := db.QueryRow("SELECT created_by FROM "+taskTable+" WHERE id = ?", taskID).Scan(&owner)
+	err := gormDB.Table(taskTable).Where("id = ?", taskID).Select("created_by").Row().Scan(&owner)
 	if err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return false
@@ -288,11 +288,8 @@ func extractBearerToken(r *http.Request) string {
 }
 
 func adminExists() bool {
-	if dbAdminExists() {
-		return true
-	}
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM admin_users").Scan(&count)
+	var count int64
+	gormDB.Model(&DBAdminUser{}).Count(&count)
 	return count > 0
 }
 
@@ -301,8 +298,13 @@ func createAdmin(username, password string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`INSERT OR REPLACE INTO admin_users (id, username, password_hash, role) VALUES (1, ?, ?, 'admin')`, username, hash)
-	if err != nil {
+	admin := DBAdminUser{
+		ID:           1,
+		Username:     username,
+		PasswordHash: hash,
+		Role:         "admin",
+	}
+	if err := gormDB.Save(&admin).Error; err != nil {
 		return err
 	}
 	return dbCreateUser("user_admin", username, username, hash, "admin")
@@ -325,13 +327,13 @@ func verifyUser(username, password string) (map[string]interface{}, error) {
 }
 
 func getAdminUsername() string {
-	var username string
-	err := db.QueryRow("SELECT username FROM users WHERE role = 'admin' LIMIT 1").Scan(&username)
-	if err == nil {
-		return username
+	var user DBUser
+	if err := gormDB.Where("role = ?", "admin").First(&user).Error; err == nil {
+		return user.Username
 	}
-	db.QueryRow("SELECT username FROM admin_users WHERE role = 'admin' LIMIT 1").Scan(&username)
-	return username
+	var admin DBAdminUser
+	gormDB.Where("role = ?", "admin").First(&admin)
+	return admin.Username
 }
 
 func generateRefreshTokenString() string {
@@ -343,46 +345,29 @@ func generateRefreshTokenString() string {
 }
 
 func storeRefreshToken(username, token string) error {
-	expiresAt := formatTimeUTC(time.Now().Add(refreshTokenExpiry))
-	_, err := db.Exec(`INSERT OR REPLACE INTO refresh_tokens (token, username, expires_at) VALUES (?, ?, ?)`,
-		token, username, expiresAt)
-	return err
+	expiresAt := time.Now().Add(refreshTokenExpiry).UTC()
+	return gormDB.Save(&DBRefreshToken{
+		Token:     token,
+		Username:  username,
+		ExpiresAt: expiresAt,
+	}).Error
 }
 
 func consumeRefreshToken(token string) (string, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return "", fmt.Errorf("internal error")
-	}
-	defer tx.Rollback()
-
-	var username string
-	var expiresAt string
-	err = tx.QueryRow(`SELECT username, expires_at FROM refresh_tokens WHERE token = ?`, token).Scan(&username, &expiresAt)
-	if err != nil {
+	var rt DBRefreshToken
+	if err := gormDB.Where("token = ?", token).First(&rt).Error; err != nil {
 		return "", fmt.Errorf("invalid refresh token")
 	}
 
-	exp, err := time.Parse(time.RFC3339, expiresAt)
-	if err != nil || time.Now().After(exp) {
-		tx.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
-		tx.Commit()
+	if time.Now().After(rt.ExpiresAt) {
+		gormDB.Where("token = ?", token).Delete(&DBRefreshToken{})
 		return "", fmt.Errorf("refresh token expired")
 	}
 
-	result, err := tx.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, token)
-	if err != nil {
+	if err := gormDB.Where("token = ?", token).Delete(&DBRefreshToken{}).Error; err != nil {
 		return "", fmt.Errorf("internal error")
 	}
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		return "", fmt.Errorf("refresh token already consumed")
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("internal error")
-	}
-	return username, nil
+	return rt.Username, nil
 }
 
 func issueTokenPairForUser(user map[string]interface{}) map[string]interface{} {

@@ -456,6 +456,28 @@ type DBAdminUser struct {
 
 func (DBAdminUser) TableName() string { return "admin_users" }
 
+type DBVectorSample struct {
+	ID        int64     `gorm:"primaryKey;autoIncrement"`
+	Content   string    `gorm:"type:text;not null"`
+	Category  string    `gorm:"size:64;default:'general'"`
+	Source    string    `gorm:"size:64;default:'manual'"`
+	Embedding []byte    `gorm:"type:blob"`
+	CreatedAt time.Time
+	AutoAdded bool      `gorm:"default:false"`
+}
+
+func (DBVectorSample) TableName() string { return "vector_samples" }
+
+type DBVectorConfig struct {
+	ID                  int     `gorm:"primaryKey;check:id = 1"`
+	EmbeddingModel      string  `gorm:"size:256;default:''"`
+	VectorDim           int     `gorm:"default:1024"`
+	SimilarityThreshold float64 `gorm:"default:0.85"`
+	UpdatedAt           *time.Time
+}
+
+func (DBVectorConfig) TableName() string { return "vector_config" }
+
 func nullTimeToPtr(ns sql.NullString) *time.Time {
 	if !ns.Valid || ns.String == "" {
 		return nil

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -132,8 +131,8 @@ func loadSystemAnalysisConfig() {
 
 func initSystemAnalysisTaskCounter() {
 	var maxNo string
-	row := db.QueryRow("SELECT COALESCE(MAX(task_no), 'S0000') FROM system_analysis_tasks")
-	if row.Scan(&maxNo) == nil && len(maxNo) > 1 {
+	gormDB.Model(&DBSystemAnalysisTask{}).Select("COALESCE(MAX(task_no), 'S0000')").Row().Scan(&maxNo)
+	if len(maxNo) > 1 {
 		var n int
 		if _, err := fmt.Sscanf(maxNo, "S%d", &n); err == nil {
 			systemAnalysisTaskCounter = int64(n)
@@ -168,31 +167,26 @@ func startSystemAnalysisScheduler() {
 }
 
 func dbGetDueSystemAnalysisTasks() ([]map[string]interface{}, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, interval_minutes FROM system_analysis_tasks WHERE schedule_type='periodic' AND status='running' AND next_run_at <= ?", now)
-	if err != nil {
+	now := time.Now().UTC()
+	var dbTasks []DBSystemAnalysisTask
+	if err := gormDB.Where("schedule_type = ? AND status = ? AND next_run_at <= ?", "periodic", "running", now).
+		Find(&dbTasks).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var tasks []map[string]interface{}
-	for rows.Next() {
-		var id, taskNo, name, apiKeyID, model, timeRange string
-		var intervalMinutes int
-		if rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &intervalMinutes) == nil {
-			tasks = append(tasks, map[string]interface{}{
-				"id": id, "task_no": taskNo, "name": name,
-				"api_key_id": apiKeyID, "model": model, "time_range": timeRange,
-				"interval_minutes": intervalMinutes,
-			})
-		}
+	for _, t := range dbTasks {
+		tasks = append(tasks, map[string]interface{}{
+			"id": t.ID, "task_no": t.TaskNo, "name": t.Name,
+			"api_key_id": t.APIKeyID, "model": t.Model, "time_range": t.TimeRange,
+			"interval_minutes": t.IntervalMinutes,
+		})
 	}
 	return tasks, nil
 }
 
 func dbSetSystemTaskNextRun(id string, intervalMinutes int) error {
-	nextRun := formatTimeUTC(time.Now().Add(time.Duration(intervalMinutes) * time.Minute))
-	_, err := db.Exec("UPDATE system_analysis_tasks SET next_run_at=? WHERE id=?", nextRun, id)
-	return err
+	nextRun := time.Now().Add(time.Duration(intervalMinutes) * time.Minute).UTC()
+	return gormDB.Model(&DBSystemAnalysisTask{}).Where("id = ?", id).Update("next_run_at", nextRun).Error
 }
 
 func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
@@ -529,10 +523,15 @@ func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
 }
 
 func dbUpdateSystemAnalysisTaskResult(id, riskLevel, summary, detail, dimensions string, logsAnalyzed int) error {
-	now := formatTimeNow()
-	_, err := db.Exec(`UPDATE system_analysis_tasks SET result_risk_level=?, result_summary=?, result_detail=?, result_dimensions=?, result_logs_analyzed=?, last_run_at=? WHERE id=?`,
-		riskLevel, summary, detail, dimensions, logsAnalyzed, now, id)
-	return err
+	now := time.Now().UTC()
+	return gormDB.Model(&DBSystemAnalysisTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"result_risk_level":    riskLevel,
+		"result_summary":       summary,
+		"result_detail":        detail,
+		"result_dimensions":    dimensions,
+		"result_logs_analyzed": logsAnalyzed,
+		"last_run_at":          now,
+	}).Error
 }
 
 func dbInsertSystemAnalysisTaskHistory(taskID, riskLevel, summary, detail, dimensions, status string, logsAnalyzed int, durationMs int64, threatScore int, threatSignals string, analyzedCount, skippedCount int) int64 {
@@ -578,10 +577,20 @@ func dbInsertSecurityAlertFromSystem(taskID, riskLevel, summary, model, apiKey, 
 		severity = "low"
 	}
 	contentPreview := fmt.Sprintf("[系统分析] 风险等级: %s, 摘要: %s", riskLevel, summary)
-	_, err := db.Exec(`INSERT INTO security_alerts (timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, action, resolved, client_ip)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'system')`,
-		formatTimeUTC(now), direction, mode, triggerType, fmt.Sprintf("[系统/%s]", riskLevel), severity, contentPreview, model, maskAPIKeyForLog(apiKey), "记录告警")
-	if err != nil {
+	if err := gormDB.Create(&DBSecurityAlert{
+		Timestamp:      now,
+		Direction:      direction,
+		Mode:           mode,
+		TriggerType:    triggerType,
+		TriggerDetail:  fmt.Sprintf("[系统/%s]", riskLevel),
+		Severity:       severity,
+		ContentPreview: contentPreview,
+		Model:          model,
+		APIKeyUsed:     maskAPIKeyForLog(apiKey),
+		Action:         "记录告警",
+		Resolved:       false,
+		ClientIP:       "system",
+	}).Error; err != nil {
 		log.Printf("[ERROR] dbInsertSecurityAlertFromSystem: %v", err)
 	}
 }
@@ -644,101 +653,96 @@ func ensureSystemAnalysisTask() {
 	if !cfg.Enabled || cfg.Model == "" {
 		return
 	}
-	var count int
-	row := db.QueryRow("SELECT COUNT(*) FROM system_analysis_tasks WHERE created_by='__system__'")
-	if row.Scan(&count) == nil && count == 0 {
+	var count int64
+	gormDB.Model(&DBSystemAnalysisTask{}).Where("created_by = ?", "__system__").Count(&count)
+	if count == 0 {
 		id := fmt.Sprintf("sys_%d", time.Now().UnixNano())
 		taskNo := nextSystemTaskNo()
-		nextRun := formatTimeUTC(time.Now().Add(time.Duration(cfg.IntervalMinutes) * time.Minute))
-		db.Exec(`INSERT INTO system_analysis_tasks (id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, next_run_at, created_at, created_by)
-			VALUES (?, ?, ?, ?, ?, ?, 'periodic', ?, 'running', ?, ?, '__system__')`,
-			id, taskNo, "系统行为分析", cfg.APIKeyID, cfg.Model, cfg.TimeRange, cfg.IntervalMinutes, nextRun, formatTimeNow())
+		nextRun := time.Now().Add(time.Duration(cfg.IntervalMinutes) * time.Minute).UTC()
+		gormDB.Create(&DBSystemAnalysisTask{
+			ID:              id,
+			TaskNo:          taskNo,
+			Name:            "系统行为分析",
+			APIKeyID:        cfg.APIKeyID,
+			Model:           cfg.Model,
+			TimeRange:       cfg.TimeRange,
+			ScheduleType:    "periodic",
+			IntervalMinutes: cfg.IntervalMinutes,
+			Status:          "running",
+			NextRunAt:       &nextRun,
+			CreatedBy:       "__system__",
+		})
 		log.Printf("[INFO] ensureSystemAnalysisTask: created system task id=%s", id)
 	} else {
-		db.Exec(`UPDATE system_analysis_tasks SET api_key_id=?, model=?, time_range=?, interval_minutes=?, status='running' WHERE created_by='__system__'`,
-			cfg.APIKeyID, cfg.Model, cfg.TimeRange, cfg.IntervalMinutes)
+		gormDB.Model(&DBSystemAnalysisTask{}).Where("created_by = ?", "__system__").Updates(map[string]interface{}{
+			"api_key_id":       cfg.APIKeyID,
+			"model":            cfg.Model,
+			"time_range":       cfg.TimeRange,
+			"interval_minutes": cfg.IntervalMinutes,
+			"status":           "running",
+		})
 	}
 }
 
 func (p *ProxyServer) handleListSystemAnalysisTasks(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, schedule_type, interval_minutes, status, last_run_at, next_run_at, created_at, result_risk_level, result_summary, result_detail, result_dimensions, result_logs_analyzed FROM system_analysis_tasks ORDER BY created_at DESC")
-	if err != nil {
+	var tasks []DBSystemAnalysisTask
+	if err := gormDB.Order("created_at DESC").Find(&tasks).Error; err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var tasks []map[string]interface{}
-	for rows.Next() {
-		var id, taskNo, name, apiKeyID, model, timeRange, scheduleType, status string
-		var intervalMinutes int
-		var lastRunAt, nextRunAt, createdAt, resultRiskLevel, resultSummary, resultDetail, resultDimensions sql.NullString
-		var resultLogsAnalyzed int
-		if rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &scheduleType, &intervalMinutes, &status, &lastRunAt, &nextRunAt, &createdAt, &resultRiskLevel, &resultSummary, &resultDetail, &resultDimensions, &resultLogsAnalyzed) != nil {
-			continue
+
+	result := make([]map[string]interface{}, len(tasks))
+	for i, t := range tasks {
+		m := map[string]interface{}{
+			"id": t.ID, "task_no": t.TaskNo, "name": t.Name,
+			"api_key_id": t.APIKeyID, "model": t.Model,
+			"time_range": t.TimeRange, "schedule_type": t.ScheduleType,
+			"interval_minutes": t.IntervalMinutes, "status": t.Status,
+			"result_logs_analyzed": t.LogsAnalyzed,
 		}
-		task := map[string]interface{}{
-			"id": id, "task_no": taskNo, "name": name,
-			"api_key_id": apiKeyID, "model": model,
-			"time_range": timeRange, "schedule_type": scheduleType,
-			"interval_minutes": intervalMinutes, "status": status,
-			"result_logs_analyzed": resultLogsAnalyzed,
+		if t.LastRunAt != nil {
+			m["last_run_at"] = formatTimeUTC(*t.LastRunAt)
 		}
-		if lastRunAt.Valid {
-			task["last_run_at"] = lastRunAt.String
+		if t.NextRunAt != nil {
+			m["next_run_at"] = formatTimeUTC(*t.NextRunAt)
 		}
-		if nextRunAt.Valid {
-			task["next_run_at"] = nextRunAt.String
+		m["created_at"] = formatTimeUTC(t.CreatedAt)
+		if t.RiskLevel != "" {
+			m["result_risk_level"] = t.RiskLevel
 		}
-		if createdAt.Valid {
-			task["created_at"] = createdAt.String
+		if t.Summary != "" {
+			m["result_summary"] = t.Summary
 		}
-		if resultRiskLevel.Valid {
-			task["result_risk_level"] = resultRiskLevel.String
+		if t.Detail != "" {
+			m["result_detail"] = t.Detail
 		}
-		if resultSummary.Valid {
-			task["result_summary"] = resultSummary.String
+		if t.Dimensions != "" {
+			m["result_dimensions"] = t.Dimensions
 		}
-		if resultDetail.Valid {
-			task["result_detail"] = resultDetail.String
-		}
-		if resultDimensions.Valid && resultDimensions.String != "" {
-			task["result_dimensions"] = resultDimensions.String
-		}
-		tasks = append(tasks, task)
+		result[i] = m
 	}
-	if tasks == nil {
-		tasks = []map[string]interface{}{}
-	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"tasks": tasks})
+	json.NewEncoder(w).Encode(map[string]interface{}{"tasks": result})
 }
 
 func (p *ProxyServer) handleGetSystemAnalysisTaskHistory(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, risk_level, summary, detail, dimensions, logs_analyzed, status, duration_ms, run_at FROM system_analysis_task_history ORDER BY id DESC LIMIT 50")
-	if err != nil {
+	var records []DBSystemAnalysisTaskHistory
+	if err := gormDB.Order("id DESC").Limit(50).Find(&records).Error; err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	var history []map[string]interface{}
-	for rows.Next() {
-		var id int
-		var riskLevel, summary, detail, dimensions, status, runAt string
-		var logsAnalyzed int
-		var durationMs int64
-		if rows.Scan(&id, &riskLevel, &summary, &detail, &dimensions, &logsAnalyzed, &status, &durationMs, &runAt) != nil {
-			continue
+
+	history := make([]map[string]interface{}, len(records))
+	for i, h := range records {
+		history[i] = map[string]interface{}{
+			"id": h.ID, "risk_level": h.RiskLevel, "summary": h.Summary,
+			"detail": h.Detail, "dimensions": h.Dimensions,
+			"logs_analyzed": h.LogsAnalyzed, "status": h.Status,
+			"duration_ms": h.DurationMs, "run_at": formatTimeUTC(h.RunAt),
 		}
-		history = append(history, map[string]interface{}{
-			"id": id, "risk_level": riskLevel, "summary": summary,
-			"detail": detail, "dimensions": dimensions,
-			"logs_analyzed": logsAnalyzed, "status": status,
-			"duration_ms": durationMs, "run_at": runAt,
-		})
 	}
-	if history == nil {
-		history = []map[string]interface{}{}
-	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"history": history})
 }
@@ -752,58 +756,46 @@ func (p *ProxyServer) handleTriggerSystemAnalysis(w http.ResponseWriter, r *http
 
 	finish := func() { atomic.StoreInt32(&systemAnalysisRunning, 0) }
 
-	rows, err := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, interval_minutes FROM system_analysis_tasks WHERE created_by='__system__' LIMIT 1")
-	if err != nil {
+	var task DBSystemAnalysisTask
+	if err := gormDB.Where("created_by = ?", "__system__").Limit(1).Find(&task).Error; err != nil {
 		log.Printf("[SYS-ANALYSIS] trigger ERROR query tasks: %v", err)
 		finish()
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
-	if rows.Next() {
-		var id, taskNo, name, apiKeyID, model, timeRange string
-		var intervalMinutes int
-		if rows.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &intervalMinutes) == nil {
-			if model == "" {
-				log.Printf("[SYS-ANALYSIS] trigger SKIP: model is empty for task %s", id)
-				finish()
+
+	if task.ID != "" {
+		if task.Model == "" {
+			log.Printf("[SYS-ANALYSIS] trigger SKIP: model is empty for task %s", task.ID)
+			finish()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "未配置分析模型，请先保存配置"})
+			return
+		}
+		t := map[string]interface{}{
+			"id": task.ID, "task_no": task.TaskNo, "name": task.Name,
+			"api_key_id": task.APIKeyID, "model": task.Model,
+			"time_range": task.TimeRange, "interval_minutes": task.IntervalMinutes,
+		}
+		log.Printf("[SYS-ANALYSIS] trigger: starting task id=%s model=%s", task.ID, task.Model)
+		safeGo(func() { defer finish(); executeSystemAnalysisTask(task.ID, t) })
+	} else {
+		log.Printf("[SYS-ANALYSIS] trigger: no __system__ task found, ensuring one exists")
+		ensureSystemAnalysisTask()
+		var task2 DBSystemAnalysisTask
+		if err := gormDB.Where("created_by = ?", "__system__").Limit(1).Find(&task2).Error; err == nil && task2.ID != "" {
+			if task2.Model == "" {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "未配置分析模型，请先保存配置"})
 				return
 			}
-			task := map[string]interface{}{
-				"id": id, "task_no": taskNo, "name": name,
-				"api_key_id": apiKeyID, "model": model,
-				"time_range": timeRange, "interval_minutes": intervalMinutes,
+			t := map[string]interface{}{
+				"id": task2.ID, "task_no": task2.TaskNo, "name": task2.Name,
+				"api_key_id": task2.APIKeyID, "model": task2.Model,
+				"time_range": task2.TimeRange, "interval_minutes": task2.IntervalMinutes,
 			}
-			log.Printf("[SYS-ANALYSIS] trigger: starting task id=%s model=%s", id, model)
-			safeGo(func() { defer finish(); executeSystemAnalysisTask(id, task) })
-		}
-	} else {
-		log.Printf("[SYS-ANALYSIS] trigger: no __system__ task found, ensuring one exists")
-		ensureSystemAnalysisTask()
-		rows2, err2 := db.Query("SELECT id, task_no, name, api_key_id, model, time_range, interval_minutes FROM system_analysis_tasks WHERE created_by='__system__' LIMIT 1")
-		if err2 == nil {
-			if rows2.Next() {
-				var id, taskNo, name, apiKeyID, model, timeRange string
-				var intervalMinutes int
-				if rows2.Scan(&id, &taskNo, &name, &apiKeyID, &model, &timeRange, &intervalMinutes) == nil {
-					if model == "" {
-						rows2.Close()
-						w.Header().Set("Content-Type", "application/json")
-						json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "未配置分析模型，请先保存配置"})
-						return
-					}
-					task := map[string]interface{}{
-						"id": id, "task_no": taskNo, "name": name,
-						"api_key_id": apiKeyID, "model": model,
-						"time_range": timeRange, "interval_minutes": intervalMinutes,
-					}
-					log.Printf("[SYS-ANALYSIS] trigger: starting created task id=%s model=%s", id, model)
-					safeGo(func() { defer finish(); executeSystemAnalysisTask(id, task) })
-				}
-			}
-			rows2.Close()
+			log.Printf("[SYS-ANALYSIS] trigger: starting created task id=%s model=%s", task2.ID, task2.Model)
+			safeGo(func() { defer finish(); executeSystemAnalysisTask(task2.ID, t) })
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

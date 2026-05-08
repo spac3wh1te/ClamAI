@@ -231,7 +231,7 @@ func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 	newHash, _ := hashPassword(req.NewPassword)
 	dbUpdateUserPassword(claims.UserID, newHash)
-	db.Exec(`DELETE FROM refresh_tokens WHERE username = ?`, claims.Username)
+	gormDB.Where("username = ?", claims.Username).Delete(&DBRefreshToken{})
 	w.Header().Set("Content-Type", "application/json")
 	user2, _ := dbGetUserByID(claims.UserID)
 	json.NewEncoder(w).Encode(issueTokenPairForUser(user2))

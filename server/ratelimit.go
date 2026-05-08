@@ -222,12 +222,11 @@ func (p *ProxyServer) rateLimitMiddleware(next http.Handler) http.Handler {
 
 func dbLoadRateLimitConfig() RateLimitConfig {
 	var cfg RateLimitConfig
-	row := db.QueryRow(`SELECT config_json FROM rate_limit_config WHERE id = 1`)
-	var configJSON string
-	if err := row.Scan(&configJSON); err != nil {
+	var record DBRateLimitConfig
+	if err := gormDB.Where("id = 1").First(&record).Error; err != nil {
 		return RateLimitConfig{}
 	}
-	json.Unmarshal([]byte(configJSON), &cfg)
+	json.Unmarshal([]byte(record.ConfigJSON), &cfg)
 	if cfg.ModelRPM == nil {
 		cfg.ModelRPM = make(map[string]int)
 	}
@@ -239,10 +238,7 @@ func dbLoadRateLimitConfig() RateLimitConfig {
 
 func dbSaveRateLimitConfig(cfg *RateLimitConfig) {
 	configJSON, _ := json.Marshal(cfg)
-	_, err := db.Exec(`INSERT OR REPLACE INTO rate_limit_config (id, config_json) VALUES (1, ?)`, string(configJSON))
-	if err != nil {
-		log.Printf("[ERROR] dbSaveRateLimitConfig: %v", err)
-	}
+	gormDB.Save(&DBRateLimitConfig{ID: 1, ConfigJSON: string(configJSON)})
 }
 
 func (p *ProxyServer) setupRateLimitRoutes(api *mux.Router) {

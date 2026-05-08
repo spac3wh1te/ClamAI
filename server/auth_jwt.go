@@ -109,13 +109,12 @@ func initJWTSecret() {
 }
 
 func getOrCreateJWTSecret() string {
-	row := db.QueryRow(`SELECT secret_value FROM admin_secrets WHERE key = 'jwt_secret'`)
-	var secret string
-	if err := row.Scan(&secret); err == nil && secret != "" {
-		return secret
+	var record DBAdminSecret
+	if err := gormDB.Where("key = ?", "jwt_secret").First(&record).Error; err == nil && record.SecretValue != "" {
+		return record.SecretValue
 	}
-	secret = generateAPIKey()
-	db.Exec(`INSERT OR REPLACE INTO admin_secrets (key, secret_value) VALUES ('jwt_secret', ?)`, secret)
+	secret := generateAPIKey()
+	gormDB.Save(&DBAdminSecret{Key: "jwt_secret", SecretValue: secret})
 	return secret
 }
 

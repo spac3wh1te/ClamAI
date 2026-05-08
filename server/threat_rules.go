@@ -45,8 +45,8 @@ var ThreatTypes = []ThreatTypeConfig{
 }
 
 func seedDefaultThreatRules() {
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM threat_rules").Scan(&count)
+	var count int64
+	gormDB.Model(&DBThreatRule{}).Count(&count)
 	if count > 0 {
 		return
 	}
@@ -136,8 +136,13 @@ func seedDefaultThreatRules() {
 
 	for _, s := range seeds {
 		patternsJSON, _ := sonic.Marshal(s.patterns)
-		db.Exec(`INSERT INTO threat_rules (threat_type, name, patterns_json, severity, enabled) VALUES (?, ?, ?, ?, 1)`,
-			s.threatType, s.name, string(patternsJSON), s.severity)
+		gormDB.Create(&DBThreatRule{
+			ThreatType:   s.threatType,
+			Name:         s.name,
+			PatternsJSON: string(patternsJSON),
+			Severity:     s.severity,
+			Enabled:      true,
+		})
 	}
 	log.Printf("[INFO] seedDefaultThreatRules: seeded %d default threat rules", len(seeds))
 }
@@ -149,27 +154,21 @@ func loadThreatRules() {
 	threatMatchers = make(map[string][]*regexp.Regexp)
 	threatRuleIds = make(map[string][]int64)
 
-	rows, err := db.Query("SELECT id, threat_type, patterns_json FROM threat_rules WHERE enabled = 1")
-	if err != nil {
+	var dbRules []DBThreatRule
+	if err := gormDB.Where("enabled = ?", true).Find(&dbRules).Error; err != nil {
 		log.Printf("[ERROR] loadThreatRules: %v", err)
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var id int64
-		var threatType, patternsJSON string
-		if rows.Scan(&id, &threatType, &patternsJSON) != nil {
-			continue
-		}
+	for _, rule := range dbRules {
 		var patterns []string
-		if sonic.Unmarshal([]byte(patternsJSON), &patterns) != nil {
+		if sonic.Unmarshal([]byte(rule.PatternsJSON), &patterns) != nil {
 			continue
 		}
 		for _, p := range patterns {
 			if re, err := regexp.Compile(p); err == nil {
-				threatMatchers[threatType] = append(threatMatchers[threatType], re)
-				threatRuleIds[threatType] = append(threatRuleIds[threatType], id)
+				threatMatchers[rule.ThreatType] = append(threatMatchers[rule.ThreatType], re)
+				threatRuleIds[rule.ThreatType] = append(threatRuleIds[rule.ThreatType], rule.ID)
 			}
 		}
 	}
@@ -204,41 +203,32 @@ func (p *ProxyServer) setupThreatRoutes(api *mux.Router) {
 
 func (p *ProxyServer) handleListThreatRules(w http.ResponseWriter, r *http.Request) {
 	threatType := r.URL.Query().Get("type")
-	query := "SELECT id, threat_type, name, patterns_json, severity, enabled, created_at, updated_at FROM threat_rules"
-	var args []interface{}
-	if threatType != "" {
-		query += " WHERE threat_type = ?"
-		args = append(args, threatType)
-	}
-	query += " ORDER BY threat_type, id"
 
-	rows, err := db.Query(query, args...)
-	if err != nil {
+	q := gormDB.Model(&DBThreatRule{}).Order("threat_type, id")
+	if threatType != "" {
+		q = q.Where("threat_type = ?", threatType)
+	}
+
+	var dbRules []DBThreatRule
+	if err := q.Find(&dbRules).Error; err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
 
 	var rules []map[string]interface{}
-	for rows.Next() {
-		var id int64
-		var tType, name, patternsJSON, severity string
-		var enabled int
-		var createdAt, updatedAt string
-		rows.Scan(&id, &tType, &name, &patternsJSON, &severity, &enabled, &createdAt, &updatedAt)
-
+	for _, rule := range dbRules {
 		var patterns []string
-		sonic.Unmarshal([]byte(patternsJSON), &patterns)
+		sonic.Unmarshal([]byte(rule.PatternsJSON), &patterns)
 
 		rules = append(rules, map[string]interface{}{
-			"id":          id,
-			"threat_type": tType,
-			"name":        name,
+			"id":          rule.ID,
+			"threat_type": rule.ThreatType,
+			"name":        rule.Name,
 			"patterns":    patterns,
-			"severity":    severity,
-			"enabled":     enabled == 1,
-			"created_at":  createdAt,
-			"updated_at":  updatedAt,
+			"severity":    rule.Severity,
+			"enabled":     rule.Enabled,
+			"created_at":  rule.CreatedAt,
+			"updated_at":  rule.UpdatedAt,
 		})
 	}
 
@@ -263,18 +253,22 @@ func (p *ProxyServer) handleCreateThreatRule(w http.ResponseWriter, r *http.Requ
 	}
 
 	patternsJSON, _ := sonic.Marshal(input.Patterns)
-	result, err := db.Exec(`INSERT INTO threat_rules (threat_type, name, patterns_json, severity, enabled) VALUES (?, ?, ?, ?, ?)`,
-		input.ThreatType, input.Name, string(patternsJSON), input.Severity, input.Enabled)
-	if err != nil {
+	rule := DBThreatRule{
+		ThreatType:   input.ThreatType,
+		Name:         input.Name,
+		PatternsJSON: string(patternsJSON),
+		Severity:     input.Severity,
+		Enabled:      input.Enabled,
+	}
+	if err := gormDB.Create(&rule).Error; err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	id, _ := result.LastInsertId()
 	loadThreatRules()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "success": true})
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": rule.ID, "success": true})
 }
 
 func (p *ProxyServer) handleUpdateThreatRule(w http.ResponseWriter, r *http.Request) {
@@ -292,9 +286,14 @@ func (p *ProxyServer) handleUpdateThreatRule(w http.ResponseWriter, r *http.Requ
 	}
 
 	patternsJSON, _ := sonic.Marshal(input.Patterns)
-	now := formatTimeNow()
-	db.Exec(`UPDATE threat_rules SET threat_type=?, name=?, patterns_json=?, severity=?, enabled=?, updated_at=? WHERE id=?`,
-		input.ThreatType, input.Name, string(patternsJSON), input.Severity, input.Enabled, now, id)
+	gormDB.Model(&DBThreatRule{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"threat_type":   input.ThreatType,
+		"name":          input.Name,
+		"patterns_json": string(patternsJSON),
+		"severity":      input.Severity,
+		"enabled":       input.Enabled,
+		"updated_at":    formatTimeNow(),
+	})
 
 	loadThreatRules()
 	w.Header().Set("Content-Type", "application/json")
@@ -303,7 +302,7 @@ func (p *ProxyServer) handleUpdateThreatRule(w http.ResponseWriter, r *http.Requ
 
 func (p *ProxyServer) handleDeleteThreatRule(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	db.Exec("DELETE FROM threat_rules WHERE id = ?", id)
+	gormDB.Where("id = ?", id).Delete(&DBThreatRule{})
 	loadThreatRules()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
@@ -321,23 +320,23 @@ func (p *ProxyServer) handleThreatStats(w http.ResponseWriter, r *http.Request) 
 	}
 	cutoff := time.Now().Add(-time.Duration(period) * time.Minute).UTC()
 
-	rows, err := db.Query(`SELECT trigger_type, COUNT(*) FROM security_alerts WHERE timestamp >= ? AND trigger_type LIKE 'threat:%' GROUP BY trigger_type`, cutoff.Format(time.RFC3339))
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{"by_type": map[string]int{}, "total": 0})
-		return
+	type alertGroup struct {
+		TriggerType string
+		Cnt         int
 	}
-	defer rows.Close()
+	var alertGroups []alertGroup
+	gormDB.Model(&DBSecurityAlert{}).
+		Select("trigger_type, COUNT(*) as cnt").
+		Where("timestamp >= ? AND trigger_type LIKE ?", cutoff.Format(time.RFC3339), "threat:%").
+		Group("trigger_type").
+		Find(&alertGroups)
 
 	byType := make(map[string]int)
 	total := 0
-	for rows.Next() {
-		var tType string
-		var cnt int
-		if rows.Scan(&tType, &cnt) == nil {
-			shortType := strings.TrimPrefix(tType, "threat:")
-			byType[shortType] = cnt
-			total += cnt
-		}
+	for _, ag := range alertGroups {
+		shortType := strings.TrimPrefix(ag.TriggerType, "threat:")
+		byType[shortType] = ag.Cnt
+		total += ag.Cnt
 	}
 
 	type ruleCount struct {
@@ -346,15 +345,10 @@ func (p *ProxyServer) handleThreatStats(w http.ResponseWriter, r *http.Request) 
 		Enabled    int    `json:"enabled"`
 	}
 	var ruleCounts []ruleCount
-	r2, _ := db.Query("SELECT threat_type, COUNT(*), SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) FROM threat_rules GROUP BY threat_type")
-	if r2 != nil {
-		defer r2.Close()
-		for r2.Next() {
-			var rc ruleCount
-			r2.Scan(&rc.ThreatType, &rc.Total, &rc.Enabled)
-			ruleCounts = append(ruleCounts, rc)
-		}
-	}
+	gormDB.Model(&DBThreatRule{}).
+		Select("threat_type, COUNT(*) as total, SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) as enabled").
+		Group("threat_type").
+		Find(&ruleCounts)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

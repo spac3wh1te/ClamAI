@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"log"
 	"net/http"
 	"regexp"
@@ -239,17 +238,14 @@ func defaultSecurityConfig() SecurityConfig {
 func dbLoadSecurityConfig() SecurityConfig {
 	cfg := defaultSecurityConfig()
 
-	row := db.QueryRow(`SELECT config_json FROM security_config WHERE id = 1`)
-	var configJSON string
-	err := row.Scan(&configJSON)
+	var record DBSecurityConfig
+	err := gormDB.Where("id = 1").First(&record).Error
 	if err != nil {
-		if err != sql.ErrNoRows {
-			log.Printf("[WARN] dbLoadSecurityConfig: %v", err)
-		}
+		log.Printf("[WARN] dbLoadSecurityConfig: %v", err)
 		return cfg
 	}
 
-	if err := sonic.Unmarshal([]byte(configJSON), &cfg); err != nil {
+	if err := sonic.Unmarshal([]byte(record.ConfigJSON), &cfg); err != nil {
 		log.Printf("[WARN] dbLoadSecurityConfig: parse error: %v", err)
 		return defaultSecurityConfig()
 	}
@@ -311,8 +307,7 @@ func dbLoadSecurityConfig() SecurityConfig {
 
 func dbSaveSecurityConfig(cfg *SecurityConfig) {
 	configJSON, _ := sonic.Marshal(cfg)
-	_, err := db.Exec(`INSERT OR REPLACE INTO security_config (id, config_json) VALUES (1, ?)`, string(configJSON))
-	if err != nil {
+	if err := gormDB.Save(&DBSecurityConfig{ID: 1, ConfigJSON: string(configJSON)}).Error; err != nil {
 		log.Printf("[ERROR] dbSaveSecurityConfig: %v", err)
 	}
 	rebuildMatchers(cfg)
@@ -333,13 +328,22 @@ func dbInsertAlert(alert *SecurityAlert) {
 	if severity == "" {
 		severity = severityFromTrigger(alert.TriggerType, alert.TriggerDetail)
 	}
-	_, err := db.Exec(`INSERT INTO security_alerts
-		(timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved, user_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-		alert.Timestamp.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z"), alert.Direction, alert.Mode,
-		alert.TriggerType, alert.TriggerDetail, severity, alert.ContentPreview,
-		alert.Model, alert.APIKeyUsed, alert.ClientIP, alert.Action, alert.UserID)
-	if err != nil {
+	record := DBSecurityAlert{
+		Timestamp:      alert.Timestamp.UTC().Truncate(time.Second),
+		Direction:      alert.Direction,
+		Mode:           alert.Mode,
+		TriggerType:    alert.TriggerType,
+		TriggerDetail:  alert.TriggerDetail,
+		Severity:       severity,
+		ContentPreview: alert.ContentPreview,
+		Model:          alert.Model,
+		APIKeyUsed:     alert.APIKeyUsed,
+		ClientIP:       alert.ClientIP,
+		Action:         alert.Action,
+		Resolved:       false,
+		UserID:         alert.UserID,
+	}
+	if err := gormDB.Create(&record).Error; err != nil {
 		log.Printf("[ERROR] dbInsertAlert: %v", err)
 	}
 }
@@ -373,74 +377,54 @@ func severityFromTrigger(triggerType, triggerDetail string) string {
 }
 
 func dbGetAlerts(limit, offset int, resolved *int, severity, direction, triggerType, search, excludeTriggerType, userID string, isAdmin bool) ([]map[string]interface{}, int) {
-	var total int
-	where := " WHERE 1=1"
-	var args []interface{}
+	var total int64
+	query := gormDB.Model(&DBSecurityAlert{})
 	if resolved != nil {
-		where += " AND resolved = ?"
-		args = append(args, *resolved)
+		query = query.Where("resolved = ?", *resolved)
 	}
 	if severity != "" {
-		where += " AND severity = ?"
-		args = append(args, severity)
+		query = query.Where("severity = ?", severity)
 	}
 	if direction != "" {
-		where += " AND direction = ?"
-		args = append(args, direction)
+		query = query.Where("direction = ?", direction)
 	}
 	if triggerType != "" {
-		where += " AND trigger_type LIKE ?"
-		args = append(args, triggerType+"%")
+		query = query.Where("trigger_type LIKE ?", triggerType+"%")
 	}
 	if excludeTriggerType != "" {
-		where += " AND trigger_type NOT LIKE ?"
-		args = append(args, excludeTriggerType+"%")
+		query = query.Where("trigger_type NOT LIKE ?", excludeTriggerType+"%")
 	}
 	if search != "" {
-		where += " AND (trigger_detail LIKE ? OR content_preview LIKE ? OR model LIKE ?)"
 		s := "%" + search + "%"
-		args = append(args, s, s, s)
+		query = query.Where("trigger_detail LIKE ? OR content_preview LIKE ? OR model LIKE ?", s, s, s)
 	}
 	if !isAdmin && userID != "" {
-		where += " AND user_id = ?"
-		args = append(args, userID)
+		query = query.Where("user_id = ?", userID)
 	}
-	db.QueryRow("SELECT COUNT(*) FROM security_alerts"+where, args...).Scan(&total)
+	query.Count(&total)
 
-	dataArgs := make([]interface{}, len(args))
-	copy(dataArgs, args)
-	dataArgs = append(dataArgs, limit, offset)
-
-	rows, err := db.Query("SELECT id, timestamp, direction, mode, trigger_type, trigger_detail, severity, content_preview, model, api_key_used, client_ip, action, resolved FROM security_alerts"+where+" ORDER BY id DESC LIMIT ? OFFSET ?", dataArgs...)
-	if err != nil {
-		log.Printf("[ERROR] dbGetAlerts: %v", err)
-		return nil, 0
-	}
-	defer rows.Close()
+	var records []DBSecurityAlert
+	query.Order("id DESC").Limit(limit).Offset(offset).Find(&records)
 
 	var alerts []map[string]interface{}
-	for rows.Next() {
-		var id int
-		var ts, direction, mode, triggerType, triggerDetail, severity, contentPreview, model, apiKeyUsed, clientIP, action string
-		var resolvedVal int
-		rows.Scan(&id, &ts, &direction, &mode, &triggerType, &triggerDetail, &severity, &contentPreview, &model, &apiKeyUsed, &clientIP, &action, &resolvedVal)
+	for _, r := range records {
 		alerts = append(alerts, map[string]interface{}{
-			"id":              id,
-			"timestamp":       ts,
-			"direction":       direction,
-			"mode":            mode,
-			"trigger_type":    triggerType,
-			"trigger_detail":  triggerDetail,
-			"severity":        severity,
-			"content_preview": contentPreview,
-			"model":           model,
-			"api_key_used":    apiKeyUsed,
-			"client_ip":       clientIP,
-			"action":          action,
-			"resolved":        resolvedVal,
+			"id":              r.ID,
+			"timestamp":       r.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
+			"direction":       r.Direction,
+			"mode":            r.Mode,
+			"trigger_type":    r.TriggerType,
+			"trigger_detail":  r.TriggerDetail,
+			"severity":        r.Severity,
+			"content_preview": r.ContentPreview,
+			"model":           r.Model,
+			"api_key_used":    r.APIKeyUsed,
+			"client_ip":       r.ClientIP,
+			"action":          r.Action,
+			"resolved":        r.Resolved,
 		})
 	}
-	return alerts, total
+	return alerts, int(total)
 }
 
 type AlertStats struct {
@@ -456,17 +440,29 @@ func dbGetAlertStats(source string) AlertStats {
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	hour24Start := now.Add(-24 * time.Hour)
 
-	var triggerTypeFilter string
+	baseQuery := gormDB.Model(&DBSecurityAlert{})
 	if source == "content" {
-		triggerTypeFilter = " AND trigger_type != 'system_analysis'"
+		baseQuery = baseQuery.Where("trigger_type != 'system_analysis'")
 	} else if source == "system_analysis" {
-		triggerTypeFilter = " AND trigger_type = 'system_analysis'"
+		baseQuery = baseQuery.Where("trigger_type = 'system_analysis'")
 	}
 
-	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE 1=1" + triggerTypeFilter).Scan(&stats.Total)
-	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE resolved = 0"+triggerTypeFilter).Scan(&stats.Unresolved)
-	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE timestamp >= ?"+triggerTypeFilter, todayStart.UTC().Format(time.RFC3339)).Scan(&stats.Today)
-	db.QueryRow("SELECT COUNT(*) FROM security_alerts WHERE timestamp >= ?"+triggerTypeFilter, hour24Start.UTC().Format(time.RFC3339)).Scan(&stats.Hour24)
+	var total, unresolved, todayCount, hour24Count int64
+	q := *baseQuery
+	q.Count(&total)
+	stats.Total = int(total)
+
+	q2 := *baseQuery
+	q2.Where("resolved = false").Count(&unresolved)
+	stats.Unresolved = int(unresolved)
+
+	q3 := *baseQuery
+	q3.Where("timestamp >= ?", todayStart.UTC()).Count(&todayCount)
+	stats.Today = int(todayCount)
+
+	q4 := *baseQuery
+	q4.Where("timestamp >= ?", hour24Start.UTC()).Count(&hour24Count)
+	stats.Hour24 = int(hour24Count)
 
 	return stats
 }

@@ -181,9 +181,10 @@ func (p *ProxyServer) handleTestProvider(w http.ResponseWriter, r *http.Request)
 		if req.FetchModelsOnly {
 			models := provider.FetchModels()
 			modelsJSON, _ := json.Marshal(models)
-			dbMu.Lock()
-			db.Exec("UPDATE providers SET models=?, updated_at=? WHERE id=?", string(modelsJSON), formatTimeNow(), req.ProviderID)
-			dbMu.Unlock()
+			gormDB.Model(&DBProvider{}).Where("id = ?", req.ProviderID).Updates(map[string]interface{}{
+				"models":    string(modelsJSON),
+				"updated_at": time.Now().UTC(),
+			})
 			invalidateProviderCache()
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -287,25 +288,29 @@ func (p *ProxyServer) SetProviderKeyWithBaseURL(name, apiKey, baseURL string) er
 	}
 	log.Printf("[INFO] SetProviderKey: FetchModels done for %s, models=%d", name, len(models))
 
-	dbMu.Lock()
-	defer dbMu.Unlock()
-	rows, err := db.Query("SELECT id FROM providers WHERE provider_type = ?", name)
+	var existing DBProvider
+	err = gormDB.Where("provider_type = ?", name).First(&existing).Error
+	now := time.Now().UTC()
 	if err == nil {
-		hasRow := false
-		var id string
-		for rows.Next() {
-			rows.Scan(&id)
-			hasRow = true
-		}
-		rows.Close()
-		if hasRow {
-			db.Exec("UPDATE providers SET api_key = ? WHERE provider_type = ?", apiKey, name)
-		} else {
-			now := formatTimeNow()
-			db.Exec(`INSERT INTO providers (id, name, provider_type, auth_type, enabled, base_url, api_key, models, disabled_models, oauth_config, rate_limits, priority, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				fmt.Sprintf("%d", time.Now().UnixMilli()), name, name, "apikey", 1, baseURL, apiKey, "[]", "[]", "", "", 0, "", now, now)
-		}
+		gormDB.Model(&DBProvider{}).Where("provider_type = ?", name).Updates(map[string]interface{}{
+			"api_key":    apiKey,
+			"updated_at": now,
+		})
+	} else {
+		gormDB.Create(&DBProvider{
+			ID:           fmt.Sprintf("%d", time.Now().UnixMilli()),
+			Name:         name,
+			ProviderType: name,
+			AuthType:     "apikey",
+			Enabled:      true,
+			BaseURL:      baseURL,
+			APIKey:       apiKey,
+			Models:       "[]",
+			DisabledModels: "[]",
+			Priority:     0,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
 	}
 	return nil
 }
@@ -448,29 +453,20 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 	hourly := make(map[string]*AlertItem)
 	minutely := make(map[string]*AlertItem)
 
-	query := `SELECT datetime(timestamp, 'localtime') as ts_local, direction, trigger_type FROM security_alerts WHERE timestamp >= ?`
-	args := []interface{}{cutoff.Format(time.RFC3339)}
+	var alerts []DBSecurityAlert
+	q := gormDB.Select("timestamp, direction, trigger_type").Where("timestamp >= ?", cutoff)
 	if !isAdmin && userID != "" {
-		query += ` AND user_id = ?`
-		args = append(args, userID)
+		q = q.Where("user_id = ?", userID)
 	}
-	query += ` ORDER BY timestamp ASC`
-
-	rows, err := db.Query(query, args...)
-	if err != nil {
+	if err := q.Order("timestamp ASC").Find(&alerts).Error; err != nil {
 		log.Printf("[ERROR] handleAlertStats: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"daily": []interface{}{}, "hourly": []interface{}{}, "minute": []interface{}{}})
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var ts string
-		var direction, triggerType string
-		if err := rows.Scan(&ts, &direction, &triggerType); err != nil {
-			continue
-		}
+	for _, a := range alerts {
+		ts := formatTimeUTC(a.Timestamp)
 		dateKey := ts[:10]
 		hourKey := strings.Replace(ts[:13], "T", " ", 1) + ":00"
 		minuteKey := strings.Replace(ts[:16], "T", " ", 1)
@@ -479,14 +475,14 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 			daily[dateKey] = &AlertItem{Date: dateKey}
 		}
 		daily[dateKey].Total++
-		if direction == "input" {
+		if a.Direction == "input" {
 			daily[dateKey].InputBlock++
-		} else if direction == "output" {
+		} else if a.Direction == "output" {
 			daily[dateKey].OutputBlock++
 		}
-		if triggerType == "keyword" {
+		if a.TriggerType == "keyword" {
 			daily[dateKey].Keyword++
-		} else if triggerType == "semantic" {
+		} else if a.TriggerType == "semantic" {
 			daily[dateKey].Semantic++
 		}
 
@@ -494,14 +490,14 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 			hourly[hourKey] = &AlertItem{Date: hourKey}
 		}
 		hourly[hourKey].Total++
-		if direction == "input" {
+		if a.Direction == "input" {
 			hourly[hourKey].InputBlock++
-		} else if direction == "output" {
+		} else if a.Direction == "output" {
 			hourly[hourKey].OutputBlock++
 		}
-		if triggerType == "keyword" {
+		if a.TriggerType == "keyword" {
 			hourly[hourKey].Keyword++
-		} else if triggerType == "semantic" {
+		} else if a.TriggerType == "semantic" {
 			hourly[hourKey].Semantic++
 		}
 
@@ -509,14 +505,14 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 			minutely[minuteKey] = &AlertItem{Date: minuteKey}
 		}
 		minutely[minuteKey].Total++
-		if direction == "input" {
+		if a.Direction == "input" {
 			minutely[minuteKey].InputBlock++
-		} else if direction == "output" {
+		} else if a.Direction == "output" {
 			minutely[minuteKey].OutputBlock++
 		}
-		if triggerType == "keyword" {
+		if a.TriggerType == "keyword" {
 			minutely[minuteKey].Keyword++
-		} else if triggerType == "semantic" {
+		} else if a.TriggerType == "semantic" {
 			minutely[minuteKey].Semantic++
 		}
 	}
@@ -561,14 +557,14 @@ func (p *ProxyServer) handleAlertSeverityStats(w http.ResponseWriter, r *http.Re
 
 	userID, isAdmin := getUserAndRole(r)
 	query := `SELECT severity, COUNT(*) FROM security_alerts WHERE timestamp >= ?`
-	args := []interface{}{cutoff.Format(time.RFC3339)}
+	args := []interface{}{cutoff}
 	if !isAdmin && userID != "" {
 		query += ` AND user_id = ?`
 		args = append(args, userID)
 	}
 	query += ` AND (severity IS NOT NULL AND severity != '') GROUP BY severity`
 
-	rows, err := db.Query(query, args...)
+	rows, err := gormDB.Raw(query, args...).Rows()
 	if err != nil {
 		log.Printf("[ERROR] handleAlertSeverityStats: %v", err)
 		w.Header().Set("Content-Type", "application/json")

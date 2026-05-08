@@ -581,7 +581,7 @@ func dbGetUsageStatsForUser(periodMinutes int, userID string) *DBUsageStats {
 		return stats
 	}
 
-	rows, err := db.Query(`SELECT
+	rows, err := gormDB.Raw(`SELECT
 		COUNT(*) as total,
 		SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success,
 		SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as errors,
@@ -592,7 +592,7 @@ func dbGetUsageStatsForUser(periodMinutes int, userID string) *DBUsageStats {
 		model
 		FROM request_logs
 		WHERE timestamp >= ? AND user_id = ?
-		GROUP BY provider, model`, cutoff.Format(time.RFC3339), userID)
+		GROUP BY provider, model`, cutoff, userID).Rows()
 	if err != nil {
 		log.Printf("[ERROR] dbGetUsageStatsForUser: %v", err)
 		return stats

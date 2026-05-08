@@ -544,13 +544,15 @@ func (p *ProxyServer) handleGetSecurityStats(w http.ResponseWriter, r *http.Requ
 
 func (p *ProxyServer) handleResolveAlert(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	var current int
-	db.QueryRow("SELECT resolved FROM security_alerts WHERE id = ?", id).Scan(&current)
+	var alert DBSecurityAlert
+	if err := gormDB.Where("id = ?", id).Select("resolved").First(&alert).Error; err != nil {
+		alert.Resolved = false
+	}
 	newVal := 1
-	if current == 1 {
+	if alert.Resolved {
 		newVal = 0
 	}
-	db.Exec("UPDATE security_alerts SET resolved = ? WHERE id = ?", newVal, id)
+	gormDB.Model(&DBSecurityAlert{}).Where("id = ?", id).Update("resolved", newVal)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "resolved": newVal})
 }

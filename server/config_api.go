@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"gorm.io/gorm"
 )
 
 type FullConfig struct {
@@ -281,7 +282,7 @@ func saveFullConfigToDB(cfg *FullConfig) {
 
 	invalidateProviderCache()
 	dbMu.Lock()
-	db.Exec("DELETE FROM providers")
+	gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DBProvider{})
 	for _, p := range cfg.Providers {
 		apiKey := ""
 		for _, k := range p.ApiKeys {
@@ -298,19 +299,22 @@ func saveFullConfigToDB(cfg *FullConfig) {
 		if p.Enabled {
 			enabled = 1
 		}
-		db.Exec(`INSERT OR REPLACE INTO providers (id, name, provider_type, auth_type, enabled, base_url, api_key, models, disabled_models, oauth_config, rate_limits, priority, created_by, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			p.ID, p.Name, p.ProviderType, p.AuthType, enabled, p.BaseURL, apiKey,
-			string(models), string(disabled), string(oauth), string(rates),
-			p.Priority, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
+		gormDB.Save(&DBProvider{
+			ID: p.ID, Name: p.Name, ProviderType: p.ProviderType, AuthType: p.AuthType,
+			Enabled: enabled == 1, BaseURL: p.BaseURL, APIKey: apiKey,
+			Models: string(models), DisabledModels: string(disabled),
+			OAuthConfig: string(oauth), RateLimits: string(rates),
+			Priority: p.Priority, CreatedBy: p.CreatedBy,
+		})
 	}
 	dbMu.Unlock()
 
 	dbMu.Lock()
-	db.Exec("DELETE FROM model_mappings")
+	gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DBModelMapping{})
 	for alias, m := range cfg.Mappings {
-		db.Exec("INSERT OR REPLACE INTO model_mappings (alias, provider_id, model, description) VALUES (?, ?, ?, ?)",
-			alias, m.ProviderID, m.Model, m.Description)
+		gormDB.Save(&DBModelMapping{
+			Alias: alias, ProviderID: m.ProviderID, Model: m.Model, Description: m.Description,
+		})
 	}
 	dbMu.Unlock()
 }
@@ -336,11 +340,11 @@ func (ps *ProxyServer) handleSaveConfig(w http.ResponseWriter, r *http.Request) 
 
 func (ps *ProxyServer) handleResetConfig(w http.ResponseWriter, r *http.Request) {
 	dbMu.Lock()
-	db.Exec("DELETE FROM providers")
-	db.Exec("DELETE FROM model_mappings")
-	db.Exec("DELETE FROM profiles")
-	db.Exec("DELETE FROM system_settings")
-	db.Exec("DELETE FROM user_settings")
+	gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DBProvider{})
+	gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DBModelMapping{})
+	gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DBProfile{})
+	gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DBSystemSetting{})
+	gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&DBUserSetting{})
 	dbMu.Unlock()
 	invalidateProviderCache()
 	w.Header().Set("Content-Type", "application/json")
