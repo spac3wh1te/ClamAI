@@ -194,15 +194,36 @@
 
 > **前缀**：`/api/v1/system-analysis`
 > **鉴权**：Bearer Token
-> **说明**：系统级 AI 行为分析，独立于用户分析任务，自动周期性执行，识别未知威胁
+> **说明**：系统级 AI 行为分析，采用两层威胁检测架构。Stage 1 基于规则的特征评分（零 AI 成本），Stage 2 AI 深度分析（仅 Stage 1 触发阈值时调用），节省算力。
 
 | 方法 | 路径 | 功能 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| GET | `/config` | 获取分析配置 | - | `{enabled, model, api_key_id, time_range, interval_minutes, notify_on_high_risk}` |
-| PUT | `/config` | 更新分析配置 | `{enabled, model, api_key_id, time_range, interval_minutes, notify_on_high_risk}` | `{success}` |
+| GET | `/config` | 获取分析配置 | - | `{enabled, model, time_range, interval_minutes, notify_on_high_risk, system_prompt}` |
+| PUT | `/config` | 更新分析配置 | `{enabled, model, time_range, interval_minutes, notify_on_high_risk, system_prompt}` | `{success}` |
+| GET | `/config/default-prompt` | 获取默认提示词 | - | `{prompt}` |
 | GET | `/tasks` | 列出系统分析任务 | - | `{tasks: [{id, task_no, name, status, result_risk_level, result_summary, last_run_at, next_run_at}]}` |
 | POST | `/tasks/trigger` | 手动触发一次分析 | - | `{success}` |
-| GET | `/history` | 历史分析记录 | - | `{history: [{id, risk_level, summary, detail, dimensions, logs_analyzed, run_at}]}` |
+| GET | `/history` | 历史分析记录 | - | `{history: [{id, risk_level, summary, detail, dimensions, logs_analyzed, duration_ms, run_at}]}` |
+| GET | `/key-results` | 各 Key 分析结果（按风险分组） | `?risk=` / `?history_id=` | `{results: {极高: [], 高: [], 中: [], 低: []}, total}` |
+| GET | `/status` | 分析执行状态 | - | `{running: bool}` |
+
+### Stage 1 威胁评分规则（自动执行，不消耗 AI 算力）
+
+| 规则 | 触发条件 | 分数 |
+|------|----------|------|
+| `prompt_injection_suspect` | 检测到提示词注入模式（ignore previous/disregard all/你现在是等） | +25 |
+| `suspicious_content` | 包含可疑内容关键词（hack/exploit/bypass/payload等） | +15 |
+| `error_rate_high` | 成功率 < 50% | +12 |
+| `rapid_burst` | ≥5 次极短间隔请求（<2秒） | +12 |
+| `fail_then_success` | 失败后紧跟成功（试探攻击特征） | +10 |
+| `encoded_content` | 包含编码内容（Base64/URLEncode等） | +10 |
+| `off_hours_activity` | ≥3 次凌晨 1-5 点调用 | +8 |
+| `token_spike` | ≥1/3 请求输出超 800 Token | +8 |
+| `repeat_requests` | ≥3 次重复请求内容 | +8 |
+| `high_output_ratio` | 输出/输入比极高（>10） | +6 |
+
+- **阈值**：威胁评分 ≥ 30 时触发 Stage 2 AI 深度分析
+- **跳过**：若无新增日志，直接跳过不调用 AI
 
 ---
 

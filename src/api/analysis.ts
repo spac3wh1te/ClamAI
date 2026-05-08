@@ -8,6 +8,7 @@ export interface SystemAnalysisConfig {
   interval_minutes: number;
   notify_on_high_risk: boolean;
   auto_block_risk_level: string;
+  system_prompt: string;
 }
 
 export interface SystemAnalysisTask {
@@ -41,6 +42,31 @@ export interface SystemAnalysisHistory {
   status: string;
   duration_ms: number;
   run_at: string;
+}
+
+export interface KeyResult {
+  id: number;
+  task_id: string;
+  api_key_id: string;
+  api_key_name: string;
+  risk_level: string;
+  summary: string;
+  detail: string;
+  dimensions: string;
+  logs_count: number;
+  new_logs: number;
+  run_at: string;
+  skipped: boolean;
+  threat_score: number;
+  threat_signals: string;
+  analyzed: boolean;
+}
+
+export interface ThreatSignal {
+  rule: string;
+  score: number;
+  severity: string;
+  detail: string;
 }
 
 export interface AnalysisTask {
@@ -146,6 +172,15 @@ export const systemAnalysisApi = {
 
   getHistory: () =>
     apiRequest<{ history: SystemAnalysisHistory[] }>("GET", "/system-analysis/history"),
+
+  getDefaultPrompt: () =>
+    apiRequest<{ prompt: string }>("GET", "/system-analysis/config/default-prompt"),
+
+  getKeyResults: (risk?: string, historyId?: number) =>
+    apiRequest<{ results: Record<string, KeyResult[]>; total: number }>("GET", `/system-analysis/key-results${risk ? `?risk=${risk}` : ""}${historyId ? `${risk ? "&" : "?"}history_id=${historyId}` : ""}`),
+
+  getStatus: () =>
+    apiRequest<{ running: boolean }>("GET", "/system-analysis/status"),
 };
 
 export const agentApi = {
