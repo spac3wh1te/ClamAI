@@ -25,24 +25,11 @@ type ThreatRule struct {
 	UpdatedAt   string   `json:"updated_at"`
 }
 
-type ThreatTypeConfig struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	Description string `json:"description"`
-}
-
 var (
 	threatMatchers   map[string][]*regexp.Regexp
 	threatRuleIds    map[string][]int64
 	threatMatchersMu sync.RWMutex
 )
-
-var ThreatTypes = []ThreatTypeConfig{
-	{ID: "hacker_attack", Label: "黑客攻击", Description: "SQL注入、命令注入、路径遍历、SSRF等攻击行为"},
-	{ID: "jailbreak", Label: "模型越狱", Description: "Prompt注入、角色扮演越狱、系统提示提取等绕过手法"},
-	{ID: "adversarial", Label: "对抗攻击", Description: "编码绕过、混淆攻击、多语言混合绕过等对抗性威胁"},
-	{ID: "malicious_gen", Label: "恶意内容生成", Description: "钓鱼邮件、恶意代码、虚假信息等恶意生成行为"},
-}
 
 func seedDefaultThreatRules() {
 	var count int64

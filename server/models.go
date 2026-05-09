@@ -1,8 +1,6 @@
 package main
 
 import (
-	"database/sql"
-	"encoding/json"
 	"time"
 )
 
@@ -55,37 +53,6 @@ type DBAPIKey struct {
 }
 
 func (DBAPIKey) TableName() string { return "api_keys" }
-
-func (k *DBAPIKey) GetAllowedModels() []string {
-	if k.AllowedModels == "" || k.AllowedModels == "null" {
-		return nil
-	}
-	var models []string
-	json.Unmarshal([]byte(k.AllowedModels), &models)
-	return models
-}
-
-func (k *DBAPIKey) SetAllowedModels(models []string) {
-	b, _ := json.Marshal(models)
-	k.AllowedModels = string(b)
-}
-
-func (k *DBAPIKey) GetProviderKeys() map[string]string {
-	if k.ProviderKeys == "" || k.ProviderKeys == "null" {
-		return map[string]string{}
-	}
-	m := map[string]string{}
-	json.Unmarshal([]byte(k.ProviderKeys), &m)
-	return m
-}
-
-func (k *DBAPIKey) SetProviderKeys(m map[string]string) {
-	if m == nil {
-		m = map[string]string{}
-	}
-	b, _ := json.Marshal(m)
-	k.ProviderKeys = string(b)
-}
 
 type DBRequestLog struct {
 	ID                  int64     `gorm:"primaryKey;autoIncrement"`
@@ -479,13 +446,3 @@ type DBVectorConfig struct {
 
 func (DBVectorConfig) TableName() string { return "vector_config" }
 
-func nullTimeToPtr(ns sql.NullString) *time.Time {
-	if !ns.Valid || ns.String == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339, ns.String)
-	if err != nil {
-		return nil
-	}
-	return &t
-}
