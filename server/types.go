@@ -211,6 +211,7 @@ type RequestLog struct {
 	UpstreamRespBody    string `json:"upstream_response_body"`
 	UpstreamProvider    string `json:"upstream_provider"`
 	UpstreamModel       string `json:"upstream_model"`
+	ClientReqHeaders    string `json:"client_request_headers"`
 }
 
 type LogBuffer struct {

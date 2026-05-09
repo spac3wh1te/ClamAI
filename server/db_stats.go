@@ -91,7 +91,7 @@ func dbLoadStats(stats *RequestStats) {
 		COALESCE(SUM(output_tokens), 0) as output_tokens,
 		COALESCE(SUM(latency_ms), 0) as total_latency,
 		COALESCE(NULLIF(provider, ''), upstream_provider) as provider, model, DATE(timestamp, 'localtime') as date
-		FROM request_logs
+		FROM request_logs WHERE call_type = 'client'
 		GROUP BY COALESCE(NULLIF(provider, ''), upstream_provider), model, DATE(timestamp, 'localtime')`).Rows()
 	if err != nil {
 		log.Printf("[ERROR] dbLoadStats: failed to load from request_logs: %v", err)
@@ -483,10 +483,10 @@ func dbGetUsageStats(periodMinutes int) *DBUsageStats {
 		model,
 		%s as bucket
 		FROM request_logs
-		WHERE timestamp >= ? AND (provider != '' OR upstream_provider != '')
+		WHERE timestamp >= ? AND (provider != '' OR upstream_provider != '') AND call_type = 'client'
 		GROUP BY %s, model, %s`, providerExpr, groupBy, providerExpr, groupBy)
 
-	rows, err := gormDB.Raw(query, cutoff.Format(time.RFC3339)).Rows()
+	rows, err := gormDB.Raw(query, cutoff).Rows()
 	if err != nil {
 		log.Printf("[ERROR] dbGetUsageStats: %v", err)
 		return stats
@@ -591,7 +591,7 @@ func dbGetUsageStatsForUser(periodMinutes int, userID string) *DBUsageStats {
 		provider,
 		model
 		FROM request_logs
-		WHERE timestamp >= ? AND user_id = ?
+		WHERE timestamp >= ? AND user_id = ? AND call_type = 'client'
 		GROUP BY provider, model`, cutoff, userID).Rows()
 	if err != nil {
 		log.Printf("[ERROR] dbGetUsageStatsForUser: %v", err)
@@ -644,19 +644,25 @@ type CallerTopEntry struct {
 	Requests     int64  `json:"requests"`
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens int64  `json:"output_tokens"`
+	Owner        string `json:"owner"`
+	IPs          string `json:"ips"`
 }
 
 func dbGetCallerTop10(periodMinutes int, userID string, isAdmin bool) []CallerTopEntry {
 	cutoff := time.Now().Add(-time.Duration(periodMinutes) * time.Minute).UTC()
-	query := `SELECT api_key_used, COUNT(*) as cnt,
-		COALESCE(SUM(input_tokens), 0) as it, COALESCE(SUM(output_tokens), 0) as ot
-		FROM request_logs WHERE timestamp >= ? AND api_key_used != ''`
-	args := []interface{}{cutoff.Format(time.RFC3339)}
+	query := `SELECT r.api_key_used, COUNT(*) as cnt,
+		COALESCE(SUM(r.input_tokens), 0) as it, COALESCE(SUM(r.output_tokens), 0) as ot,
+		COALESCE(u.display_name, u.username, '') as owner
+		FROM request_logs r
+		LEFT JOIN api_keys k ON r.api_key_used = k.key
+		LEFT JOIN users u ON k.user_id = u.id
+		WHERE r.timestamp >= ? AND r.api_key_used != ''`
+	args := []interface{}{cutoff}
 	if !isAdmin && userID != "" {
-		query += ` AND user_id = ?`
+		query += ` AND r.user_id = ?`
 		args = append(args, userID)
 	}
-	query += ` GROUP BY api_key_used ORDER BY cnt DESC LIMIT 10`
+	query += ` GROUP BY r.api_key_used ORDER BY cnt DESC LIMIT 10`
 	rows, err := gormDB.Raw(query, args...).Rows()
 	if err != nil {
 		log.Printf("[ERROR] dbGetCallerTop10: %v", err)
@@ -667,7 +673,7 @@ func dbGetCallerTop10(periodMinutes int, userID string, isAdmin bool) []CallerTo
 	var result []CallerTopEntry
 	for rows.Next() {
 		var e CallerTopEntry
-		if err := rows.Scan(&e.APIKeyUsed, &e.Requests, &e.InputTokens, &e.OutputTokens); err != nil {
+		if err := rows.Scan(&e.APIKeyUsed, &e.Requests, &e.InputTokens, &e.OutputTokens, &e.Owner); err != nil {
 			continue
 		}
 		result = append(result, e)
@@ -677,15 +683,18 @@ func dbGetCallerTop10(periodMinutes int, userID string, isAdmin bool) []CallerTo
 
 func dbGetIPTop10(periodMinutes int, userID string, isAdmin bool) []CallerTopEntry {
 	cutoff := time.Now().Add(-time.Duration(periodMinutes) * time.Minute).UTC()
-	query := `SELECT client_ip, COUNT(*) as cnt,
-		COALESCE(SUM(input_tokens), 0) as it, COALESCE(SUM(output_tokens), 0) as ot
-		FROM request_logs WHERE timestamp >= ? AND client_ip != ''`
-	args := []interface{}{cutoff.Format(time.RFC3339)}
+	query := `SELECT r.client_ip, COUNT(*) as cnt,
+		COALESCE(SUM(r.input_tokens), 0) as it, COALESCE(SUM(r.output_tokens), 0) as ot,
+		GROUP_CONCAT(COALESCE(u.display_name, u.username, ''), ',') as ips
+		FROM request_logs r
+		LEFT JOIN users u ON r.user_id = u.id
+		WHERE r.timestamp >= ? AND r.client_ip != '' AND r.call_type = 'client'`
+	args := []interface{}{cutoff}
 	if !isAdmin && userID != "" {
-		query += ` AND user_id = ?`
+		query += ` AND r.user_id = ?`
 		args = append(args, userID)
 	}
-	query += ` GROUP BY client_ip ORDER BY cnt DESC LIMIT 10`
+	query += ` GROUP BY r.client_ip ORDER BY cnt DESC LIMIT 10`
 	rows, err := gormDB.Raw(query, args...).Rows()
 	if err != nil {
 		log.Printf("[ERROR] dbGetIPTop10: %v", err)
@@ -696,7 +705,7 @@ func dbGetIPTop10(periodMinutes int, userID string, isAdmin bool) []CallerTopEnt
 	var result []CallerTopEntry
 	for rows.Next() {
 		var e CallerTopEntry
-		if err := rows.Scan(&e.ClientIP, &e.Requests, &e.InputTokens, &e.OutputTokens); err != nil {
+		if err := rows.Scan(&e.ClientIP, &e.Requests, &e.InputTokens, &e.OutputTokens, &e.IPs); err != nil {
 			continue
 		}
 		result = append(result, e)
@@ -719,7 +728,7 @@ func dbGetSecurityTokenStats(periodMinutes int, userID string, isAdmin bool) *Se
 	}
 
 	baseWhere := `timestamp >= ? AND (path = '/analysis/v1/chat/completions' OR path = '/security/semantic-check')`
-	args := []interface{}{cutoff.Format(time.RFC3339)}
+	args := []interface{}{cutoff}
 	if !isAdmin && userID != "" {
 		baseWhere += ` AND user_id = ?`
 		args = append(args, userID)

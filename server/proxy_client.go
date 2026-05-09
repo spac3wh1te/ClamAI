@@ -19,7 +19,10 @@ func setProxy(proxyStr string) error {
 	}
 	u, err := url.Parse(proxyStr)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid proxy URL: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid proxy URL %q: must include scheme (http/https/socks5) and host", proxyStr)
 	}
 	globalProxyURL = u
 	return nil

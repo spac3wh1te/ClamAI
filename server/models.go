@@ -114,6 +114,7 @@ type DBRequestLog struct {
 	UpstreamRespBody    string    `gorm:"column:upstream_response_body;type:text"`
 	UpstreamProvider    string    `gorm:"column:upstream_provider;size:64"`
 	UpstreamModel       string    `gorm:"column:upstream_model;size:256"`
+	ClientReqHeaders    string    `gorm:"column:client_request_headers;type:text"`
 }
 
 func (DBRequestLog) TableName() string { return "request_logs" }

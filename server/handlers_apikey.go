@@ -17,6 +17,9 @@ func (p *ProxyServer) handleListAPIKeys(w http.ResponseWriter, r *http.Request) 
 	if claims := getUserFromContext(r); claims != nil {
 		isAdmin = claims.Role == "admin"
 	}
+	if !isAdmin && isLocalhostAdmin(r) {
+		isAdmin = true
+	}
 	apiKeysMu.Lock()
 	keys := make([]map[string]interface{}, 0, len(apiKeys))
 	for _, info := range apiKeys {

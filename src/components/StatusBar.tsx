@@ -52,7 +52,7 @@ export default function StatusBar() {
 
           <div className="flex items-center gap-1.5">
             <Server className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-muted-foreground">代理:</span>
+            <span className="text-muted-foreground">状态:</span>
             <span className={`font-medium ${isRunning ? "text-emerald-400" : "text-red-400"}`}>
               {isRunning ? "已连接" : "未连接"}
             </span>

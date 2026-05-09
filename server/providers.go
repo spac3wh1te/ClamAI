@@ -234,22 +234,46 @@ func normalizeResponse(body []byte) []byte {
 var (
 	sharedDirectClient *http.Client
 	sharedProxyClient  *http.Client
-	clientOnce         sync.Once
+	clientMu           sync.RWMutex
+	lastAppliedProxy   string
 )
 
 func getSharedClient() *http.Client {
-	clientOnce.Do(func() {
-		sharedDirectClient = newHTTPClient("")
-		if proxyURL := getProxy(); proxyURL != nil {
-			sharedProxyClient = newHTTPClient(proxyURL.String())
-		} else {
-			sharedProxyClient = sharedDirectClient
+	clientMu.RLock()
+	direct := sharedDirectClient
+	proxy := sharedProxyClient
+	clientMu.RUnlock()
+	if direct != nil {
+		p := getProxy()
+		if p != nil && proxy != nil {
+			return proxy
 		}
-	})
-	if getProxy() != nil {
+		return direct
+	}
+
+	clientMu.Lock()
+	defer clientMu.Unlock()
+
+	sharedDirectClient = newHTTPClient("")
+	if p := getProxy(); p != nil {
+		sharedProxyClient = newHTTPClient(p.String())
+		lastAppliedProxy = p.String()
+	} else {
+		sharedProxyClient = sharedDirectClient
+		lastAppliedProxy = ""
+	}
+	if p := getProxy(); p != nil {
 		return sharedProxyClient
 	}
 	return sharedDirectClient
+}
+
+func resetSharedClient() {
+	clientMu.Lock()
+	sharedDirectClient = nil
+	sharedProxyClient = nil
+	lastAppliedProxy = ""
+	clientMu.Unlock()
 }
 
 func doProxy(w http.ResponseWriter, proxyReq *http.Request) {

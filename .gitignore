@@ -55,6 +55,7 @@ release/
 *.db
 *.db-shm
 *.db-wal
+
 config.json
 key_usage.json
 
@@ -66,6 +67,7 @@ key_usage.json
 # Logs
 logs/
 *.log
+*.api
 
 # OS
 Thumbs.db

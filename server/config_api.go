@@ -332,8 +332,16 @@ func (ps *ProxyServer) handleSaveConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	saveFullConfigToDB(&newCfg)
+	proxyURL := ""
+	if newCfg.Advanced.ProxyURL != nil {
+		proxyURL = *newCfg.Advanced.ProxyURL
+	}
+	if err := setProxy(proxyURL); err != nil {
+		log.Printf("[WARN] failed to apply proxy: %v", err)
+	}
+	resetSharedClient()
 	SetLogLevel(newCfg.Gateway.LogLevel)
-	log.Printf("[INFO] config saved to SQLite")
+	log.Printf("[INFO] config saved to SQLite (proxy=%s)", proxyURL)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -487,8 +495,9 @@ func (ps *ProxyServer) handleListProfiles(w http.ResponseWriter, r *http.Request
 		Active bool   `json:"active"`
 	}
 	active := dbGetActiveProfile()
+	userID := getUserIDFromRequest(r)
 	var items []ProfileItem
-	for _, pr := range dbListProfiles() {
+	for _, pr := range dbListProfiles(userID) {
 		id := strOr(pr["id"], "")
 		items = append(items, ProfileItem{
 			ID: id, Name: strOr(pr["name"], ""), Active: id == active,
@@ -510,8 +519,9 @@ func (ps *ProxyServer) handleSaveAsProfile(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+	userID := getUserIDFromRequest(r)
 	cfg := buildFullConfig()
-	if err := dbSaveProfile(req.ProfileID, req.DisplayName,
+	if err := dbSaveProfile(req.ProfileID, req.DisplayName, userID,
 		providersToMap(cfg.Providers), mappingsToMap(cfg.Mappings),
 		gatewayToMap(cfg.Gateway), advancedToMap(cfg.Advanced),
 		serviceToMap(cfg.Service)); err != nil {
@@ -625,6 +635,9 @@ func (ps *ProxyServer) handleAppInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func getUserIDFromRequest(r *http.Request) string {
+	if claims := getUserFromContext(r); claims != nil {
+		return claims.UserID
+	}
 	claims := getAuthClaimsFromRequest(r)
 	if claims != nil {
 		return claims.UserID

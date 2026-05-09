@@ -1003,7 +1003,10 @@ export default function Settings() {
       </div>
       )}
 
-      <div className="bg-card rounded-lg p-6 border border-border">
+      <form
+        className="bg-card rounded-lg p-6 border border-border"
+        onSubmit={(e) => { e.preventDefault(); handleChangePassword(); }}
+      >
         <h2 className="text-xl font-semibold mb-4">修改密码</h2>
         <div className="space-y-4 max-w-md">
           <div>
@@ -1042,7 +1045,7 @@ export default function Settings() {
           </div>
           <div className="flex items-center gap-4 pt-2">
             <button
-              onClick={handleChangePassword}
+              type="submit"
               disabled={!oldPwd || !newPwd || !confirmPwd}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50"
             >
@@ -1057,7 +1060,7 @@ export default function Settings() {
             )}
           </div>
         </div>
-      </div>
+      </form>
 
       {saveMutation.isSuccess && (
         <div className="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg">

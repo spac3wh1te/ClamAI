@@ -245,19 +245,19 @@ func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
 	}
 
 	type keyResult struct {
-		APIKeyID      string
-		APIKeyName    string
-		RiskLevel     string
-		Summary       string
-		Detail        string
-		Dimensions    string
-		LogsCount     int
-		NewLogs       int
-		Skipped       bool
-		LastLogID     int64
-		ThreatScore   int
-		ThreatSignals string
-		Analyzed      bool
+		APIKeyID      string `json:"api_key_id"`
+		APIKeyName    string `json:"api_key_name"`
+		RiskLevel     string `json:"risk_level"`
+		Summary       string `json:"summary"`
+		Detail        string `json:"detail"`
+		Dimensions    string `json:"dimensions"`
+		LogsCount     int    `json:"logs_count"`
+		NewLogs       int    `json:"new_logs"`
+		Skipped       bool   `json:"skipped"`
+		LastLogID     int64  `json:"last_log_id"`
+		ThreatScore   int    `json:"threat_score"`
+		ThreatSignals string `json:"threat_signals"`
+		Analyzed      bool   `json:"analyzed"`
 	}
 
 	var keyResults []keyResult

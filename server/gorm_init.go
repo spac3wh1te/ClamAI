@@ -28,7 +28,8 @@ func initGormDB() error {
 	gormLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags),
 		logger.Config{
-			LogLevel: logger.Warn,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
 		},
 	)
 

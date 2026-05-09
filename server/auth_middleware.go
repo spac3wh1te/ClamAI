@@ -76,9 +76,10 @@ func isAdminPath(path string) bool {
 }
 
 func isLocalhost(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	addr := r.RemoteAddr
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return false
+		host = addr
 	}
 	return host == "127.0.0.1" || host == "::1" || host == "localhost"
 }
@@ -93,14 +94,20 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if isNoAuthPath(path) {
-			log.Printf("[AUTH] path=%s: no-auth path, passing through", path)
+		if isLocalhost(r) {
+			log.Printf("[AUTH] path=%s: localhost request, bypassing auth", path)
+			if tokenStr := extractBearerToken(r); tokenStr != "" {
+				if claims, err := validateToken(tokenStr); err == nil && claims != nil {
+					ctx := r.Context()
+					r = r.WithContext(contextWithUser(ctx, claims))
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		if p.config.Host == "127.0.0.1" && isLocalhost(r) {
-			log.Printf("[AUTH] path=%s: 127.0.0.1 + localhost, bypassing auth", path)
+		if isNoAuthPath(path) {
+			log.Printf("[AUTH] path=%s: no-auth path, passing through", path)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -197,6 +204,14 @@ func userIDForQuery(r *http.Request) string {
 	return claims.UserID
 }
 
+func isLocalhostAdmin(r *http.Request) bool {
+	if isLocalhost(r) {
+		claims := getUserFromContext(r)
+		return claims == nil || claims.Role == "admin"
+	}
+	return false
+}
+
 func resolveUserIDFromRequest(r *http.Request) string {
 	if claims := getUserFromContext(r); claims != nil {
 		return claims.UserID
@@ -229,6 +244,9 @@ func resolveAPIKeyIDFromRequest(r *http.Request) string {
 func getUserAndRole(r *http.Request) (string, bool) {
 	claims := getUserFromContext(r)
 	if claims == nil {
+		if isLocalhost(r) {
+			return "", true
+		}
 		return "", false
 	}
 	return claims.UserID, claims.Role == "admin"

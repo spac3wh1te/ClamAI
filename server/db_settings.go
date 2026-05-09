@@ -222,9 +222,13 @@ func dbDeleteModelMapping(alias string) error {
 	return gormDB.Where("alias = ?", alias).Delete(&DBModelMapping{}).Error
 }
 
-func dbListProfiles() []map[string]interface{} {
+func dbListProfiles(userIDs ...string) []map[string]interface{} {
 	var profiles []DBProfile
-	if err := gormDB.Order("created_at").Find(&profiles).Error; err != nil {
+	q := gormDB.Order("created_at")
+	if len(userIDs) > 0 && userIDs[0] != "" {
+		q = q.Where("created_by = ? OR created_by = '' OR created_by IS NULL", userIDs[0])
+	}
+	if err := q.Find(&profiles).Error; err != nil {
 		return []map[string]interface{}{}
 	}
 	result := make([]map[string]interface{}, 0, len(profiles))
@@ -233,21 +237,21 @@ func dbListProfiles() []map[string]interface{} {
 			"id": p.ID, "name": p.Name, "is_active": p.IsActive,
 			"providers_json": p.ProvidersJSON, "mappings_json": p.MappingsJSON,
 			"gateway_json": p.GatewayJSON, "advanced_json": p.AdvancedJSON,
-			"service_json": p.ServiceJSON,
+			"service_json": p.ServiceJSON, "created_by": p.CreatedBy,
 			"created_at": p.CreatedAt.Format(time.RFC3339), "updated_at": p.UpdatedAt.Format(time.RFC3339),
 		})
 	}
 	return result
 }
 
-func dbSaveProfile(id, name string, prov, mappings, gateway, advanced, service map[string]interface{}) error {
+func dbSaveProfile(id, name, createdBy string, prov, mappings, gateway, advanced, service map[string]interface{}) error {
 	pj, _ := json.Marshal(prov)
 	mj, _ := json.Marshal(mappings)
 	gj, _ := json.Marshal(gateway)
 	aj, _ := json.Marshal(advanced)
 	sj, _ := json.Marshal(service)
 	p := &DBProfile{
-		ID: id, Name: name,
+		ID: id, Name: name, CreatedBy: createdBy,
 		ProvidersJSON: string(pj), MappingsJSON: string(mj),
 		GatewayJSON: string(gj), AdvancedJSON: string(aj), ServiceJSON: string(sj),
 		IsActive: false,

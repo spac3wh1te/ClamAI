@@ -39,12 +39,8 @@ func (p *ProxyServer) setupFrontendRoutes() {
 
 	p.adminRouter.PathPrefix("/admin/").Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
-			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/admin/api")
-			if r.URL.Path == "" || r.URL.Path == "/" {
-				r.URL.Path = "/api/v1"
-			} else {
-				r.URL.Path = "/api/v1" + r.URL.Path
-			}
+			apiPath := strings.TrimPrefix(r.URL.Path, "/admin")
+			r.URL.Path = "/" + apiPath
 			p.adminRouter.ServeHTTP(w, r)
 			return
 		}

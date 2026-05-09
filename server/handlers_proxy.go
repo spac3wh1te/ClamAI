@@ -76,19 +76,15 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	reqHeaders := make(map[string]string)
-	for key, values := range r.Header {
-		reqHeaders[key] = strings.Join(values, ",")
-	}
-
 	skipHeaders := map[string]bool{
-		"authorization":      true,
-		"x-api-key":          true,
-		"anthropic-version":  true,
-		"host":               true,
-		"content-length":     true,
-		"transfer-encoding":  true,
-		"accept-encoding":    true,
+		"authorization":       true,
+		"x-api-key":           true,
+		"anthropic-version":   true,
+		"host":                true,
+		"content-length":      true,
+		"transfer-encoding":   true,
+		"accept-encoding":     true,
+		"x-internal-test-call": true,
 	}
 	for key, values := range r.Header {
 		if skipHeaders[strings.ToLower(key)] {
@@ -112,6 +108,11 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		proxyReq.Header.Set("Content-Type", "application/json")
 	}
 
+	reqHeaders := make(map[string]string)
+	for key, values := range proxyReq.Header {
+		reqHeaders[key] = strings.Join(values, ",")
+	}
+
 	client := getSharedClient()
 	if client == nil {
 		client = &http.Client{Timeout: 120 * time.Second}
@@ -120,6 +121,12 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 	resp, err := client.Do(proxyReq)
 	latency := time.Since(startTime)
 
+	if err != nil {
+		log.Printf("[ERROR] transparent proxy: %s %s → %s failed: %v (%dms)", r.Method, r.URL.Path, upstreamURL, err, latency.Milliseconds())
+		http.Error(w, "Upstream request failed", http.StatusBadGateway)
+		return
+	}
+
 	respHeaders := make(map[string]string)
 	for key, values := range resp.Header {
 		respHeaders[key] = strings.Join(values, ",")
@@ -127,13 +134,24 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 	resp.Body.Close()
 
-	if err != nil {
-		log.Printf("[ERROR] transparent proxy: %s %s → %s failed: %v (%dms)", r.Method, r.URL.Path, upstreamURL, err, latency.Milliseconds())
-		http.Error(w, "Upstream request failed", http.StatusBadGateway)
-		return
-	}
-
 	log.Printf("[PROXY] %s %s → %s %d (%dms)", r.Method, r.URL.Path, upstreamURL, resp.StatusCode, latency.Milliseconds())
+
+	var inputTokens, outputTokens int
+	var respResult map[string]interface{}
+	if json.Unmarshal(respBody, &respResult) == nil {
+		if usage, ok := respResult["usage"].(map[string]interface{}); ok {
+			if v, ok := usage["prompt_tokens"].(float64); ok {
+				inputTokens = int(v)
+			} else if v, ok := usage["input_tokens"].(float64); ok {
+				inputTokens = int(v)
+			}
+			if v, ok := usage["completion_tokens"].(float64); ok {
+				outputTokens = int(v)
+			} else if v, ok := usage["output_tokens"].(float64); ok {
+				outputTokens = int(v)
+			}
+		}
+	}
 
 	upstreamReqContent := string(bodyBytes)
 	if len(upstreamReqContent) > 10000 {
@@ -150,8 +168,8 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		Timestamp:           startTime,
 		Provider:           spec.Name,
 		Model:              getModelFromProxyRequest(bodyBytes),
-		InputTokens:        0,
-		OutputTokens:       0,
+		InputTokens:        inputTokens,
+		OutputTokens:       outputTokens,
 		LatencyMs:          latency.Milliseconds(),
 		Success:            resp.StatusCode >= 200 && resp.StatusCode < 300,
 		ErrorMessage:       "",
@@ -173,7 +191,9 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		UpstreamProvider:   spec.Name,
 		UpstreamModel:      getModelFromProxyRequest(bodyBytes),
 	}
-	dbInsertLog(upstreamEntry)
+	if r.Header.Get("X-Internal-Test-Call") == "" {
+		dbInsertLog(upstreamEntry)
+	}
 
 	if cw, ok := w.(*capturingResponseWriter); ok {
 		cw.upstreamProvider = spec.Name

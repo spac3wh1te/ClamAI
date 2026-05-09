@@ -1,21 +1,13 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import { statsApi } from "../api/stats";
 import { apiRequest } from "../api/client";
-import { useCurrentUser } from "../context/UserContext";
 import {
   Activity,
-  Zap,
-  Clock,
   ShieldAlert,
-  Shield,
   ShieldCheck,
   Brain,
   Server,
-  Eye,
-  FileSearch,
-  Gauge,
   Users,
   Globe,
 } from "lucide-react";
@@ -93,8 +85,6 @@ function getProviderType(name: string): string {
 }
 
 export default function Dashboard() {
-  const navigate = useNavigate();
-  const { isAdmin } = useCurrentUser();
   const [timeRange, setTimeRange] = useState<"10m" | "1h" | "1d" | "7d" | "30d">("1d");
 
   const periodMap: Record<string, number> = { "10m": 10, "1h": 60, "1d": 1440, "7d": 10080, "30d": 43200 };
@@ -120,7 +110,7 @@ export default function Dashboard() {
 
   const { data: callerTop10 } = useQuery({
     queryKey: ["caller-top10", period],
-    queryFn: () => apiRequest<{ callers: { api_key_used: string; requests: number; input_tokens: number; output_tokens: number }[]; ips: { client_ip: string; requests: number; input_tokens: number; output_tokens: number }[] }>("GET", `/stats/callers?period=${period}`),
+    queryFn: () => apiRequest<{ callers: { api_key_used: string; requests: number; input_tokens: number; output_tokens: number; owner: string; ips: string }[]; ips: { client_ip: string; requests: number; input_tokens: number; output_tokens: number; owner: string; ips: string }[] }>("GET", `/stats/callers?period=${period}`),
     staleTime: 0, refetchInterval: 15000,
   });
 
@@ -133,6 +123,20 @@ export default function Dashboard() {
   const getCallerDisplayName = (apiKeyUsed: string): string => {
     const m: Record<string, string> = { behavior_analysis: "调用者行为分析", skills_detection: "Skills安全分析", agent_deep_check: "智能体安全深度分析", "security-semantic": "语义安全检测" };
     return m[apiKeyUsed] || apiKeyUsed;
+  };
+
+  const maskKey = (key: string): string => {
+    if (!key || key.length <= 8) return "***";
+    return key.slice(0, 4) + "..." + key.slice(-4);
+  };
+
+  const formatOwners = (ownerStr: string): string => {
+    if (!ownerStr) return "";
+    const parts = [...new Set(ownerStr.split(",").filter(Boolean))];
+    if (parts.length === 0) return "";
+    const formatted = parts.map(p => `@${p}`);
+    if (formatted.length <= 5) return formatted.join(" ");
+    return formatted.slice(0, 5).join(" ") + "…";
   };
 
   const stats = usageStats || {
@@ -198,14 +202,6 @@ export default function Dashboard() {
   }, [granularity, timeRange, alertStats, stats.minute_breakdown, stats.hourly_breakdown, stats.daily_breakdown]);
 
   const xAxisInterval = timeRange === "1h" ? 4 : timeRange === "1d" ? 3 : timeRange === "30d" ? 2 : 0;
-
-  const allQuickActions = [
-    { icon: Eye, label: "调用者分析", desc: "分析API调用行为", href: "/security-tools", color: "from-violet-500/20 to-purple-500/10", iconColor: "text-violet-400", border: "border-violet-500/20", adminOnly: true },
-    { icon: FileSearch, label: "Skills检测", desc: "检测文档注入风险", href: "/security-tools", color: "from-amber-500/20 to-yellow-500/10", iconColor: "text-amber-400", border: "border-amber-500/20", adminOnly: false },
-    { icon: Shield, label: "安全防护", desc: "配置内容过滤规则", href: "/security", color: "from-primary/20 to-primary/5", iconColor: "text-primary", border: "border-primary/20", adminOnly: true },
-    { icon: Gauge, label: "流量控制", desc: "模型限流与配额", href: "/rate-limit", color: "from-emerald-500/20 to-green-500/10", iconColor: "text-emerald-400", border: "border-emerald-500/20", adminOnly: true },
-  ];
-  const quickActions = allQuickActions.filter((a) => isAdmin || !a.adminOnly);
 
   return (
     <div className="space-y-6">
@@ -286,21 +282,6 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
-      </div>
-
-      {/* Quick Actions */}
-      <div className="grid grid-cols-4 gap-4">
-        {quickActions.map((action) => (
-          <button
-            key={action.label}
-            onClick={() => navigate(action.href)}
-            className={`bg-gradient-to-br ${action.color} border ${action.border} rounded-xl p-5 text-left transition-all hover:scale-[1.02] hover:shadow-lg group`}
-          >
-            <action.icon size={28} className={`${action.iconColor} mb-3 group-hover:scale-110 transition-transform`} />
-            <p className="text-sm font-semibold text-foreground">{action.label}</p>
-            <p className="text-[11px] text-muted-foreground mt-1">{action.desc}</p>
-          </button>
-        ))}
       </div>
 
       {/* Chart */}
@@ -461,9 +442,10 @@ export default function Dashboard() {
               <div className="space-y-1">
                 {callerTop10.callers.slice(0, 10).map((c, i) => (
                   <div key={i} className="flex items-center justify-between py-1.5 border-b border-border last:border-0">
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="text-[11px] text-muted-foreground w-5 shrink-0">{i + 1}</span>
                       <p className="text-xs text-foreground truncate font-mono">{getCallerDisplayName(c.api_key_used)}</p>
+                      {c.owner && <span className="text-[10px] text-purple-400 shrink-0 bg-purple-400/10 px-1.5 py-0.5 rounded ml-1">@{c.owner}</span>}
                     </div>
                     <span className="text-xs text-muted-foreground shrink-0 ml-3">{c.requests} 次</span>
                   </div>
@@ -482,9 +464,10 @@ export default function Dashboard() {
               <div className="space-y-1">
                 {callerTop10.ips.slice(0, 10).map((c, i) => (
                   <div key={i} className="flex items-center justify-between py-1.5 border-b border-border last:border-0">
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="text-[11px] text-muted-foreground w-5 shrink-0">{i + 1}</span>
                       <p className="text-xs text-foreground truncate font-mono">{c.client_ip}</p>
+                      {c.ips && <span className="text-[10px] text-blue-400 shrink-0 bg-blue-400/10 px-1.5 py-0.5 rounded ml-1">{formatOwners(c.ips)}</span>}
                     </div>
                     <span className="text-xs text-muted-foreground shrink-0 ml-3">{c.requests} 次</span>
                   </div>

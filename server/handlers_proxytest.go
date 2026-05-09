@@ -136,7 +136,8 @@ func (p *ProxyServer) handleProxyModeTestChat(w http.ResponseWriter, req struct 
 		})
 		return
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Internal-Test-Call", "1")
 	if spec.AuthType == "x-api-key" {
 		httpReq.Header.Set("x-api-key", req.APIKey)
 	} else {
@@ -152,7 +153,7 @@ func (p *ProxyServer) handleProxyModeTestChat(w http.ResponseWriter, req struct 
 		log.Printf("[ERROR] handleProxyModeTestChat: internal proxy call failed: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false, "message": "代理服务调用失败", "latency_ms": latency, "input_tokens": 0, "output_tokens": 0,
+			"success": false, "message": fmt.Sprintf("代理服务调用失败: %v", err), "latency_ms": latency, "input_tokens": 0, "output_tokens": 0,
 		})
 		return
 	}

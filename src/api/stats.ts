@@ -77,6 +77,24 @@ export const statsApi = {
 
   dashboard: () => apiRequest<DashboardData>("GET", "/stats/dashboard"),
 
+  searchLogs: (params?: { keyword?: string; provider?: string; model?: string; client_ip?: string; success?: boolean; call_type?: string; error?: string; page?: number; limit?: number; offset?: number; startTime?: string; endTime?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.keyword) query.set("keyword", params.keyword);
+    if (params?.provider) query.set("provider", params.provider);
+    if (params?.model) query.set("model", params.model);
+    if (params?.client_ip) query.set("client_ip", params.client_ip);
+    if (params?.success !== undefined) query.set("success", String(params.success));
+    if (params?.call_type) query.set("call_type", params.call_type);
+    if (params?.error) query.set("error", params.error);
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.offset) query.set("offset", String(params.offset));
+    if (params?.startTime) query.set("startTime", params.startTime);
+    if (params?.endTime) query.set("endTime", params.endTime);
+    const qs = query.toString();
+    return apiRequest<{ logs: LogEntry[]; total: number }>("GET", `/stats/logs/search${qs ? "?" + qs : ""}`);
+  },
+
   exportLogs: async (): Promise<string> => {
     const base = await getAdminBaseUrl();
     const token = getToken();

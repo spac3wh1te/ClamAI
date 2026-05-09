@@ -466,10 +466,10 @@ func (p *ProxyServer) handleAlertStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, a := range alerts {
-		ts := formatTimeUTC(a.Timestamp)
-		dateKey := ts[:10]
-		hourKey := strings.Replace(ts[:13], "T", " ", 1) + ":00"
-		minuteKey := strings.Replace(ts[:16], "T", " ", 1)
+		localTS := a.Timestamp.Local()
+		dateKey := localTS.Format("2006-01-02")
+		hourKey := localTS.Format("2006-01-02 15") + ":00"
+		minuteKey := localTS.Format("2006-01-02 15:04")
 
 		if _, ok := daily[dateKey]; !ok {
 			daily[dateKey] = &AlertItem{Date: dateKey}

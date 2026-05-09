@@ -2,34 +2,21 @@ import React, { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
-  Server,
   Layers,
-  Key,
-  Settings,
-  FileText,
   Menu,
   Shield,
   ChevronLeft,
   LogOut,
   Users,
-  Bell,
   ShieldAlert,
   ShieldCheck,
   Gauge,
   Bug,
-  Search,
-  BookOpen,
-  Brain,
-  Database,
-  Fingerprint,
-  Globe,
-  KeyRound,
-  Cpu,
   ScanSearch,
-  Bot,
-  ClipboardList,
-  UserCheck,
-  Zap,
+  Fingerprint,
+  FileText,
+  Server,
+  Settings,
   Sliders,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -52,29 +39,59 @@ function Layout({ children }: LayoutProps) {
   type Section = { label: string; items: Item[] };
 
   const sections: Section[] = [
-    { label: "概览", items: [{ name: "安全总览", href: "/", icon: LayoutDashboard }] },
-    { label: "模型管理", items: [{ name: "模型管理", href: "/models-mgmt", icon: Layers, matchPrefix: true }] },
-    { label: "", items: [{ name: "日志中心", href: "/logs", icon: FileText }] },
-    ...(isAdmin ? [
-      {
-        label: "安全中心",
-        items: [
-          { name: "实时防护", href: "/alerts/realtime", icon: ShieldAlert },
-          { name: "威胁挖掘", href: "/alerts/threats", icon: Bug },
-          { name: "安全广场", href: "/security-tools", icon: ScanSearch },
-          { name: "管控中心", href: "/access-control", icon: Sliders, matchPrefix: true },
-          { name: "防护策略", href: "/security-policy", icon: ShieldCheck },
-        ],
-      },
-    ] : [
-      {
-        label: "安全中心",
-        items: [
-          { name: "安全广场", href: "/security-tools", icon: ScanSearch },
-        ],
-      },
-    ]),
-    { label: "系统中心", items: [{ name: "设置", href: "/settings", icon: Settings }] },
+    {
+      label: "首页",
+      items: [
+        { name: "安全总览", href: "/", icon: LayoutDashboard },
+      ],
+    },
+    {
+      label: "防护中心",
+      items: [
+        ...(isAdmin
+          ? [
+              { name: "实时防护", href: "/alerts/realtime", icon: ShieldAlert } as Item,
+              { name: "威胁挖掘", href: "/alerts/threats", icon: Bug } as Item,
+            ]
+          : []),
+        { name: "安全广场", href: "/security-tools", icon: ScanSearch },
+      ],
+    },
+    {
+      label: "管控中心",
+      items: [
+        { name: "模型管理", href: "/models-mgmt", icon: Layers, matchPrefix: true },
+        ...(isAdmin
+          ? [
+              { name: "用户管理", href: "/user-management", icon: Users } as Item,
+              { name: "密钥管控", href: "/key-control", icon: Fingerprint } as Item,
+              { name: "流量控制", href: "/rate-limit", icon: Gauge } as Item,
+            ]
+          : []),
+      ],
+    },
+    ...(isAdmin
+      ? [
+          {
+            label: "审计中心",
+            items: [
+              { name: "模型调用日志", href: "/model-call-logs", icon: FileText },
+              { name: "系统运行日志", href: "/system-logs", icon: Server },
+            ],
+          },
+        ]
+      : []),
+    {
+      label: "设置中心",
+      items: [
+        { name: "基础设置", href: "/basic-settings", icon: Settings },
+        ...(isAdmin
+          ? [
+              { name: "安全设置", href: "/security-settings", icon: ShieldCheck } as Item,
+            ]
+          : []),
+      ],
+    },
   ];
 
   const allItems = sections.flatMap((s) => s.items);

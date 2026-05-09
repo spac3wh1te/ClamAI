@@ -3,8 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Component, type ReactNode, useCallback, useEffect } from "react";
 
 import Dashboard from "./pages/Dashboard";
-import Settings from "./pages/Settings";
-import Logs from "./pages/Logs";
+import BasicSettings from "./pages/BasicSettings";
 import Login from "./pages/Login";
 import SetupWizard from "./pages/SetupWizard";
 
@@ -20,9 +19,13 @@ import { ThemeProvider } from "./context/ThemeContext";
 import ModelManagement from "./pages/ModelManagement";
 import AlertRealtime from "./pages/alerts/Realtime";
 import AlertThreats from "./pages/alerts/Threats";
-import AccessControl from "./pages/AccessControl";
 import SecurityTools from "./pages/SecurityTools";
-import SecurityPolicy from "./pages/SecurityPolicy";
+import SecuritySettings from "./pages/SecuritySettings";
+import UserManagement from "./pages/UserManagement";
+import KeyControl from "./pages/KeyControl";
+import RateLimit from "./pages/RateLimit";
+import ModelCallLogs from "./pages/ModelCallLogs";
+import SystemLogs from "./pages/SystemLogs";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,21 +43,27 @@ const mainRoutes = (
   <Routes>
     <Route path="/" element={<Dashboard />} />
     <Route path="/models-mgmt" element={<ModelManagement />} />
-    <Route path="/logs" element={<Logs />} />
     <Route path="/alerts/realtime" element={<AdminRoute><AlertRealtime /></AdminRoute>} />
     <Route path="/alerts/threats" element={<AdminRoute><AlertThreats /></AdminRoute>} />
-    <Route path="/access-control" element={<AdminRoute><AccessControl /></AdminRoute>} />
-    <Route path="/security-tools" element={<AdminRoute><SecurityTools /></AdminRoute>} />
-    <Route path="/security-policy" element={<AdminRoute><SecurityPolicy /></AdminRoute>} />
-    <Route path="/settings" element={<Settings />} />
+    <Route path="/security-tools" element={<SecurityTools />} />
+    <Route path="/user-management" element={<AdminRoute><UserManagement /></AdminRoute>} />
+    <Route path="/key-control" element={<AdminRoute><KeyControl /></AdminRoute>} />
+    <Route path="/rate-limit" element={<AdminRoute><RateLimit /></AdminRoute>} />
+    <Route path="/model-call-logs" element={<AdminRoute><ModelCallLogs /></AdminRoute>} />
+    <Route path="/system-logs" element={<AdminRoute><SystemLogs /></AdminRoute>} />
+    <Route path="/basic-settings" element={<BasicSettings />} />
+    <Route path="/security-settings" element={<AdminRoute><SecuritySettings /></AdminRoute>} />
     <Route path="/providers" element={<Navigate to="/models-mgmt" replace />} />
     <Route path="/models" element={<Navigate to="/models-mgmt" replace />} />
     <Route path="/api-keys" element={<Navigate to="/models-mgmt" replace />} />
-    <Route path="/security" element={<Navigate to="/security-policy" replace />} />
+    <Route path="/security" element={<Navigate to="/security-settings" replace />} />
     <Route path="/security-alerts" element={<Navigate to="/alerts/realtime" replace />} />
     <Route path="/security-square" element={<Navigate to="/security-tools" replace />} />
-    <Route path="/rate-limit" element={<Navigate to="/access-control" replace />} />
-    <Route path="/users" element={<Navigate to="/access-control" replace />} />
+    <Route path="/logs" element={<Navigate to="/model-call-logs" replace />} />
+    <Route path="/access-control" element={<Navigate to="/model-call-logs" replace />} />
+    <Route path="/settings" element={<Navigate to="/basic-settings" replace />} />
+    <Route path="/security-policy" element={<Navigate to="/security-settings" replace />} />
+    <Route path="/users" element={<Navigate to="/user-management" replace />} />
   </Routes>
 );
 

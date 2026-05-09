@@ -1,14 +1,11 @@
 import React, { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { statsApi } from "../api/stats";
-import { useCurrentUser } from "../context/UserContext";
 import {
   FileText,
   Search,
   ChevronDown,
   ChevronRight,
-  RefreshCw,
-  Server,
   Copy,
   Check,
   ArrowRight,
@@ -43,21 +40,10 @@ interface RequestLog {
   client_request_headers?: string;
 }
 
-function getLevelColor(line: string): string {
-  if (line.includes("[ERROR]") || line.includes(`"level":"ERROR"`)) return "text-red-400";
-  if (line.includes("[WARN]") || line.includes(`"level":"WARN"`)) return "text-amber-400";
-  if (line.includes("[DEBUG]") || line.includes(`"level":"DEBUG"`)) return "text-blue-400";
-  if (line.includes("[TRACE]") || line.includes(`"level":"TRACE"`)) return "text-muted-foreground";
-  return "text-foreground";
-}
-
-function getLevelBadge(line: string): { label: string; cls: string } | null {
-  if (line.includes("[ERROR]") || line.includes(`"level":"ERROR"`)) return { label: "ERROR", cls: "bg-red-500/10 text-red-400" };
-  if (line.includes("[WARN]") || line.includes(`"level":"WARN"`)) return { label: "WARN", cls: "bg-amber-500/10 text-amber-400" };
-  if (line.includes("[DEBUG]") || line.includes(`"level":"DEBUG"`)) return { label: "DEBUG", cls: "bg-blue-500/10 text-blue-400" };
-  if (line.includes("[TRACE]") || line.includes(`"level":"TRACE"`)) return { label: "TRACE", cls: "bg-secondary text-muted-foreground" };
-  if (line.includes("[INFO]") || line.includes(`"level":"INFO"`)) return { label: "INFO", cls: "bg-emerald-500/10 text-emerald-400" };
-  return null;
+function getStatusInfo(log: RequestLog): { label: string; cls: string } {
+  if (log.error_message?.includes("blocked")) return { label: "BLOCKED", cls: "bg-orange-500/10 text-orange-400 border-orange-500/30" };
+  if (!log.success) return { label: "ERR", cls: "bg-red-500/10 text-red-400 border-red-500/30" };
+  return { label: "OK", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" };
 }
 
 function formatHeaders(raw: string): string {
@@ -78,33 +64,6 @@ function tryFormatJson(s: string): string {
   } catch {
     return s;
   }
-}
-
-function tryExtractJsonBody(s: string): { body: string; headers: string } {
-  if (!s) return { body: "", headers: "" };
-  try {
-    const parsed = JSON.parse(s);
-    const headers: Record<string, string> = {};
-    const body: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (k.toLowerCase().startsWith("content-") || k.toLowerCase() === "authorization" || k.toLowerCase() === "host" || k.toLowerCase() === "user-agent" || k.toLowerCase() === "accept") {
-        headers[k] = v as string;
-      } else {
-        body[k] = v;
-      }
-    }
-    const headerStr = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
-    const bodyStr = Object.keys(body).length > 0 ? JSON.stringify(body, null, 2) : "";
-    return { body: bodyStr, headers: headerStr };
-  } catch {
-    return { body: s, headers: "" };
-  }
-}
-
-function getStatusInfo(log: RequestLog): { label: string; cls: string } {
-  if (log.error_message?.includes("blocked")) return { label: "BLOCKED", cls: "bg-orange-500/10 text-orange-400 border-orange-500/30" };
-  if (!log.success) return { label: "ERR", cls: "bg-red-500/10 text-red-400 border-red-500/30" };
-  return { label: "OK", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" };
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -183,43 +142,7 @@ const TYPE_OPTIONS = [
   { value: "security", label: "安全分析" },
 ];
 
-export default function Logs() {
-  const [tab, setTab] = useState<"request" | "service">("request");
-  const { isAdmin } = useCurrentUser();
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">日志</h1>
-          <p className="text-muted-foreground mt-2">调用记录{isAdmin && "与服务日志"}查询</p>
-        </div>
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={() => setTab("request")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${tab === "request" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
-        >
-          <span className="flex items-center gap-2"><FileText size={14} /> 调用日志</span>
-        </button>
-        {isAdmin && (
-        <button
-          onClick={() => setTab("service")}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${tab === "service" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
-        >
-          <span className="flex items-center gap-2"><Server size={14} /> 服务日志</span>
-        </button>
-        )}
-      </div>
-
-      {tab === "request" && <RequestLogsTab />}
-      {tab === "service" && isAdmin && <ServiceLogsTab />}
-    </div>
-  );
-}
-
-function RequestLogsTab() {
+export default function ModelCallLogs() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
   const [selectedType, setSelectedType] = useState("");
@@ -285,7 +208,12 @@ function RequestLogsTab() {
   };
 
   return (
-    <>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">模型调用日志</h1>
+        <p className="text-sm text-muted-foreground mt-1">查看所有模型调用的详细记录与请求/响应内容</p>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-card rounded-lg p-4 border border-border">
           <p className="text-sm text-muted-foreground">总请求数</p>
@@ -402,18 +330,8 @@ function RequestLogsTab() {
                             <span className="w-2 h-2 rounded-full bg-purple-400" /> 安全分析
                           </h4>
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                            <SectionPanel
-                              title="Request"
-                              titleColor="bg-blue-500/10 text-blue-400"
-                              method={log.method || "POST"}
-                              path={log.path || "/security/semantic-check"}
-                              body={log.request_content}
-                            />
-                            <SectionPanel
-                              title="Response"
-                              titleColor="bg-emerald-500/10 text-emerald-400"
-                              body={log.response_content}
-                            />
+                            <SectionPanel title="Request" titleColor="bg-blue-500/10 text-blue-400" method={log.method || "POST"} path={log.path || "/security/semantic-check"} body={log.request_content} />
+                            <SectionPanel title="Response" titleColor="bg-emerald-500/10 text-emerald-400" body={log.response_content} />
                           </div>
                         </div>
                       ) : (log.call_type === "model-call" || log.is_proxy_call || log.upstream_provider) ? (
@@ -428,20 +346,8 @@ function RequestLogsTab() {
                                 <span className="text-[10px] text-muted-foreground">(原始请求)</span>
                               </div>
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                                <SectionPanel
-                                  title="Request"
-                                  titleColor="bg-blue-500/10 text-blue-400"
-                                  method={log.method || "POST"}
-                                  path={log.path || "/v1/chat/completions"}
-                                  headers={log.client_request_headers}
-                                  body={log.request_content}
-                                />
-                                <SectionPanel
-                                  title="Response"
-                                  titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`}
-                                  headers={JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" })}
-                                  body={log.response_content}
-                                />
+                                <SectionPanel title="Request" titleColor="bg-blue-500/10 text-blue-400" method={log.method || "POST"} path={log.path || "/v1/chat/completions"} headers={log.client_request_headers} body={log.request_content} />
+                                <SectionPanel title="Response" titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`} headers={JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" })} body={log.response_content} />
                               </div>
                             </div>
 
@@ -459,20 +365,8 @@ function RequestLogsTab() {
                                 <span className="text-[10px] text-muted-foreground">(→ {log.upstream_model || log.model})</span>
                               </div>
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                                <SectionPanel
-                                  title="Request"
-                                  titleColor="bg-blue-500/10 text-blue-400"
-                                  method="POST"
-                                  path="/v1/chat/completions"
-                                  headers={log.upstream_request_headers}
-                                  body={log.upstream_request_body || log.request_content}
-                                />
-                                <SectionPanel
-                                  title="Response"
-                                  titleColor="bg-emerald-500/10 text-emerald-400"
-                                  headers={log.upstream_response_headers}
-                                  body={log.upstream_response_body || log.response_content}
-                                />
+                                <SectionPanel title="Request" titleColor="bg-blue-500/10 text-blue-400" method="POST" path="/v1/chat/completions" headers={log.upstream_request_headers} body={log.upstream_request_body || log.request_content} />
+                                <SectionPanel title="Response" titleColor="bg-emerald-500/10 text-emerald-400" headers={log.upstream_response_headers} body={log.upstream_response_body || log.response_content} />
                               </div>
                             </div>
                           </div>
@@ -483,27 +377,8 @@ function RequestLogsTab() {
                             <span className="w-2 h-2 rounded-full bg-emerald-400" /> 直接调用
                           </h4>
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                            <SectionPanel
-                              title="Request"
-                              titleColor="bg-blue-500/10 text-blue-400"
-                              method={log.method || "POST"}
-                              path={log.path || "/v1/chat/completions"}
-                              headers={(() => {
-                                try {
-                                  const body = JSON.parse(log.request_content || "{}");
-                                  return JSON.stringify({ "Content-Type": "application/json", "X-API-Key": log.api_key_used ? log.api_key_used.slice(0, 10) + "..." : "", "X-Client-IP": log.client_ip || "" });
-                                } catch { return ""; }
-                              })()}
-                              body={log.request_content}
-                            />
-                            <SectionPanel
-                              title="Response"
-                              titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`}
-                              headers={(() => {
-                                return JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" });
-                              })()}
-                              body={log.response_content}
-                            />
+                            <SectionPanel title="Request" titleColor="bg-blue-500/10 text-blue-400" method={log.method || "POST"} path={log.path || "/v1/chat/completions"} headers={(() => { try { JSON.parse(log.request_content || "{}"); return JSON.stringify({ "Content-Type": "application/json", "X-API-Key": log.api_key_used ? log.api_key_used.slice(0, 10) + "..." : "", "X-Client-IP": log.client_ip || "" }); } catch { return ""; } })()} body={log.request_content} />
+                            <SectionPanel title="Response" titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`} headers={JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" })} body={log.response_content} />
                           </div>
                         </div>
                       ) : (
@@ -512,27 +387,8 @@ function RequestLogsTab() {
                             <span className="w-2 h-2 rounded-full bg-gray-400" /> 客户端请求
                           </h4>
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                            <SectionPanel
-                              title="Request"
-                              titleColor="bg-blue-500/10 text-blue-400"
-                              method={log.method || "POST"}
-                              path={log.path || "/v1/chat/completions"}
-                              headers={(() => {
-                                try {
-                                  const body = JSON.parse(log.request_content || "{}");
-                                  return JSON.stringify({ "Content-Type": "application/json", "X-API-Key": log.api_key_used ? log.api_key_used.slice(0, 10) + "..." : "", "X-Client-IP": log.client_ip || "" });
-                                } catch { return ""; }
-                              })()}
-                              body={log.request_content}
-                            />
-                            <SectionPanel
-                              title="Response"
-                              titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`}
-                              headers={(() => {
-                                return JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" });
-                              })()}
-                              body={log.response_content}
-                            />
+                            <SectionPanel title="Request" titleColor="bg-blue-500/10 text-blue-400" method={log.method || "POST"} path={log.path || "/v1/chat/completions"} headers={(() => { try { JSON.parse(log.request_content || "{}"); return JSON.stringify({ "Content-Type": "application/json", "X-API-Key": log.api_key_used ? log.api_key_used.slice(0, 10) + "..." : "", "X-Client-IP": log.client_ip || "" }); } catch { return ""; } })()} body={log.request_content} />
+                            <SectionPanel title="Response" titleColor={`bg-${log.success ? "emerald" : "red"}-500/10 text-${log.success ? "emerald" : "red"}-400`} headers={JSON.stringify({ "Status-Code": String(log.status_code || 200), "Content-Type": "application/json" })} body={log.response_content} />
                           </div>
                         </div>
                       )}
@@ -550,94 +406,6 @@ function RequestLogsTab() {
           <p className="text-muted-foreground">开始使用 ClamAI 后，调用记录将显示在这里</p>
         </div>
       )}
-    </>
-  );
-}
-
-function ServiceLogsTab() {
-  const [level, setLevel] = useState<string>("");
-  const [keyword, setKeyword] = useState<string>("");
-  const [limit, setLimit] = useState(200);
-
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const { data: serviceLogs, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["service-logs", level, keyword, limit],
-    queryFn: () => statsApi.serviceLogs({ level: level || undefined, keyword: keyword || undefined, limit }),
-    refetchInterval: autoRefresh ? 10000 : 0,
-    staleTime: 0,
-  });
-
-  const lines = serviceLogs?.lines || [];
-  const total = serviceLogs?.total || 0;
-
-  return (
-    <>
-      <div className="bg-card rounded-lg p-4 border border-border">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={20} />
-            <input type="text" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="搜索关键词..."
-              className="w-full pl-10 pr-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" />
-          </div>
-          <select value={level} onChange={(e) => setLevel(e.target.value)}
-            className="px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
-            <option value="">所有级别</option>
-            <option value="ERROR">ERROR</option>
-            <option value="WARN">WARN</option>
-            <option value="INFO">INFO</option>
-            <option value="DEBUG">DEBUG</option>
-            <option value="TRACE">TRACE</option>
-          </select>
-          <select value={limit} onChange={(e) => setLimit(parseInt(e.target.value))}
-            className="px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
-            <option value="50">最近 50 行</option>
-            <option value="200">最近 200 行</option>
-            <option value="500">最近 500 行</option>
-            <option value="1000">最近 1000 行</option>
-          </select>
-          <button
-            onClick={() => setAutoRefresh((v) => !v)}
-            className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
-              autoRefresh ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" : "bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-transparent"
-            }`}
-          >
-            <RefreshCw size={14} className={isFetching && autoRefresh ? "animate-spin" : ""} />
-            {autoRefresh ? "自动刷新" : "自动刷新"}
-          </button>
-          <button onClick={() => refetch()} disabled={isFetching}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 disabled:opacity-50">
-            <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} /> 刷新
-          </button>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>共 {total} 行{level ? ` (${level}级别)` : ""}{keyword ? ` 匹配"${keyword}"` : ""}</span>
-      </div>
-
-      {isLoading ? (
-        <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
-      ) : lines.length > 0 ? (
-        <div className="bg-card rounded-lg border border-border overflow-hidden font-mono text-xs">
-          <div className="divide-y divide-border max-h-[70vh] overflow-y-auto">
-            {lines.map((line, i) => {
-              const badge = getLevelBadge(line);
-              return (
-                <div key={i} className={`px-4 py-1.5 ${getLevelColor(line)} hover:bg-secondary/30 break-all`}>
-                  {badge && <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold mr-2 ${badge.cls}`}>{badge.label}</span>}
-                  {line}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="text-center py-12">
-          <Server className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-lg font-semibold mb-2">暂无服务日志</h3>
-          <p className="text-muted-foreground">服务启动后日志将显示在这里</p>
-        </div>
-      )}
-    </>
+    </div>
   );
 }

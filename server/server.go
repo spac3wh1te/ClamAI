@@ -68,6 +68,15 @@ func NewProxyServer(config *Config) (*ProxyServer, error) {
 			return nil, fmt.Errorf("invalid proxy URL: %w", err)
 		}
 		log.Printf("[INFO] Proxy configured: %s", config.ProxyURL)
+	} else {
+		dbProxyURL := dbGetStringSetting("advanced.proxy_url", "")
+		if dbProxyURL != "" {
+			if err := setProxy(dbProxyURL); err != nil {
+				log.Printf("[WARN] failed to apply DB proxy: %v", err)
+			} else {
+				log.Printf("[INFO] Proxy loaded from DB: %s", dbProxyURL)
+			}
+		}
 	}
 
 	initJWTSecret()

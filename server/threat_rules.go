@@ -327,7 +327,7 @@ func (p *ProxyServer) handleThreatStats(w http.ResponseWriter, r *http.Request) 
 	var alertGroups []alertGroup
 	gormDB.Model(&DBSecurityAlert{}).
 		Select("trigger_type, COUNT(*) as cnt").
-		Where("timestamp >= ? AND trigger_type LIKE ?", cutoff.Format(time.RFC3339), "threat:%").
+		Where("timestamp >= ? AND trigger_type LIKE ?", cutoff, "threat:%").
 		Group("trigger_type").
 		Find(&alertGroups)
 
