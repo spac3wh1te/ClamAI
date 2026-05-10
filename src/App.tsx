@@ -26,6 +26,9 @@ import KeyControl from "./pages/KeyControl";
 import RateLimit from "./pages/RateLimit";
 import ModelCallLogs from "./pages/ModelCallLogs";
 import SystemLogs from "./pages/SystemLogs";
+import AgentEnvironment from "./pages/agent/AgentEnvironment";
+import AgentRuntimeSecurity from "./pages/agent/AgentRuntimeSecurity";
+import AgentLogAudit from "./pages/agent/AgentLogAudit";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -51,6 +54,9 @@ const mainRoutes = (
     <Route path="/rate-limit" element={<AdminRoute><RateLimit /></AdminRoute>} />
     <Route path="/model-call-logs" element={<AdminRoute><ModelCallLogs /></AdminRoute>} />
     <Route path="/system-logs" element={<AdminRoute><SystemLogs /></AdminRoute>} />
+    <Route path="/agent-security/environment" element={<AdminRoute><AgentEnvironment /></AdminRoute>} />
+    <Route path="/agent-security/runtime" element={<AdminRoute><AgentRuntimeSecurity /></AdminRoute>} />
+    <Route path="/agent-security/logs" element={<AdminRoute><AgentLogAudit /></AdminRoute>} />
     <Route path="/basic-settings" element={<BasicSettings />} />
     <Route path="/security-settings" element={<AdminRoute><SecuritySettings /></AdminRoute>} />
     <Route path="/providers" element={<Navigate to="/models-mgmt" replace />} />

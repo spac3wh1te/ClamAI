@@ -312,6 +312,9 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/agent/deep-check", p.handleAgentDeepCheck).Methods("POST")
 	api.HandleFunc("/agent/push-skills", p.handleAgentPushSkills).Methods("POST")
 
+	p.setupAgentSecurityRoutes(api)
+	log.Printf("[SETUP] Agent Security routes registered")
+
 	p.adminRouter.HandleFunc("/analysis/v1/chat/completions", p.handleAnalysisChat).Methods("POST")
 
 	p.setupSecurityRoutes(api)

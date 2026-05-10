@@ -446,3 +446,52 @@ type DBVectorConfig struct {
 
 func (DBVectorConfig) TableName() string { return "vector_config" }
 
+type DBAgentEnvCheck struct {
+	ID              string    `gorm:"primaryKey;size:64"`
+	AgentName       string    `gorm:"size:128;not null;index:idx_agent_name"`
+	RunAt           time.Time `gorm:"index:idx_agent_run"`
+	IsContainer     bool
+	IsVM            bool
+	IsRoot          bool
+	NetworkSubnets  string `gorm:"type:text"`
+	SuspiciousEnv   string `gorm:"type:text"`
+	SensitiveFiles  string `gorm:"type:text"`
+	DirPermissions  string `gorm:"type:text"`
+	RiskScore       int
+	Details         string `gorm:"type:text"`
+	CreatedBy       string `gorm:"size:128"`
+}
+
+func (DBAgentEnvCheck) TableName() string { return "agent_env_checks" }
+
+type DBAgentConfigCheck struct {
+	ID                string    `gorm:"primaryKey;size:64"`
+	AgentName         string    `gorm:"size:128;not null;index:idx_agent_cfg_name"`
+	RunAt             time.Time `gorm:"index:idx_agent_cfg_run"`
+	HardcodedSecrets  string `gorm:"type:text"`
+	InjectionRisks    string `gorm:"type:text"`
+	DangerousTools    string `gorm:"type:text"`
+	ConfigSigned      bool
+	RiskScore         int
+	Details           string `gorm:"type:text"`
+	CreatedBy         string `gorm:"size:128"`
+}
+
+func (DBAgentConfigCheck) TableName() string { return "agent_config_checks" }
+
+type DBAgentRuntimeEvent struct {
+	ID          int64     `gorm:"primaryKey;autoIncrement"`
+	AgentName   string    `gorm:"size:128;not null;index:idx_agent_event"`
+	EventAt     time.Time `gorm:"index:idx_agent_event_time"`
+	EventType   string    `gorm:"size:64;not null"`
+	EventTarget string    `gorm:"size:512"`
+	Severity    string    `gorm:"size:32;not null;index:idx_event_sev"`
+	RuleName    string    `gorm:"size:128"`
+	Details     string    `gorm:"type:text"`
+	LogSource   string    `gorm:"size:512"`
+	SessionID   string    `gorm:"size:128"`
+	CreatedBy   string    `gorm:"size:128"`
+}
+
+func (DBAgentRuntimeEvent) TableName() string { return "agent_runtime_events" }
+

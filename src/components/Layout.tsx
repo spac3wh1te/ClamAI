@@ -18,6 +18,10 @@ import {
   Server,
   Settings,
   Sliders,
+  Bot,
+  Terminal,
+  Eye,
+  ClipboardCheck,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useSetup } from "../context/SetupContext";
@@ -70,6 +74,18 @@ function Layout({ children }: LayoutProps) {
           : []),
       ],
     },
+    ...(isAdmin
+      ? [
+          {
+            label: "AI 智能体安全",
+            items: [
+              { name: "环境安全", href: "/agent-security/environment", icon: Bot },
+              { name: "运行时安全", href: "/agent-security/runtime", icon: Terminal },
+              { name: "日志审计", href: "/agent-security/logs", icon: ClipboardCheck },
+            ],
+          },
+        ]
+      : []),
     ...(isAdmin
       ? [
           {

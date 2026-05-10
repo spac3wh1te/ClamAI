@@ -108,5 +108,8 @@ func autoMigrateAll() error {
 		&DBAdminUser{},
 		&DBVectorSample{},
 		&DBVectorConfig{},
+		&DBAgentEnvCheck{},
+		&DBAgentConfigCheck{},
+		&DBAgentRuntimeEvent{},
 	)
 }

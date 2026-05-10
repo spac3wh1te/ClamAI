@@ -198,4 +198,62 @@ export const agentApi = {
 
   pushSkills: (agentName: string, model: string) =>
     apiRequest<{ tasks: { id: string; task_no: string; file_name: string }[]; total: number; message: string }>("POST", "/agent/push-skills", { agent_name: agentName, model }),
+
+  listAgents: () =>
+    apiRequest<{ agents: AgentInfo[]; total: number }>("GET", "/agent/list"),
+
+  parseLogs: (params: { agent_name?: string; path?: string }) =>
+    apiRequest<TimelineParseResult>("POST", "/agent/logs/parse", params),
+
+  runtimeEvents: (params: { agent?: string; severity?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params.agent) qs.set("agent", params.agent);
+    if (params.severity) qs.set("severity", params.severity);
+    if (params.limit) qs.set("limit", String(params.limit));
+    if (params.offset) qs.set("offset", String(params.offset));
+    const s = qs.toString();
+    return apiRequest<{ events: AgentRuntimeEvent[]; total: number }>("GET", `/agent/runtime-events${s ? "?" + s : ""}`);
+  },
 };
+
+export interface AgentInfo {
+  name: string;
+  dir: string;
+  detected: boolean;
+  has_config: boolean;
+  has_skills: boolean;
+  has_logs: boolean;
+  session_count: number;
+}
+
+export interface TimelineEvent {
+  timestamp: string;
+  agent_name: string;
+  event_type: string;
+  content: string;
+  severity: string;
+  rule_name?: string;
+  file_path: string;
+}
+
+export interface TimelineParseResult {
+  events: TimelineEvent[];
+  total: number;
+  critical: number;
+  high: number;
+  medium: number;
+  scan_time: string;
+}
+
+export interface AgentRuntimeEvent {
+  ID: number;
+  AgentName: string;
+  EventAt: string;
+  EventType: string;
+  EventTarget: string;
+  Severity: string;
+  RuleName: string;
+  Details: string;
+  LogSource: string;
+  SessionID: string;
+}

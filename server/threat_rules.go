@@ -119,6 +119,43 @@ func seedDefaultThreatRules() {
 			`(?i)(generate\s+(malicious|evil)\s+(code|script|payload))`,
 			`(?i)(how\s+to\s+(hack|crack|exploit)\s+)`,
 		}, "critical"},
+		{"agent_behavior", "高危文件操作", []string{
+			`(?i)(filesystem\.write.*(/etc/|\.ssh/|passwd|shadow))`,
+			`(?i)(write_file.*(/etc/|\.ssh/|passwd|shadow))`,
+			`(?i)(file_put_contents.*(/etc/|\.ssh/|passwd))`,
+			`(?i)(echo\s+.*\s*>>\s*(/etc/passwd|/etc/shadow|/\.ssh/))`,
+		}, "critical"},
+		{"agent_behavior", "批处理删除", []string{
+			`(?i)(rm\s+-rf\s+/)`,
+			`(?i)(del\s+/[sS]\s+/[qQ]\s+)`,
+			`(?i)(rmdir\s+/[sS]\s+/[qQ])`,
+			`(?i)(Remove-Item\s+.*-Recurse\s+-Force)`,
+			`(?i)(shell\.execute.*rm\s+-rf)`,
+			`(?i)(shutil\.rmtree)`,
+		}, "critical"},
+		{"agent_behavior", "内网渗透", []string{
+			`(?i)(http\.request.*(192\.168\.|10\.\d+\.|172\.(1[6-9]|2[0-9]|3[01])\.))`,
+			`(?i)(curl.*(192\.168\.|10\.\d+\.|172\.(1[6-9]|2[0-9]|3[01])\.))`,
+			`(?i)(wget.*(192\.168\.|10\.\d+\.|172\.(1[6-9]|2[0-9]|3[01])\.))`,
+			`(?i)(fetch\(.*(192\.168\.|10\.\d+\.|172\.(1[6-9]|2[0-9]|3[01])\.))`,
+		}, "high"},
+		{"agent_behavior", "凭证访问", []string{
+			`(?i)(\.(pem|key|secret|token|credentials|env)\b)`,
+			`(?i)(aws_access_key|aws_secret|AWS_SESSION_TOKEN)`,
+			`(?i)(cat\s+.*(/id_rsa|/id_ed25519|/\.env|/credentials))`,
+		}, "high"},
+		{"agent_behavior", "下载执行", []string{
+			`(?i)(curl.*\|\s*(sh|bash|python|perl))`,
+			`(?i)(wget.*-O.*\|\s*(sh|bash))`,
+			`(?i)(Invoke-WebRequest.*\|\s*Invoke-Expression)`,
+			`(?i)(iex\s*\(\s*(New-Object|irm|wget))`,
+		}, "critical"},
+		{"agent_injection", "Agent Prompt 注入", []string{
+			`(?i)(ignore\s+(all\s+)?previous\s+(instructions|commands|orders))`,
+			`(?i)(你现在是|从现在起你是|you\s+are\s+now\s+a).*(而不是|instead\s+of)`,
+			`(?i)(忽略.*(以上|above|prior).*(指令|prompts|instructions))`,
+			`(?i)((以下|below).*(system|系统).*(prompt|提示词))`,
+		}, "high"},
 	}
 
 	for _, s := range seeds {
