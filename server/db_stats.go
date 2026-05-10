@@ -728,7 +728,7 @@ func dbGetSecurityTokenStats(periodMinutes int, userID string, isAdmin bool) *Se
 		ByType: make(map[string]int64),
 	}
 
-	baseWhere := `timestamp >= ? AND (path = '/analysis/v1/chat/completions' OR path = '/security/semantic-check')`
+	baseWhere := `timestamp >= ? AND call_type = 'security'`
 	args := []interface{}{cutoff}
 	if !isAdmin && userID != "" {
 		baseWhere += ` AND user_id = ?`
@@ -742,12 +742,12 @@ func dbGetSecurityTokenStats(periodMinutes int, userID string, isAdmin bool) *Se
 
 	rows, err := gormDB.Raw(`SELECT
 		CASE
-			WHEN path = '/security/semantic-check' THEN 'security_check'
+			WHEN path LIKE '%/security/semantic-check%' THEN 'security_check'
 			WHEN request_content LIKE '%"analysis_type":"agent_deep_check%' THEN 'agent_deep_check'
 			WHEN request_content LIKE '%"analysis_type":"user_profile_task%' THEN 'user_profile_task'
 			WHEN request_content LIKE '%"analysis_type":"user_profile%' THEN 'user_profile'
 			WHEN request_content LIKE '%"analysis_type":"skills_detection%' THEN 'skills_detection'
-			ELSE 'other'
+			ELSE 'security_analysis'
 		END as atype,
 		COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) as tok
 		FROM request_logs WHERE `+baseWhere+` GROUP BY atype`, args...).Rows()
