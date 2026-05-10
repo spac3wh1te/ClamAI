@@ -50,28 +50,15 @@ function Layout({ children }: LayoutProps) {
       ],
     },
     {
-      label: "防护中心",
+      label: "模型防护中心",
       items: [
         ...(isAdmin
           ? [
               { name: "实时防护", href: "/alerts/realtime", icon: ShieldAlert } as Item,
-              { name: "威胁挖掘", href: "/alerts/threats", icon: Bug } as Item,
+              { name: "会话防护", href: "/alerts/threats", icon: Bug } as Item,
             ]
           : []),
         { name: "安全广场", href: "/security-tools", icon: ScanSearch },
-      ],
-    },
-    {
-      label: "管控中心",
-      items: [
-        { name: "模型管理", href: "/models-mgmt", icon: Layers, matchPrefix: true },
-        ...(isAdmin
-          ? [
-              { name: "用户管理", href: "/user-management", icon: Users } as Item,
-              { name: "密钥管控", href: "/key-control", icon: Fingerprint } as Item,
-              { name: "流量控制", href: "/rate-limit", icon: Gauge } as Item,
-            ]
-          : []),
       ],
     },
     ...(isAdmin
@@ -86,6 +73,19 @@ function Layout({ children }: LayoutProps) {
           },
         ]
       : []),
+    {
+      label: "管控中心",
+      items: [
+        { name: "模型管理", href: "/models-mgmt", icon: Layers, matchPrefix: true },
+        ...(isAdmin
+          ? [
+              { name: "用户管理", href: "/user-management", icon: Users } as Item,
+              { name: "密钥管控", href: "/key-control", icon: Fingerprint } as Item,
+              { name: "流量控制", href: "/rate-limit", icon: Gauge } as Item,
+            ]
+          : []),
+      ],
+    },
     ...(isAdmin
       ? [
           {
