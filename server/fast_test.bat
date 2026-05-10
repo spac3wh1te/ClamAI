@@ -11,11 +11,11 @@ if %errorlevel% neq 0 (
 )
 
 echo [2/3] Copying frontend to service...
-xcopy /E /Y /Q dist\* clamai-service\frontend\dist\
+xcopy /E /Y /Q dist\* server\frontend\dist\
 
 echo [3/3] Building Go service...
-cd clamai-service
-go build -tags server -o clamai-service.exe .
+cd server
+go build -tags server -o ClamAI-service.exe .
 if %errorlevel% neq 0 (
     echo Go build failed!
     exit /b 1

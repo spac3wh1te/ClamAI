@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 set "PROJECT_ROOT=%~dp0"
 set "SRC_TAURI=%PROJECT_ROOT%src-tauri"
-set "PROXY_SERVICE=%PROJECT_ROOT%clamai-service"
+set "PROXY_SERVICE=%PROJECT_ROOT%server"
 
 set "BUILD_DIR=%PROJECT_ROOT%_build"
 set "RUST_BUILD=%BUILD_DIR%\rust"

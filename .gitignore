@@ -29,8 +29,6 @@ _build/rust/target/
 src-tauri/target/
 
 # Go
-proxy-service/ClamAI-service
-proxy-service/ClamAI-service.exe
 *.exe
 *.exe~
 *.dll
