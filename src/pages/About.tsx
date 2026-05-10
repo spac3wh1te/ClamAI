@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { configApi } from "../api/config";
-import { Shield, ExternalLink, RefreshCw, Loader2, Github } from "lucide-react";
+import { Shield, ExternalLink, RefreshCw, Github } from "lucide-react";
 import { useSetup } from "../context/SetupContext";
 
 export default function About() {
@@ -32,7 +32,7 @@ export default function About() {
           {appInfo && (
             <div className="bg-secondary rounded-lg px-4 py-2">
               <span className="text-sm font-mono">v{appInfo.version}</span>
-              <span className="text-xs text-muted-foreground ml-2">({appInfo.deploy_mode} 模式)</span>
+              <span className="text-xs text-muted-foreground ml-2">({appInfo.deploy_mode === "server" ? "服务器模式" : "PC 本地模式"})</span>
             </div>
           )}
           <div className="w-full border-t border-border pt-4 space-y-2 text-left">
@@ -45,29 +45,21 @@ export default function About() {
               <span>{appInfo?.deploy_mode === "server" ? "服务器模式" : "PC 本地模式"}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">代理端口</span>
-              <span className="font-mono">{appInfo?.proxy_port || "-"}</span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">管理端口</span>
-              <span className="font-mono">{appInfo?.admin_port || "-"}</span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">作者</span>
-              <span>ClamAI Team</span>
+              <span>chenflux</span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">项目地址</span>
-              <a href="https://github.com/clamai/clamai" target="_blank" rel="noopener noreferrer"
+              <a href="https://github.com/chenflux/ClamAI" target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1 text-primary hover:underline">
                 <Github size={12} />
-                <span>github.com/clamai/clamai</span>
+                <span>chenflux/ClamAI</span>
                 <ExternalLink size={10} />
               </a>
             </div>
           </div>
           <div className="w-full border-t border-border pt-4 flex justify-center gap-3">
-            <button onClick={() => window.open("https://github.com/clamai/clamai/releases", "_blank")}
+            <button onClick={() => window.open("https://github.com/chenflux/ClamAI/releases", "_blank")}
               className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm">
               <RefreshCw size={16} />
               获取更新
