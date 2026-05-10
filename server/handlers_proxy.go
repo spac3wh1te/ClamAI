@@ -174,7 +174,7 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		Success:            resp.StatusCode >= 200 && resp.StatusCode < 300,
 		ErrorMessage:       "",
 		ClientIP:           getClientIP(r),
-		APIKeyUsed:         maskAPIKeyForLog(apiKey),
+		APIKeyUsed:         apiKey,
 		CallType:          "model-call",
 		StatusCode:         resp.StatusCode,
 		Path:               r.URL.Path,

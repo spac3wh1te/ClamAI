@@ -268,7 +268,7 @@ func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
 
 	for _, k := range allKeys {
 		lastLogID := getLastAnalyzedLogID(k.ID)
-		logs, _ := dbGetLogsByAPIKeyAfterID(maskAPIKeyForLog(k.Key), lastLogID, 500)
+		logs, _ := dbGetLogsByAPIKeyAfterID(k.Key, lastLogID, 500)
 
 		apiKeysMu.Lock()
 		keyName := ""
@@ -586,7 +586,7 @@ func dbInsertSecurityAlertFromSystem(taskID, riskLevel, summary, model, apiKey, 
 		Severity:       severity,
 		ContentPreview: contentPreview,
 		Model:          model,
-		APIKeyUsed:     maskAPIKeyForLog(apiKey),
+		APIKeyUsed:     apiKey,
 		Action:         "记录告警",
 		Resolved:       false,
 		ClientIP:       "system",

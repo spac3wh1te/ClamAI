@@ -139,7 +139,7 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 		{"role": "user", "content": content},
 	}
 
-	statusCode, inTok, outTok, respBody, err := p.internalChatCompletion(cfg.SemanticModel, messages, 0.0, 200)
+	statusCode, _, _, respBody, err := p.internalChatCompletion(cfg.SemanticModel, messages, 0.0, 200)
 	if err != nil {
 		return nil, err
 	}
@@ -147,12 +147,6 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 	var respData map[string]interface{}
 	if sonic.Unmarshal(respBody, &respData) != nil {
 		return nil, nil
-	}
-
-	provider2, modelName := p.resolveProvider(cfg.SemanticModel)
-	providerName := ""
-	if provider2 != nil {
-		providerName = provider2.GetName()
 	}
 
 	if statusCode < 200 || statusCode >= 300 {
@@ -184,24 +178,6 @@ func (p *ProxyServer) semanticCheck(content string, cfg SecurityConfig) (*Semant
 		}
 		result.Categories[cat] = cr
 	}
-
-	entry := &RequestLog{
-		Timestamp:       time.Now(),
-		Provider:        providerName,
-		Model:           modelName,
-		InputTokens:     inTok,
-		OutputTokens:    outTok,
-		Success:         true,
-		ClientIP:        "security",
-		APIKeyUsed:      "security-semantic",
-		StatusCode:      statusCode,
-		Path:            "/security/semantic-check",
-		Method:          "POST",
-		RequestContent:  truncateStr(content, 500),
-		ResponseContent: truncateStr(string(respBody), 5000),
-		CallType:       "security",
-	}
-	dbInsertLog(entry)
 
 	return result, nil
 }

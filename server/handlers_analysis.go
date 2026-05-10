@@ -118,7 +118,7 @@ func (p *ProxyServer) handleUserProfileAnalysis(w http.ResponseWriter, r *http.R
 		days = 7
 	}
 
-	logs, total := dbGetLogsByAPIKey(maskAPIKeyForLog(gatewayKeyStr), 500)
+	logs, total := dbGetLogsByAPIKey(gatewayKeyStr, 500)
 	log.Printf("[INFO] handleUserProfileAnalysis: gateway_key=%s***, logs_found=%d, total=%d", gatewayKeyStr[:min(8, len(gatewayKeyStr))], len(logs), total)
 
 	var conversationSummary strings.Builder
@@ -1064,7 +1064,7 @@ func (p *ProxyServer) executeAnalysisTask(taskID string, task map[string]interfa
 	}
 	log.Printf("[ANALYSIS] id=%s modelForGateway=%s", taskID, modelForGateway)
 
-	logs, total := dbGetLogsByAPIKey(maskAPIKeyForLog(gatewayKey.Key), 500)
+	logs, total := dbGetLogsByAPIKey(gatewayKey.Key, 500)
 
 	var conversationSummary strings.Builder
 	conversationSummary.WriteString(fmt.Sprintf("以下是通过该API Key的调用记录（共%d条），请分析调用者行为模式：\n\n", len(logs)))

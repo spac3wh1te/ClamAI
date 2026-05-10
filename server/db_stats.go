@@ -159,6 +159,7 @@ func dbInsertLog(entry *RequestLog) {
 		UpstreamRespBody:    entry.UpstreamRespBody,
 		UpstreamProvider:    entry.UpstreamProvider,
 		UpstreamModel:       entry.UpstreamModel,
+		ClientReqHeaders:    entry.ClientReqHeaders,
 	}
 	if err := gormDB.Create(&dbEntry).Error; err != nil {
 		log.Printf("[ERROR] dbInsertLog: %v", err)
