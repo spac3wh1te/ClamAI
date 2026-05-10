@@ -330,8 +330,8 @@ export default function ModelCallLogs() {
                             <span className="w-2 h-2 rounded-full bg-purple-400" /> 安全分析
                           </h4>
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                            <SectionPanel title="Request" titleColor="bg-blue-500/10 text-blue-400" method={log.method || "POST"} path={log.path || "/security/semantic-check"} body={log.request_content} />
-                            <SectionPanel title="Response" titleColor="bg-emerald-500/10 text-emerald-400" body={log.response_content} />
+                            <SectionPanel title="Request" titleColor="bg-blue-500/10 text-blue-400" method={log.method || "POST"} path={log.path || "/security/semantic-check"} headers={log.upstream_request_headers} body={log.request_content} />
+                            <SectionPanel title="Response" titleColor="bg-emerald-500/10 text-emerald-400" headers={log.upstream_response_headers} body={log.response_content} />
                           </div>
                         </div>
                       ) : (log.call_type === "model-call" || log.is_proxy_call || log.upstream_provider) ? (
