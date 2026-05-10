@@ -264,6 +264,7 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/profiles/{id}", p.handleProfileAction).Methods("PUT")
 	api.HandleFunc("/profiles/{id}", p.handleDeleteProfile).Methods("DELETE")
 	api.HandleFunc("/app/info", p.handleAppInfo).Methods("GET")
+	api.HandleFunc("/app/restart", p.handleAppRestart).Methods("POST")
 
 	api.HandleFunc("/providers", p.handleListProviders).Methods("GET")
 	api.HandleFunc("/providers", p.handleAddProvider).Methods("POST")

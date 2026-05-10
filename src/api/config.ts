@@ -75,4 +75,6 @@ export const configApi = {
     apiRequest<void>("PUT", `/profiles/${encodeURIComponent(profileId)}`, { action: "rename", new_name: newName }),
 
   appInfo: () => apiRequest<AppInfo>("GET", "/app/info"),
+
+  restartService: () => apiRequest<{ status: string }>("POST", "/app/restart"),
 };

@@ -107,6 +107,7 @@ export default function BasicSettings() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [portRestarting, setPortRestarting] = useState(false);
+  const [serviceRestarting, setServiceRestarting] = useState(false);
 
   const { data: currentConfig, isLoading } = useQuery<AppConfig>({
     queryKey: ["config"],
@@ -277,6 +278,27 @@ export default function BasicSettings() {
   const handleRenameProfile = async (profileId: string) => {
     if (!renameValue.trim()) return;
     try { await configApi.renameProfile(profileId, renameValue.trim()); setRenamingId(null); refetchProfiles(); } catch (e: any) { alert("重命名失败: " + (e?.toString() || "未知错误")); }
+  };
+
+  const handleRestartService = async () => {
+    if (!confirm("确定要重启 ClamAI 服务？服务将短暂不可用。")) return;
+    setServiceRestarting(true);
+    try {
+      if (currentMode === "pc") {
+        await invoke("restart_proxy_service");
+        await checkSetup();
+        queryClient.invalidateQueries({ queryKey: ["config"] });
+        alert("服务已重启");
+      } else {
+        await configApi.restartService();
+        alert("服务正在重启，请稍后刷新页面...");
+        setTimeout(() => window.location.reload(), 3000);
+      }
+    } catch (e: any) {
+      alert("重启失败: " + (e?.toString() || "未知错误"));
+    } finally {
+      setServiceRestarting(false);
+    }
   };
 
   return (
@@ -639,6 +661,19 @@ export default function BasicSettings() {
           </div>
         </div>
       </form>
+
+      {isAdmin && (
+      <div className="bg-card rounded-lg p-6 border border-border">
+        <h2 className="text-xl font-semibold mb-4">服务管理</h2>
+        <p className="text-xs text-muted-foreground mb-4">适用于 ClamAI 二进制更新后，重启服务重新拉起。重启期间服务将短暂不可用。</p>
+        <button onClick={handleRestartService} disabled={serviceRestarting}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors text-sm">
+          {serviceRestarting && <Loader2 size={16} className="animate-spin" />}
+          <RefreshCw size={16} />
+          {serviceRestarting ? "重启中..." : "重启服务"}
+        </button>
+      </div>
+      )}
 
       {saveMutation.isSuccess && <div className="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg">配置保存成功</div>}
     </div>

@@ -4,6 +4,7 @@ import { agentApi, type AgentRuntimeEvent } from "../../api/analysis";
 import {
   Bot, Search, RefreshCw, AlertTriangle, ShieldAlert, Info,
   ChevronDown, ChevronRight, Copy, Check, Loader2, Filter, X,
+  ChevronLeft, Calendar,
 } from "lucide-react";
 
 const SEV_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -21,6 +22,8 @@ const TYPE_OPTIONS = [
   { value: "message", label: "消息" },
 ];
 
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -28,6 +31,66 @@ function CopyBtn({ text }: { text: string }) {
       className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground shrink-0" title="复制">
       {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
     </button>
+  );
+}
+
+function Pagination({ page, totalPages, total, pageSize, onPageChange, onPageSizeChange }: {
+  page: number; totalPages: number; total: number; pageSize: number;
+  onPageChange: (p: number) => void; onPageSizeChange: (s: number) => void;
+}) {
+  if (total === 0) return null;
+
+  const pages: (number | "...")[] = [];
+  if (totalPages <= 7) {
+    for (let i = 0; i < totalPages; i++) pages.push(i);
+  } else {
+    pages.push(0);
+    if (page > 2) pages.push("...");
+    const start = Math.max(1, page - 1);
+    const end = Math.min(totalPages - 2, page + 1);
+    for (let i = start; i <= end; i++) pages.push(i);
+    if (page < totalPages - 3) pages.push("...");
+    pages.push(totalPages - 1);
+  }
+
+  return (
+    <div className="flex items-center justify-between px-4 py-3 border-t border-border flex-wrap gap-2">
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-muted-foreground">共 {total} 条</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">每页</span>
+          <select value={pageSize} onChange={(e) => onPageSizeChange(Number(e.target.value))}
+            className="bg-secondary border border-border rounded px-1.5 py-0.5 text-xs text-foreground">
+            {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <span className="text-xs text-muted-foreground">条</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-1">
+        <button onClick={() => onPageChange(0)} disabled={page === 0}
+          className="px-2 py-1 text-xs bg-secondary border border-border rounded disabled:opacity-30 hover:bg-secondary/80">首页</button>
+        <button onClick={() => onPageChange(page - 1)} disabled={page === 0}
+          className="p-1 bg-secondary border border-border rounded disabled:opacity-30 hover:bg-secondary/80">
+          <ChevronLeft size={12} />
+        </button>
+        {pages.map((p, i) =>
+          p === "..." ? (
+            <span key={`d${i}`} className="px-1 text-xs text-muted-foreground">...</span>
+          ) : (
+            <button key={p} onClick={() => onPageChange(p)}
+              className={`min-w-[28px] px-1.5 py-1 text-xs rounded border ${p === page ? "bg-primary text-primary-foreground border-primary" : "bg-secondary border-border hover:bg-secondary/80"}`}>
+              {p + 1}
+            </button>
+          )
+        )}
+        <button onClick={() => onPageChange(page + 1)} disabled={page >= totalPages - 1}
+          className="p-1 bg-secondary border border-border rounded disabled:opacity-30 hover:bg-secondary/80">
+          <ChevronLeft size={12} className="rotate-180" />
+        </button>
+        <button onClick={() => onPageChange(totalPages - 1)} disabled={page >= totalPages - 1}
+          className="px-2 py-1 text-xs bg-secondary border border-border rounded disabled:opacity-30 hover:bg-secondary/80">末页</button>
+      </div>
+    </div>
   );
 }
 
@@ -40,7 +103,9 @@ export default function AgentLogAudit() {
   const [typeFilter, setTypeFilter] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [page, setPage] = useState(0);
-  const PAGE_SIZE = 50;
+  const [pageSize, setPageSize] = useState(50);
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
 
   const { data: agentsData } = useQuery({
     queryKey: ["agent-list"],
@@ -51,14 +116,16 @@ export default function AgentLogAudit() {
   const agents = (agentsData?.agents || []).filter((a: any) => a.detected);
 
   const { data: eventsData } = useQuery({
-    queryKey: ["agent-log-events", selectedAgent, sevFilter, typeFilter, search, page],
+    queryKey: ["agent-log-events", selectedAgent, sevFilter, typeFilter, search, page, pageSize, startTime, endTime],
     queryFn: () => agentApi.runtimeEvents({
       agent: selectedAgent || undefined,
       severity: sevFilter || undefined,
       event_type: typeFilter || undefined,
       search: search || undefined,
-      limit: PAGE_SIZE,
-      offset: page * PAGE_SIZE,
+      start_time: startTime || undefined,
+      end_time: endTime || undefined,
+      limit: pageSize,
+      offset: page * pageSize,
     }),
     staleTime: 0,
     refetchInterval: 15000,
@@ -75,12 +142,8 @@ export default function AgentLogAudit() {
   const events = eventsData?.events || [];
   const total = eventsData?.total || 0;
   const sevMap = eventsData?.sev_map || {};
-  const totalPages = Math.ceil(total / PAGE_SIZE);
-
-  const critical = sevMap.critical || 0;
-  const high = sevMap.high || 0;
-  const medium = sevMap.medium || 0;
-  const info = sevMap.info || 0;
+  const agentMap = eventsData?.agent_map || {};
+  const totalPages = Math.ceil(total / pageSize);
 
   const handleScan = () => {
     parseMutation.mutate({ agent_name: selectedAgent || undefined });
@@ -98,9 +161,11 @@ export default function AgentLogAudit() {
     setSearchInput("");
     setSelectedAgent("");
     setPage(0);
+    setStartTime("");
+    setEndTime("");
   };
 
-  const hasFilters = sevFilter || typeFilter || search || selectedAgent;
+  const hasFilters = sevFilter || typeFilter || search || selectedAgent || startTime || endTime;
 
   return (
     <div className="space-y-4">
@@ -146,6 +211,14 @@ export default function AgentLogAudit() {
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
+          <div className="flex items-center gap-1.5">
+            <Calendar size={14} className="text-muted-foreground shrink-0" />
+            <input type="datetime-local" value={startTime} onChange={(e) => { setStartTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setPage(0); }}
+              className="bg-secondary border border-border rounded-md px-2 py-1.5 text-sm text-foreground" />
+            <span className="text-xs text-muted-foreground">~</span>
+            <input type="datetime-local" value={endTime ? new Date(endTime).toISOString().slice(0, 16) : ""} onChange={(e) => { setEndTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setPage(0); }}
+              className="bg-secondary border border-border rounded-md px-2 py-1.5 text-sm text-foreground" />
+          </div>
           <div className="flex items-center gap-1 flex-1 min-w-[200px]">
             <div className="relative flex-1">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -170,43 +243,54 @@ export default function AgentLogAudit() {
         </div>
       )}
 
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-card rounded-lg border border-border p-4 flex items-start gap-3">
           <div className="p-2 rounded-lg bg-red-500/10 text-red-400"><ShieldAlert size={18} /></div>
           <div>
             <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">严重 + 高危</p>
-            <p className="text-xl font-bold">{critical + high}</p>
+            <p className="text-xl font-bold">{(sevMap.critical || 0) + (sevMap.high || 0)}</p>
           </div>
         </div>
         <div className="bg-card rounded-lg border border-border p-4 flex items-start gap-3">
           <div className="p-2 rounded-lg bg-yellow-500/10 text-yellow-400"><AlertTriangle size={18} /></div>
           <div>
             <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">可疑</p>
-            <p className="text-xl font-bold">{medium}</p>
+            <p className="text-xl font-bold">{sevMap.medium || 0}</p>
           </div>
         </div>
         <div className="bg-card rounded-lg border border-border p-4 flex items-start gap-3">
           <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400"><Info size={18} /></div>
           <div>
             <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">正常</p>
-            <p className="text-xl font-bold">{info}</p>
+            <p className="text-xl font-bold">{sevMap.info || 0}</p>
           </div>
         </div>
         <div className="bg-card rounded-lg border border-border p-4 flex items-start gap-3">
           <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400"><Bot size={18} /></div>
           <div>
-            <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">总记录</p>
+            <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">当前筛选结果</p>
             <p className="text-xl font-bold">{total}</p>
           </div>
         </div>
-        <div className="bg-card rounded-lg border border-border p-4 flex items-start gap-3">
-          <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400"><Search size={18} /></div>
-          <div>
-            <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">当前筛选</p>
-            <p className="text-xl font-bold">{events.length}</p>
+      </div>
+
+      {Object.keys(agentMap).length > 1 && (
+        <div className="bg-card rounded-lg border border-border p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Bot size={14} className="text-muted-foreground" />
+            <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">各智能体日志数量</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(agentMap).sort((a, b) => b[1] - a[1]).map(([name, count]) => (
+              <button key={name} onClick={() => { setSelectedAgent(selectedAgent === name ? "" : name); setPage(0); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs border transition-colors ${selectedAgent === name ? "bg-primary/10 border-primary/30 text-primary" : "bg-secondary border-border text-foreground hover:border-primary/30"}`}>
+                <span className="font-medium">{name}</span>
+                <span className="text-muted-foreground">{count}</span>
+              </button>
+            ))}
           </div>
         </div>
-      </div>
+      )}
 
       <div className="bg-card rounded-lg border border-border">
         {events.length === 0 ? (
@@ -284,17 +368,9 @@ export default function AgentLogAudit() {
                 );
               })}
             </div>
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-4 py-3 border-t border-border">
-                <p className="text-sm text-muted-foreground">第 {page + 1} / {totalPages} 页 (共 {total} 条)</p>
-                <div className="flex gap-2">
-                  <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
-                    className="px-3 py-1.5 text-sm bg-secondary border border-border rounded-md disabled:opacity-30">上一页</button>
-                  <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
-                    className="px-3 py-1.5 text-sm bg-secondary border border-border rounded-md disabled:opacity-30">下一页</button>
-                </div>
-              </div>
-            )}
+            <Pagination page={page} totalPages={totalPages} total={total} pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }} />
           </>
         )}
       </div>

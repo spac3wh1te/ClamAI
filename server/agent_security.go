@@ -260,6 +260,8 @@ func (p *ProxyServer) handleAgentRuntimeEvents(w http.ResponseWriter, r *http.Re
 	severity := r.URL.Query().Get("severity")
 	eventType := r.URL.Query().Get("event_type")
 	search := r.URL.Query().Get("search")
+	startTime := r.URL.Query().Get("start_time")
+	endTime := r.URL.Query().Get("end_time")
 	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if v, err := parseInt(l); err == nil && v > 0 && v <= 500 {
@@ -287,6 +289,16 @@ func (p *ProxyServer) handleAgentRuntimeEvents(w http.ResponseWriter, r *http.Re
 		q := "%" + search + "%"
 		query = query.Where("details LIKE ? OR rule_name LIKE ? OR event_target LIKE ? OR log_source LIKE ?", q, q, q, q)
 	}
+	if startTime != "" {
+		if t, err := time.Parse(time.RFC3339, startTime); err == nil {
+			query = query.Where("event_at >= ?", t.UTC())
+		}
+	}
+	if endTime != "" {
+		if t, err := time.Parse(time.RFC3339, endTime); err == nil {
+			query = query.Where("event_at <= ?", t.UTC())
+		}
+	}
 
 	var total int64
 	query.Count(&total)
@@ -305,11 +317,23 @@ func (p *ProxyServer) handleAgentRuntimeEvents(w http.ResponseWriter, r *http.Re
 		sevMap[sc.Severity] = sc.Count
 	}
 
+	type agentCount struct {
+		AgentName string
+		Count     int64
+	}
+	var agentCounts []agentCount
+	gormDB.Model(&DBAgentRuntimeEvent{}).Select("agent_name, COUNT(*) as count").Group("agent_name").Scan(&agentCounts)
+	agentMap := map[string]int64{}
+	for _, ac := range agentCounts {
+		agentMap[ac.AgentName] = ac.Count
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"events":   events,
-		"total":    total,
-		"sev_map":  sevMap,
+		"events":    events,
+		"total":     total,
+		"sev_map":   sevMap,
+		"agent_map": agentMap,
 	})
 }
 

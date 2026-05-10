@@ -22,6 +22,7 @@ import {
   Terminal,
   Eye,
   ClipboardCheck,
+  Info,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useSetup } from "../context/SetupContext";
@@ -106,6 +107,7 @@ function Layout({ children }: LayoutProps) {
               { name: "安全设置", href: "/security-settings", icon: ShieldCheck } as Item,
             ]
           : []),
+        { name: "关于", href: "/about", icon: Info },
       ],
     },
   ];

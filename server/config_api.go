@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -632,6 +633,16 @@ func (ps *ProxyServer) handleAppInfo(w http.ResponseWriter, r *http.Request) {
 		"proxy_port":  port,
 		"admin_port":  adminPort,
 	})
+}
+
+func (ps *ProxyServer) handleAppRestart(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[APP] Received restart request via API")
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "restarting"})
 }
 
 func getUserIDFromRequest(r *http.Request) string {

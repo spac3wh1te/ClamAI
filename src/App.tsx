@@ -29,6 +29,7 @@ import SystemLogs from "./pages/SystemLogs";
 import AgentEnvironment from "./pages/agent/AgentEnvironment";
 import AgentRuntimeSecurity from "./pages/agent/AgentRuntimeSecurity";
 import AgentLogAudit from "./pages/agent/AgentLogAudit";
+import About from "./pages/About";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -59,6 +60,7 @@ const mainRoutes = (
     <Route path="/agent-security/logs" element={<AdminRoute><AgentLogAudit /></AdminRoute>} />
     <Route path="/basic-settings" element={<BasicSettings />} />
     <Route path="/security-settings" element={<AdminRoute><SecuritySettings /></AdminRoute>} />
+    <Route path="/about" element={<About />} />
     <Route path="/providers" element={<Navigate to="/models-mgmt" replace />} />
     <Route path="/models" element={<Navigate to="/models-mgmt" replace />} />
     <Route path="/api-keys" element={<Navigate to="/models-mgmt" replace />} />

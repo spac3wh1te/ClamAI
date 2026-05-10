@@ -205,16 +205,18 @@ export const agentApi = {
   parseLogs: (params: { agent_name?: string; path?: string }) =>
     apiRequest<TimelineParseResult>("POST", "/agent/logs/parse", params),
 
-  runtimeEvents: (params: { agent?: string; severity?: string; event_type?: string; search?: string; limit?: number; offset?: number }) => {
+  runtimeEvents: (params: { agent?: string; severity?: string; event_type?: string; search?: string; start_time?: string; end_time?: string; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams();
     if (params.agent) qs.set("agent", params.agent);
     if (params.severity) qs.set("severity", params.severity);
     if (params.event_type) qs.set("event_type", params.event_type);
     if (params.search) qs.set("search", params.search);
+    if (params.start_time) qs.set("start_time", params.start_time);
+    if (params.end_time) qs.set("end_time", params.end_time);
     if (params.limit) qs.set("limit", String(params.limit));
     if (params.offset) qs.set("offset", String(params.offset));
     const s = qs.toString();
-    return apiRequest<{ events: AgentRuntimeEvent[]; total: number; sev_map: Record<string, number> }>("GET", `/agent/runtime-events${s ? "?" + s : ""}`);
+    return apiRequest<{ events: AgentRuntimeEvent[]; total: number; sev_map: Record<string, number>; agent_map: Record<string, number> }>("GET", `/agent/runtime-events${s ? "?" + s : ""}`);
   },
 };
 
