@@ -154,7 +154,7 @@ export default function Dashboard() {
   const totalProviderCalls = providerEntries.reduce((s, [, d]: any) => s + (d.requests || 0), 0);
   const totalProviderTokens = providerEntries.reduce((s, [, d]: any) => s + (d.tokens || 0), 0);
   const avgProviderTokens = totalProviderCalls > 0 ? Math.round(totalProviderTokens / totalProviderCalls) : 0;
-  const securityRatio = stats.total_tokens > 0 && securityTokenStats ? ((securityTokenStats.total_tokens / stats.total_tokens) * 100).toFixed(1) : "0.0";
+  const securityRatio = (stats.total_tokens > 0 || (securityTokenStats && securityTokenStats.total_tokens > 0)) ? (((securityTokenStats?.total_tokens || 0) / (stats.total_tokens + (securityTokenStats?.total_tokens || 0))) * 100).toFixed(1) : "0.0";
 
   const securityStatus = totalAlerts === 0 ? "safe" : totalAlerts < 5 ? "warn" : "danger";
 
