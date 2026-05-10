@@ -197,8 +197,15 @@ func (p *ProxyServer) handleRefreshToken(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
+	result := issueTokenPair(username)
+	if success, _ := result["success"].(bool); !success {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(result)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(issueTokenPair(username))
+	json.NewEncoder(w).Encode(result)
 }
 
 func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Request) {

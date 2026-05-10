@@ -274,7 +274,7 @@ export default function AlertThreats() {
             <ShieldAlert size={20} className="text-orange-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold">威胁挖掘</h1>
+            <h1 className="text-2xl font-bold">会话防护</h1>
             <p className="text-sm text-muted-foreground mt-1">AI 威胁分析实时告警记录</p>
           </div>
         </div>

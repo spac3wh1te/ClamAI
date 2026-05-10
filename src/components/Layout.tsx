@@ -69,7 +69,6 @@ function Layout({ children }: LayoutProps) {
             items: [
               { name: "环境安全", href: "/agent-security/environment", icon: Bot },
               { name: "运行时安全", href: "/agent-security/runtime", icon: Terminal },
-              { name: "日志审计", href: "/agent-security/logs", icon: ClipboardCheck },
             ],
           },
         ]
@@ -93,6 +92,7 @@ function Layout({ children }: LayoutProps) {
             label: "审计中心",
             items: [
               { name: "模型调用日志", href: "/model-call-logs", icon: FileText },
+              { name: "日志审计", href: "/agent-security/logs", icon: ClipboardCheck },
               { name: "系统运行日志", href: "/system-logs", icon: Server },
             ],
           },

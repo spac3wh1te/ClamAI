@@ -24,6 +24,15 @@ func getUserFromRequest(r *http.Request) *UserClaims {
 	return claims
 }
 
+func isUserDisabled(username string) bool {
+	user, err := dbGetUserByUsername(username)
+	if err != nil {
+		return false
+	}
+	status, _ := user["status"].(string)
+	return status == "disabled"
+}
+
 func isAdmin(claims *UserClaims) bool {
 	return claims != nil && claims.Role == "admin"
 }
@@ -98,8 +107,10 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 			log.Printf("[AUTH] path=%s: localhost request, bypassing auth", path)
 			if tokenStr := extractBearerToken(r); tokenStr != "" {
 				if claims, err := validateToken(tokenStr); err == nil && claims != nil {
-					ctx := r.Context()
-					r = r.WithContext(contextWithUser(ctx, claims))
+					if !isUserDisabled(claims.Username) {
+						ctx := r.Context()
+						r = r.WithContext(contextWithUser(ctx, claims))
+					}
 				}
 			}
 			next.ServeHTTP(w, r)
@@ -124,6 +135,11 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 			if tokenStr != "" {
 				claims, err := validateToken(tokenStr)
 				if err == nil && claims != nil {
+					if isUserDisabled(claims.Username) {
+						log.Printf("[AUTH] path=%s: user %s is disabled, rejecting", path, claims.Username)
+						http.Error(w, "Account disabled", http.StatusForbidden)
+						return
+					}
 					log.Printf("[AUTH] path=%s: token valid, user=%s role=%s", path, claims.Username, claims.Role)
 					ctx := r.Context()
 					r = r.WithContext(contextWithUser(ctx, claims))
@@ -144,6 +160,11 @@ func (p *ProxyServer) adminAuthMiddleware(next http.Handler) http.Handler {
 			if tokenStr != "" {
 				claims, err := validateToken(tokenStr)
 				if err == nil && claims != nil {
+					if isUserDisabled(claims.Username) {
+						log.Printf("[AUTH] path=%s: user %s is disabled, rejecting", path, claims.Username)
+						http.Error(w, "Account disabled", http.StatusForbidden)
+						return
+					}
 					if isAdminPath(path) && !isAdmin(claims) {
 						log.Printf("[AUTH] path=%s: admin-only path, user %s is not admin", path, claims.Username)
 						http.Error(w, "Forbidden: admin only", http.StatusForbidden)
@@ -417,6 +438,13 @@ func issueTokenPair(username string) map[string]interface{} {
 		return map[string]interface{}{
 			"success": false,
 			"error":   "user not found",
+		}
+	}
+	if status, _ := user["status"].(string); status == "disabled" {
+		log.Printf("[WARN] issueTokenPair: user %q is disabled, refusing token issuance", username)
+		return map[string]interface{}{
+			"success": false,
+			"error":   "account disabled",
 		}
 	}
 	return issueTokenPairForUser(user)

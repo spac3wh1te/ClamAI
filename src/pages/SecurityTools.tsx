@@ -12,7 +12,7 @@ export default function SecurityTools() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">安全工具</h1>
+        <h1 className="text-2xl font-bold">安全广场</h1>
         <p className="text-sm text-muted-foreground mt-1">AI 安全分析工具集 — 选择工具开始扫描</p>
       </div>
       <div className="flex gap-2">
