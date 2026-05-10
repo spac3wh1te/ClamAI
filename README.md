@@ -1,11 +1,11 @@
 # ClamAI
 
 <p align="center">
-  <strong>AI 模型安全网关</strong>
+  <strong>AI 安全护栏</strong>
 </p>
 
 <p align="center">
-  Provider-native 透明代理 · 多提供商统一管理 · 内容安全防护 · AI 智能体安全
+  智能体防护 · 内容安全检测 · 多模型统一代理 | 可部署为网关或终端 EDR
 </p>
 
 <p align="center">

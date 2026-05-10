@@ -31,7 +31,7 @@ type SystemAnalysisConfig struct {
 	SystemPrompt       string `json:"system_prompt"`
 }
 
-const defaultSystemPrompt = `你是一个专业的AI网关安全分析师，专注于识别未知威胁和异常行为模式。
+const defaultSystemPrompt = `你是一个专业的AI安全分析师，专注于识别未知威胁和异常行为模式。
 
 你的任务是分析API Key的调用历史，识别潜在的安全威胁，包括但不限于：
 - 异常的调用频率或时间模式

@@ -17,7 +17,7 @@ export default function About() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">关于</h1>
-        <p className="text-sm text-muted-foreground mt-1">ClamAI 网关程序信息</p>
+        <p className="text-sm text-muted-foreground mt-1">ClamAI 程序信息</p>
       </div>
 
       <div className="bg-card rounded-lg border border-border p-8">
@@ -27,7 +27,7 @@ export default function About() {
           </div>
           <div>
             <h2 className="text-2xl font-bold">ClamAI</h2>
-            <p className="text-sm text-muted-foreground mt-1">AI 模型安全网关</p>
+            <p className="text-sm text-muted-foreground mt-1">AI 安全护栏</p>
           </div>
           {appInfo && (
             <div className="bg-secondary rounded-lg px-4 py-2">

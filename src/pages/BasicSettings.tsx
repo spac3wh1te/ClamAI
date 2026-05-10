@@ -305,7 +305,7 @@ export default function BasicSettings() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">基础设置</h1>
-        <p className="text-sm text-muted-foreground mt-1">网关配置、服务连接、主题与密码管理</p>
+        <p className="text-sm text-muted-foreground mt-1">服务配置、连接、主题与密码管理</p>
       </div>
 
       <div className="flex items-center justify-end gap-2">
@@ -519,11 +519,11 @@ export default function BasicSettings() {
           )}
         </div>
         <div className="bg-card rounded-lg p-6 border border-border">
-          <h2 className="text-xl font-semibold mb-4">网关端口配置</h2>
+          <h2 className="text-xl font-semibold mb-4">服务端口配置</h2>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">模型服务端口</label>
-              <p className="text-xs text-muted-foreground mb-1">下游应用（IDE、CLI、Agent 等）通过此端口连接网关调用模型 API。</p>
+              <p className="text-xs text-muted-foreground mb-1">下游应用（IDE、CLI、Agent 等）通过此端口连接服务调用模型 API。</p>
               <div className="flex items-center gap-3 mb-2">
                 <code className="text-sm bg-secondary px-3 py-1.5 rounded-md font-mono">https://127.0.0.1:{config.gateway.port}/v1/chat/completions</code>
               </div>
@@ -532,7 +532,7 @@ export default function BasicSettings() {
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">管理端口 <span className="text-muted-foreground font-normal">（内部）</span></label>
-              <p className="text-xs text-muted-foreground mb-1">桌面应用与网关服务内部通信端口，默认为模型端口 +1。通常无需修改。</p>
+              <p className="text-xs text-muted-foreground mb-1">桌面应用与服务内部通信端口，默认为模型端口 +1。通常无需修改。</p>
               <input type="number" value={config.gateway.admin_port} onChange={(e) => updateConfig("gateway", "admin_port", parseInt(e.target.value) || 8081)}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" min="1024" max="65535" />
             </div>

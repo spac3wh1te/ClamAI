@@ -226,7 +226,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-4">
-          ClamAI - 智能大模型网关
+          ClamAI - AI 安全护栏
         </p>
       </div>
     </div>

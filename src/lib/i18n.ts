@@ -77,7 +77,7 @@ export const translations = {
     "login.title": "ClamAI",
     "login.subtitle.setup": "初始管理员设置",
     "login.subtitle.login": "管理员登录",
-    "login.footer": "ClamAI - 智能大模型网关",
+    "login.footer": "ClamAI - AI 安全护栏",
 
     // Security Square
     "securitySquare.title": "安全广场",
@@ -131,7 +131,7 @@ export const translations = {
 
     // ApiKeys
     "apiKeys.title": "API密钥管理",
-    "apiKeys.subtitle": "管理对外API密钥，供外部服务调用网关",
+    "apiKeys.subtitle": "管理对外API密钥，供外部服务调用",
     "apiKeys.create": "创建密钥",
     "apiKeys.name": "密钥名称",
     "apiKeys.active": "活跃",
@@ -177,7 +177,7 @@ export const translations = {
 
     // Security
     "security.title": "安全防护",
-    "security.subtitle": "配置内容安全策略，保护网关免受恶意请求侵害",
+    "security.subtitle": "配置内容安全策略，防护恶意请求侵害",
     "security.enableSecurity": "启用安全防护",
     "security.mode": "防护模式",
     "security.detect": "仅检测",
@@ -275,7 +275,7 @@ export const translations = {
     "login.title": "ClamAI",
     "login.subtitle.setup": "Initial Admin Setup",
     "login.subtitle.login": "Admin Login",
-    "login.footer": "ClamAI - Intelligent LLM Gateway",
+    "login.footer": "ClamAI - AI Security Guardrail",
 
     "securitySquare.title": "Security Square",
     "securitySquare.subtitle": "Intelligent Security Analysis Tools",

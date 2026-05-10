@@ -135,7 +135,7 @@ function Layout({ children }: LayoutProps) {
               </div>
               <div>
                 <span className="text-sm font-bold text-foreground tracking-wide">ClamAI</span>
-                <span className="text-[10px] text-muted-foreground ml-1">Gateway</span>
+                <span className="text-[10px] text-muted-foreground ml-1">Security</span>
               </div>
             </div>
           )}

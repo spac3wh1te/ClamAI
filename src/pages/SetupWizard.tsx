@@ -426,7 +426,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             )}
           </div>
         </div>
-        <p className="text-center text-xs text-muted-foreground mt-4">ClamAI - 智能大模型网关</p>
+        <p className="text-center text-xs text-muted-foreground mt-4">ClamAI - AI 安全护栏</p>
       </div>
     </div>
   );

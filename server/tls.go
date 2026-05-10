@@ -38,7 +38,7 @@ func generateSelfSignedCert(certPath, keyPath string, hosts []string) error {
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName:   "ClamAI Gateway",
+			CommonName:   "ClamAI",
 			Organization: []string{"ClamAI"},
 		},
 		NotBefore:             notBefore,

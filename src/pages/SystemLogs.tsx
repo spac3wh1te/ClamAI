@@ -96,7 +96,7 @@ export default function SystemLogs() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">系统运行日志</h1>
-        <p className="text-sm text-muted-foreground mt-1">查看网关服务运行日志，排查问题与监控状态</p>
+        <p className="text-sm text-muted-foreground mt-1">查看服务运行日志，排查问题与监控状态</p>
       </div>
 
       <div className="bg-card rounded-lg p-4 border border-border">
