@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { systemAnalysisApi, type KeyResult, type ThreatSignal } from "../../api/analysis";
-import { apiRequest } from "../../api/client";
 import {
   Shield, ShieldAlert, ShieldCheck, Play, Activity,
   Zap, ShieldX, ShieldAlert as ShieldAlertIcon, AlertTriangle, Loader2, Search, X,
@@ -220,19 +219,17 @@ export default function AlertThreats() {
     refetchInterval: 10000,
   });
 
-  const { data: alertStats } = useQuery({
-    queryKey: ["threat-alerts"],
-    queryFn: () => apiRequest<{ by_severity: Record<string, number> }>("GET", `/stats/alert-severity?period=1440`),
-    staleTime: 0, refetchInterval: 15000,
-  });
-
   const tasks: any[] = tasksData?.tasks || [];
   const systemTask = tasks.find((t) => t.id);
   const keyResults: Record<string, KeyResult[]> = keyResultsData?.results || {};
   const isRunning = statusData?.running || false;
-  const highRiskCount = (alertStats?.by_severity?.critical || 0) + (alertStats?.by_severity?.high || 0);
 
   const allResults = Object.values(keyResults).flat().filter(r => !r.skipped);
+
+  const highRiskCount = allResults.filter(r => {
+    const risk = r.risk_level || (r.threat_score >= 35 ? "高" : r.threat_score >= 20 ? "中" : "低");
+    return risk === "极高" || risk === "高";
+  }).length;
 
   const filteredResults = allResults
     .filter(r => {

@@ -30,9 +30,22 @@ function getLevelBadge(line: string): { label: string; cls: string } | null {
 
 function extractTime(line: string): string {
   const m = line.match(/"time"\s*:\s*"([^"]+)"/);
-  if (m) return m[1].replace(/^.*T/, "").replace(/\+.*$/, "");
-  const m2 = line.match(/\d{4}[/-]\d{2}[/-]\d{2}\s+(\d{2}:\d{2}:\d{2})/);
-  if (m2) return m2[1];
+  if (m) {
+    try {
+      const d = new Date(m[1]);
+      if (!isNaN(d.getTime())) {
+        const p = (n: number) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+      }
+    } catch {}
+    const s = m[1].replace(/\+.*$/, "");
+    const datePart = s.replace(/^.*?(\d{4}-\d{2}-\d{2})/, "$1").replace(/-/g, "/");
+    const timePart = s.replace(/^.*T(\d{2}:\d{2}:\d{2}).*/, "$1");
+    if (datePart && timePart) return `${datePart} ${timePart}`;
+    return s;
+  }
+  const m2 = line.match(/(\d{4})[/-](\d{2})[/-](\d{2})\s+(\d{2}:\d{2}:\d{2})/);
+  if (m2) return `${m2[1]}/${parseInt(m2[2])}/${parseInt(m2[3])} ${m2[4]}`;
   return "";
 }
 
@@ -144,15 +157,15 @@ export default function SystemLogs() {
               return (
                 <div key={i}>
                   <div
-                    className={`flex items-center gap-2 px-3 py-1.5 ${getLevelColor(line)} hover:bg-secondary/30 cursor-pointer group`}
+                    className={`flex items-center gap-3 px-3 py-1.5 ${getLevelColor(line)} hover:bg-secondary/30 cursor-pointer group`}
                     onClick={() => setExpandedIdx(isExpanded ? null : i)}
                   >
                     <span className="text-muted-foreground shrink-0">
                       {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                     </span>
-                    {time && <span className="text-muted-foreground font-mono shrink-0 w-16">{time}</span>}
+                    {time && <span className="text-muted-foreground font-mono shrink-0 min-w-[150px] text-[11px]">{time}</span>}
                     {badge && <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 border ${badge.cls}`}>{badge.label}</span>}
-                    <span className="truncate flex-1 font-mono" title={msg}>{msg.length > 120 ? msg.slice(0, 120) + "..." : msg}</span>
+                    <span className="truncate flex-1 font-mono text-[11px]" title={msg}>{msg.length > 120 ? msg.slice(0, 120) + "..." : msg}</span>
                     <CopyButton text={line} />
                   </div>
                   {isExpanded && (
