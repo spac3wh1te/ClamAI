@@ -2,11 +2,46 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { agentApi, type AgentInfo } from "../../api/analysis";
 import {
-  Bot, ShieldCheck, ShieldAlert, ShieldX, Loader2, RefreshCw, ChevronDown, ChevronRight,
+  Bot, Loader2, RefreshCw, ChevronDown, ChevronRight,
+  ShieldCheck, ShieldAlert, AlertTriangle, Info, Folder, FileText,
 } from "lucide-react";
+
+interface CheckItem {
+  category: string;
+  name: string;
+  status: string;
+  detail: string;
+  items?: string[];
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  security: "安全",
+  files: "文件",
+  system: "系统",
+  network: "网络",
+  services: "服务",
+};
+
+const RECOMMENDATIONS: Record<string, string> = {
+  "敏感命名文件": "检查这些文件是否包含真实的敏感数据，考虑移除或重命名。若为智能体配置所需，确保文件权限为仅属主可读。",
+  "凭据泄露风险": "将硬编码凭据迁移到环境变量或密钥管理服务。确保 .gitignore 包含相关文件。必要时轮换已暴露的密钥。",
+  "目录权限": "运行 chmod 700 <目录> 收紧权限，防止其他用户读取智能体配置和会话数据。",
+  "存储使用": "定期清理旧会话日志，避免磁盘空间耗尽。",
+  "会话记录": "会话记录可能包含敏感对话内容，定期审查和清理。建议设置日志轮转策略。",
+  "Skills/规则文件": "审查 Skills 文件内容，确保不包含恶意指令或提示注入。可使用 Skills 检测工具进行 AI 辅助分析。",
+};
+
+const STATUS_CONFIG: Record<string, { icon: typeof ShieldCheck; color: string; bg: string; label: string }> = {
+  pass: { icon: ShieldCheck, color: "text-green-400", bg: "bg-green-500/5", label: "通过" },
+  fail: { icon: ShieldAlert, color: "text-red-400", bg: "bg-red-500/5", label: "风险" },
+  warn: { icon: AlertTriangle, color: "text-yellow-400", bg: "bg-yellow-500/5", label: "警告" },
+  info: { icon: Info, color: "text-blue-400", bg: "bg-blue-500/5", label: "信息" },
+};
 
 export default function AgentEnvironment() {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, { checks: CheckItem[]; score: number; agent: string; dir: string }>>({});
+  const [expandedCheck, setExpandedCheck] = useState<string | null>(null);
 
   const { data: agentsData, isLoading, refetch } = useQuery({
     queryKey: ["agent-list"],
@@ -16,6 +51,11 @@ export default function AgentEnvironment() {
 
   const deepCheckMutation = useMutation({
     mutationFn: (params: { agentName: string; model?: string }) => agentApi.deepCheck(params.agentName, params.model),
+    onSuccess: (data: any) => {
+      if (data?.agent) {
+        setResults((prev) => ({ ...prev, [data.agent]: data }));
+      }
+    },
   });
 
   const agents = (agentsData?.agents || []).filter((a: AgentInfo) => a.detected);
@@ -25,6 +65,16 @@ export default function AgentEnvironment() {
     { key: "has_skills" as const, label: "Skills", color: "bg-purple-500/10 text-purple-400" },
     { key: "has_logs" as const, label: "日志", color: "bg-emerald-500/10 text-emerald-400" },
   ];
+
+  const groupedChecks = (checks: CheckItem[]) => {
+    const groups: Record<string, CheckItem[]> = {};
+    for (const c of checks) {
+      const cat = CATEGORY_LABELS[c.category] || c.category;
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(c);
+    }
+    return groups;
+  };
 
   return (
     <div className="space-y-4">
@@ -63,9 +113,9 @@ export default function AgentEnvironment() {
           <div className="divide-y divide-border">
             {agents.map((agent: AgentInfo) => {
               const isExpanded = expandedAgent === agent.name;
-              const checkResult = deepCheckMutation.data as any;
               const isChecking = deepCheckMutation.isPending && (deepCheckMutation.variables as any)?.agentName === agent.name;
-              const hasResult = isExpanded && checkResult && checkResult.agent === agent.name;
+              const checkResult = results[agent.name];
+              const hasResult = isExpanded && !!checkResult;
 
               return (
                 <div key={agent.name}>
@@ -92,43 +142,82 @@ export default function AgentEnvironment() {
                   </div>
                   {isExpanded && (
                     <div className="px-4 pb-4 pt-1 space-y-3 border-t border-border/50">
-                      <div className="text-xs text-muted-foreground">
-                        <span>目录: </span>
-                        <code className="font-mono">{agent.dir}</code>
-                      </div>
-                      {hasResult && checkResult.checks && (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium">综合评分:</span>
+                      <div className="flex items-center gap-3">
+                        <code className="text-xs text-muted-foreground font-mono">{agent.dir}</code>
+                        {hasResult && (
+                          <div className="flex items-center gap-2 ml-auto">
+                            <span className="text-xs text-muted-foreground">评分:</span>
                             <span className={`text-lg font-bold ${
                               checkResult.score >= 80 ? "text-green-400" : checkResult.score >= 60 ? "text-yellow-400" : "text-red-400"
-                            }`}>{checkResult.score}/100</span>
+                            }`}>{checkResult.score}<span className="text-xs text-muted-foreground font-normal">/100</span></span>
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                            {(checkResult.checks as any[]).map((check: any, i: number) => (
-                              <div key={i} className={`text-[11px] px-2 py-1.5 rounded flex items-start gap-2 ${
-                                check.status === "pass" ? "bg-green-500/5 text-green-400" :
-                                check.status === "fail" ? "bg-red-500/5 text-red-400" :
-                                check.status === "warn" ? "bg-yellow-500/5 text-yellow-400" :
-                                "bg-secondary text-muted-foreground"
-                              }`}>
-                                <span className="shrink-0 mt-0.5">
-                                  {check.status === "pass" ? "✓" : check.status === "fail" ? "✗" : check.status === "warn" ? "⚠" : "ℹ"}
-                                </span>
-                                <div>
-                                  <span className="font-medium">{check.name}</span>
-                                  {check.detail && <p className="text-muted-foreground mt-0.5">{check.detail}</p>}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                        )}
+                      </div>
+
                       {isChecking && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
                           <Loader2 size={14} className="animate-spin" /> 正在执行安全检测...
                         </div>
                       )}
+
+                      {hasResult && checkResult.checks && Object.entries(groupedChecks(checkResult.checks)).map(([cat, checks]) => (
+                          <div key={cat}>
+                            <h4 className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-2">{cat}</h4>
+                            <div className="space-y-1.5">
+                              {checks.map((check: CheckItem) => {
+                                const cfg = STATUS_CONFIG[check.status] || STATUS_CONFIG.info;
+                                const StatusIcon = cfg.icon;
+                                const isCheckExpanded = expandedCheck === `${agent.name}:${check.name}`;
+                                const hasItems = check.items && check.items.length > 0;
+                                const needsDetail = check.status === "fail" || check.status === "warn" || hasItems;
+
+                                return (
+                                  <div key={check.name} className={`rounded-lg ${cfg.bg} border border-transparent`}>
+                                    <div className={`flex items-center gap-2 px-3 py-2 ${needsDetail ? "cursor-pointer hover:bg-secondary/30" : ""}`}
+                                      onClick={() => needsDetail && setExpandedCheck(isCheckExpanded ? null : `${agent.name}:${check.name}`)}>
+                                      <StatusIcon size={14} className={cfg.color + " shrink-0"} />
+                                      <span className={`text-[11px] font-medium ${cfg.color}`}>{check.name}</span>
+                                      <span className="text-[11px] text-muted-foreground flex-1 truncate">{check.detail}</span>
+                                      {needsDetail && (
+                                        <span className="text-muted-foreground shrink-0">
+                                          {isCheckExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {isCheckExpanded && needsDetail && (
+                                      <div className="px-3 pb-3 pt-0 space-y-2 border-t border-border/30">
+                                        {hasItems && (
+                                          <div>
+                                            <span className="text-[10px] text-muted-foreground font-semibold">相关文件:</span>
+                                            <div className="mt-1 space-y-0.5">
+                                              {check.items!.slice(0, 20).map((item: string, idx: number) => (
+                                                <div key={idx} className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono">
+                                                  {check.status === "fail" ? <ShieldAlert size={10} className="text-red-400 shrink-0" /> :
+                                                   check.status === "warn" ? <AlertTriangle size={10} className="text-yellow-400 shrink-0" /> :
+                                                   <FileText size={10} className="text-blue-400 shrink-0" />}
+                                                  {item}
+                                                </div>
+                                              ))}
+                                              {check.items!.length > 20 && (
+                                                <span className="text-[10px] text-muted-foreground">...还有 {check.items!.length - 20} 个文件</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {RECOMMENDATIONS[check.name] && (check.status === "fail" || check.status === "warn") && (
+                                          <div className="bg-background/50 rounded-md p-2">
+                                            <span className="text-[10px] text-muted-foreground font-semibold">处置建议:</span>
+                                            <p className="text-[11px] text-foreground mt-0.5">{RECOMMENDATIONS[check.name]}</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
                     </div>
                   )}
                 </div>

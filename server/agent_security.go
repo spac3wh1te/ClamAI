@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +86,12 @@ func (p *ProxyServer) handleAgentList(w http.ResponseWriter, r *http.Request) {
 		}
 		agents = append(agents, info)
 	}
+	sort.Slice(agents, func(i, j int) bool {
+		if agents[i].Detected != agents[j].Detected {
+			return agents[i].Detected
+		}
+		return agents[i].Name < agents[j].Name
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
