@@ -109,7 +109,7 @@ function ThreatRow({ result }: { result: KeyResult }) {
   return (
     <div className={result.analyzed ? "" : "opacity-60"}>
       <div
-        className="grid grid-cols-[150px_60px_50px_minmax(100px,1fr)_minmax(80px,1fr)_55px_50px] gap-1.5 px-4 py-2.5 items-center text-sm cursor-pointer hover:bg-secondary/30"
+        className="grid grid-cols-[150px_60px_50px_minmax(80px,1fr)_minmax(120px,2fr)_55px_50px] gap-1.5 px-4 py-2.5 items-center text-sm cursor-pointer hover:bg-secondary/30"
         onClick={() => setExpanded(!expanded)}
       >
         <span className="text-[11px] text-muted-foreground truncate" title={result.run_at ? new Date(result.run_at).toLocaleString("zh-CN") : ""}>
@@ -341,7 +341,7 @@ export default function AlertThreats() {
           </div>
         ) : (
           <div>
-            <div className="grid grid-cols-[150px_60px_50px_minmax(100px,1fr)_minmax(80px,1fr)_55px_50px] gap-1.5 px-4 py-2.5 text-[10px] text-muted-foreground font-medium border-b border-border items-center uppercase tracking-wider">
+            <div className="grid grid-cols-[150px_60px_50px_minmax(80px,1fr)_minmax(120px,2fr)_55px_50px] gap-1.5 px-4 py-2.5 text-[10px] text-muted-foreground font-medium border-b border-border items-center uppercase tracking-wider">
               <span>时间</span>
               <span>级别</span>
               <span>评分</span>

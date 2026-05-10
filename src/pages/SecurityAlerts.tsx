@@ -324,7 +324,7 @@ export default function SecurityAlerts({ hideHeader, defaultSource = "content" }
           </div>
         ) : (
           <div>
-            <div className="grid grid-cols-[35px_120px_50px_50px_55px_140px_1fr_55px] gap-1.5 px-4 py-2.5 text-[10px] text-muted-foreground font-medium border-b border-border items-center uppercase tracking-wider">
+            <div className="grid grid-cols-[35px_120px_50px_50px_55px_70px_1fr_55px] gap-1.5 px-4 py-2.5 text-[10px] text-muted-foreground font-medium border-b border-border items-center uppercase tracking-wider">
               <span>ID</span>
               <span>时间</span>
               <span>方向</span>
@@ -344,7 +344,7 @@ export default function SecurityAlerts({ hideHeader, defaultSource = "content" }
                 return (
                   <div key={alert.id} className={alert.resolved ? "opacity-50" : ""}>
                     <div
-                      className={`grid grid-cols-[35px_120px_50px_50px_55px_140px_1fr_55px] gap-1.5 px-4 py-2.5 items-center text-sm cursor-pointer hover:bg-secondary/30 ${isExpanded ? "bg-secondary/30" : ""}`}
+                      className={`grid grid-cols-[35px_120px_50px_50px_55px_70px_1fr_55px] gap-1.5 px-4 py-2.5 items-center text-sm cursor-pointer hover:bg-secondary/30 ${isExpanded ? "bg-secondary/30" : ""}`}
                       onClick={() => setExpandedId(isExpanded ? null : alert.id)}
                     >
                       <span className="text-[11px] text-muted-foreground">{alert.id}</span>
@@ -354,7 +354,7 @@ export default function SecurityAlerts({ hideHeader, defaultSource = "content" }
                       <span>{getDirectionBadge(alert.direction)}</span>
                       <span>{getModeBadge(alert.mode)}</span>
                       <span>{getSeverityBadge(alert.severity || "high")}</span>
-                      <div className="min-w-0 flex items-center gap-1.5">
+                      <span>
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
                           alert.trigger_type?.startsWith("keyword") ? "bg-orange-500/10 text-orange-400" :
                           alert.trigger_type === "vector" ? "bg-teal-500/10 text-teal-400" :
@@ -362,11 +362,7 @@ export default function SecurityAlerts({ hideHeader, defaultSource = "content" }
                         }`}>
                           {getTriggerLabel(alert.trigger_type)}
                         </span>
-                        <span className="text-[10px] text-muted-foreground truncate">
-                          {ruleLabel && <span className="text-muted-foreground/60">{ruleLabel} </span>}
-                          <code className="text-foreground">{ruleValue}</code>
-                        </span>
-                      </div>
+                      </span>
                       <div className="min-w-0 text-[11px] text-muted-foreground flex items-center gap-1">
                         <span className="truncate flex-1">
                           {alert.content_preview ? highlightMatch(alert.content_preview, ruleValue) : "-"}
@@ -416,6 +412,24 @@ export default function SecurityAlerts({ hideHeader, defaultSource = "content" }
                             <p className="mt-0.5">{alert.action || "-"}</p>
                           </div>
                         </div>
+                        {alert.trigger_detail && (
+                          <div>
+                            <span className="text-[10px] text-muted-foreground font-semibold">命中规则</span>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                                alert.trigger_type?.startsWith("keyword") ? "bg-orange-500/10 text-orange-400" :
+                                alert.trigger_type === "vector" ? "bg-teal-500/10 text-teal-400" :
+                                "bg-red-500/10 text-red-400"
+                              }`}>
+                                {getTriggerLabel(alert.trigger_type)}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {ruleLabel && <span className="text-muted-foreground/60">{ruleLabel} </span>}
+                                <code className="text-foreground">{ruleValue}</code>
+                              </span>
+                            </div>
+                          </div>
+                        )}
                         <div>
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] text-muted-foreground font-semibold">完整内容</span>
