@@ -1,10 +1,14 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { statsApi } from "../api/stats";
 import {
   Search,
   RefreshCw,
   Server,
+  ChevronRight,
+  ChevronDown,
+  Copy,
+  Check,
 } from "lucide-react";
 
 function getLevelColor(line: string): string {
@@ -16,18 +20,53 @@ function getLevelColor(line: string): string {
 }
 
 function getLevelBadge(line: string): { label: string; cls: string } | null {
-  if (line.includes("[ERROR]") || line.includes(`"level":"ERROR"`)) return { label: "ERROR", cls: "bg-red-500/10 text-red-400" };
-  if (line.includes("[WARN]") || line.includes(`"level":"WARN"`)) return { label: "WARN", cls: "bg-amber-500/10 text-amber-400" };
-  if (line.includes("[DEBUG]") || line.includes(`"level":"DEBUG"`)) return { label: "DEBUG", cls: "bg-blue-500/10 text-blue-400" };
-  if (line.includes("[TRACE]") || line.includes(`"level":"TRACE"`)) return { label: "TRACE", cls: "bg-secondary text-muted-foreground" };
-  if (line.includes("[INFO]") || line.includes(`"level":"INFO"`)) return { label: "INFO", cls: "bg-emerald-500/10 text-emerald-400" };
+  if (line.includes("[ERROR]") || line.includes(`"level":"ERROR"`)) return { label: "ERROR", cls: "bg-red-500/10 text-red-400 border-red-500/30" };
+  if (line.includes("[WARN]") || line.includes(`"level":"WARN"`)) return { label: "WARN", cls: "bg-amber-500/10 text-amber-400 border-amber-500/30" };
+  if (line.includes("[DEBUG]") || line.includes(`"level":"DEBUG"`)) return { label: "DEBUG", cls: "bg-blue-500/10 text-blue-400 border-blue-500/30" };
+  if (line.includes("[TRACE]") || line.includes(`"level":"TRACE"`)) return { label: "TRACE", cls: "bg-secondary text-muted-foreground border-border" };
+  if (line.includes("[INFO]") || line.includes(`"level":"INFO"`)) return { label: "INFO", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" };
   return null;
+}
+
+function extractTime(line: string): string {
+  const m = line.match(/"time"\s*:\s*"([^"]+)"/);
+  if (m) return m[1].replace(/^.*T/, "").replace(/\+.*$/, "");
+  const m2 = line.match(/\d{4}[/-]\d{2}[/-]\d{2}\s+(\d{2}:\d{2}:\d{2})/);
+  if (m2) return m2[1];
+  return "";
+}
+
+function extractMsg(line: string): string {
+  const m = line.match(/"msg"\s*:\s*"([^"]*)"/);
+  if (m) return m[1];
+  return line.replace(/^\S+\s+\S+\s+/, "");
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [text]);
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1 rounded hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors shrink-0"
+      title="复制"
+    >
+      {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+    </button>
+  );
 }
 
 export default function SystemLogs() {
   const [level, setLevel] = useState<string>("");
   const [keyword, setKeyword] = useState<string>("");
   const [limit, setLimit] = useState(200);
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
   const [autoRefresh, setAutoRefresh] = useState(false);
   const { data: serviceLogs, isLoading, refetch, isFetching } = useQuery({
@@ -70,19 +109,21 @@ export default function SystemLogs() {
             <option value="500">最近 500 行</option>
             <option value="1000">最近 1000 行</option>
           </select>
-          <button
-            onClick={() => setAutoRefresh((v) => !v)}
-            className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
-              autoRefresh ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" : "bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-transparent"
-            }`}
-          >
-            <RefreshCw size={14} className={isFetching && autoRefresh ? "animate-spin" : ""} />
-            {autoRefresh ? "自动刷新" : "自动刷新"}
-          </button>
-          <button onClick={() => refetch()} disabled={isFetching}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 disabled:opacity-50">
-            <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} /> 刷新
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setAutoRefresh((v) => !v)}
+              className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors flex-1 ${
+                autoRefresh ? "bg-blue-500/20 text-blue-400 border border-blue-500/30" : "bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-transparent"
+              }`}
+            >
+              <RefreshCw size={14} className={isFetching && autoRefresh ? "animate-spin" : ""} />
+              {autoRefresh ? "停止刷新" : "自动刷新"}
+            </button>
+            <button onClick={() => refetch()} disabled={isFetching}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 disabled:opacity-50">
+              <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} /> 刷新
+            </button>
+          </div>
         </div>
       </div>
 
@@ -93,14 +134,34 @@ export default function SystemLogs() {
       {isLoading ? (
         <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
       ) : lines.length > 0 ? (
-        <div className="bg-card rounded-lg border border-border overflow-hidden font-mono text-xs">
+        <div className="bg-card rounded-lg border border-border overflow-hidden text-xs">
           <div className="divide-y divide-border max-h-[70vh] overflow-y-auto">
             {lines.map((line, i) => {
               const badge = getLevelBadge(line);
+              const time = extractTime(line);
+              const msg = extractMsg(line);
+              const isExpanded = expandedIdx === i;
               return (
-                <div key={i} className={`px-4 py-1.5 ${getLevelColor(line)} hover:bg-secondary/30 break-all`}>
-                  {badge && <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold mr-2 ${badge.cls}`}>{badge.label}</span>}
-                  {line}
+                <div key={i}>
+                  <div
+                    className={`flex items-center gap-2 px-3 py-1.5 ${getLevelColor(line)} hover:bg-secondary/30 cursor-pointer group`}
+                    onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                  >
+                    <span className="text-muted-foreground shrink-0">
+                      {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    </span>
+                    {time && <span className="text-muted-foreground font-mono shrink-0 w-16">{time}</span>}
+                    {badge && <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 border ${badge.cls}`}>{badge.label}</span>}
+                    <span className="truncate flex-1 font-mono" title={msg}>{msg.length > 120 ? msg.slice(0, 120) + "..." : msg}</span>
+                    <CopyButton text={line} />
+                  </div>
+                  {isExpanded && (
+                    <div className="px-3 pb-3 pt-1">
+                      <pre className="bg-background border border-border rounded-lg p-3 font-mono text-xs whitespace-pre-wrap break-all leading-relaxed select-all">
+                        {line}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               );
             })}
