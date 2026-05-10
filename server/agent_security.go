@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -213,27 +214,29 @@ func (p *ProxyServer) handleAgentLogsParse(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	var newCount int
 	for _, evt := range events {
-		if evt.Severity == "critical" || evt.Severity == "high" {
-			agentName := evt.AgentName
+		contentKey := fmt.Sprintf("%s|%s|%s", evt.AgentName, evt.Timestamp, truncateStr(evt.Content, 200))
+		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(contentKey)))
+		var existing DBAgentRuntimeEvent
+		gormDB.Where("content_hash = ?", hash).First(&existing)
+		if existing.ID == 0 {
 			target := truncateStr(evt.Content, 200)
 			if evt.RuleName != "" {
 				target = evt.RuleName
 			}
-			var dbEvt DBAgentRuntimeEvent
-			gormDB.Where("agent_name = ? AND event_at = ? AND event_type = ?", agentName, evt.Timestamp, evt.EventType).First(&dbEvt)
-			if dbEvt.ID == 0 {
-				gormDB.Create(&DBAgentRuntimeEvent{
-					AgentName:   agentName,
-					EventAt:     parseTime(evt.Timestamp),
-					EventType:   evt.EventType,
-					EventTarget: target,
-					Severity:    evt.Severity,
-					RuleName:    evt.RuleName,
-					Details:     truncateStr(evt.Content, 2000),
-					LogSource:   evt.FilePath,
-				})
-			}
+			gormDB.Create(&DBAgentRuntimeEvent{
+				AgentName:   evt.AgentName,
+				EventAt:     parseTime(evt.Timestamp),
+				EventType:   evt.EventType,
+				EventTarget: target,
+				Severity:    evt.Severity,
+				RuleName:    evt.RuleName,
+				Details:     truncateStr(evt.Content, 4000),
+				LogSource:   evt.FilePath,
+				ContentHash: hash,
+			})
+			newCount++
 		}
 	}
 
@@ -244,6 +247,7 @@ func (p *ProxyServer) handleAgentLogsParse(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"events":      events,
 		"total":       len(events),
+		"new_count":   newCount,
 		"critical":    critical,
 		"high":        high,
 		"medium":      medium,
@@ -254,6 +258,8 @@ func (p *ProxyServer) handleAgentLogsParse(w http.ResponseWriter, r *http.Reques
 func (p *ProxyServer) handleAgentRuntimeEvents(w http.ResponseWriter, r *http.Request) {
 	agentName := r.URL.Query().Get("agent")
 	severity := r.URL.Query().Get("severity")
+	eventType := r.URL.Query().Get("event_type")
+	search := r.URL.Query().Get("search")
 	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if v, err := parseInt(l); err == nil && v > 0 && v <= 500 {
@@ -274,6 +280,13 @@ func (p *ProxyServer) handleAgentRuntimeEvents(w http.ResponseWriter, r *http.Re
 	if severity != "" {
 		query = query.Where("severity = ?", severity)
 	}
+	if eventType != "" {
+		query = query.Where("event_type = ?", eventType)
+	}
+	if search != "" {
+		q := "%" + search + "%"
+		query = query.Where("details LIKE ? OR rule_name LIKE ? OR event_target LIKE ? OR log_source LIKE ?", q, q, q, q)
+	}
 
 	var total int64
 	query.Count(&total)
@@ -281,10 +294,22 @@ func (p *ProxyServer) handleAgentRuntimeEvents(w http.ResponseWriter, r *http.Re
 	var events []DBAgentRuntimeEvent
 	query.Order("event_at DESC").Limit(limit).Offset(offset).Find(&events)
 
+	type sevCount struct {
+		Severity string
+		Count    int64
+	}
+	var sevCounts []sevCount
+	gormDB.Model(&DBAgentRuntimeEvent{}).Select("severity, COUNT(*) as count").Group("severity").Scan(&sevCounts)
+	sevMap := map[string]int64{}
+	for _, sc := range sevCounts {
+		sevMap[sc.Severity] = sc.Count
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"events": events,
-		"total":  total,
+		"events":   events,
+		"total":    total,
+		"sev_map":  sevMap,
 	})
 }
 

@@ -491,6 +491,7 @@ type DBAgentRuntimeEvent struct {
 	LogSource   string    `gorm:"size:512"`
 	SessionID   string    `gorm:"size:128"`
 	CreatedBy   string    `gorm:"size:128"`
+	ContentHash string    `gorm:"size:64;index:idx_event_hash"`
 }
 
 func (DBAgentRuntimeEvent) TableName() string { return "agent_runtime_events" }
