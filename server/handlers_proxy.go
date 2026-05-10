@@ -198,6 +198,9 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 	if cw, ok := w.(*capturingResponseWriter); ok {
 		cw.upstreamProvider = spec.Name
 		cw.upstreamModel = getModelFromProxyRequest(bodyBytes)
+		cw.upstreamReqHeaders = string(reqHeadersJSON)
+		cw.upstreamRespHeaders = string(respHeadersJSON)
+		cw.upstreamReqBody = truncateStr(upstreamReqContent, 10000)
 	}
 
 	for key, values := range resp.Header {
