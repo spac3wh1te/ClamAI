@@ -114,6 +114,7 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 	startTime := time.Now()
 	client := getSharedClient()
 	resp, err := client.Do(req)
+	reqHeadersJSON, _ := json.Marshal(req.Header)
 	if err != nil {
 		log.Printf("[INTERNAL] ERROR upstream call failed: %v", err)
 		dbInsertLog(&RequestLog{
@@ -128,6 +129,7 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 			Path:           "/system-analysis/internal",
 			Method:         "POST",
 			RequestContent: truncateStr(string(body), 5000),
+			UpstreamReqHeaders: string(reqHeadersJSON),
 		})
 		return 0, 0, 0, nil, fmt.Errorf("upstream call failed: %w", err)
 	}
@@ -148,21 +150,25 @@ func (p *ProxyServer) directModelCall(model string, messages []map[string]interf
 	inputTokens, outputTokens := extractTokensFromBody(respBody, &usageSpec)
 	log.Printf("[INTERNAL] extracted tokens: input=%d output=%d", inputTokens, outputTokens)
 
+	respHeadersJSON, _ := json.Marshal(resp.Header)
+
 	dbInsertLog(&RequestLog{
-		Timestamp:       startTime,
-		Provider:        provider.GetName(),
-		Model:           modelName,
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		LatencyMs:       time.Since(startTime).Milliseconds(),
-		Success:         resp.StatusCode >= 200 && resp.StatusCode < 300,
-		CallType:        "security",
-		APIKeyUsed:      "",
-		StatusCode:      resp.StatusCode,
-		Path:            "/system-analysis/internal",
-		Method:          "POST",
-		RequestContent:  truncateStr(string(body), 5000),
-		ResponseContent: truncateStr(string(respBody), 5000),
+		Timestamp:          startTime,
+		Provider:           provider.GetName(),
+		Model:              modelName,
+		InputTokens:        inputTokens,
+		OutputTokens:       outputTokens,
+		LatencyMs:          time.Since(startTime).Milliseconds(),
+		Success:            resp.StatusCode >= 200 && resp.StatusCode < 300,
+		CallType:           "security",
+		APIKeyUsed:         "",
+		StatusCode:         resp.StatusCode,
+		Path:               "/system-analysis/internal",
+		Method:             "POST",
+		RequestContent:     truncateStr(string(body), 5000),
+		ResponseContent:    truncateStr(string(respBody), 5000),
+		UpstreamReqHeaders: string(reqHeadersJSON),
+		UpstreamRespHeaders: string(respHeadersJSON),
 	})
 
 	_ = preview

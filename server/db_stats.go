@@ -228,7 +228,7 @@ func dbGetRecentLogs(limit int, userID string) ([]*RequestLog, int) {
 	var total int
 	var rows *sql.Rows
 	var err error
-	cols := "id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,''), COALESCE(user_id,''), COALESCE(api_key_id,''), COALESCE(is_proxy_call,0), COALESCE(call_type,''), COALESCE(upstream_request_headers,''), COALESCE(upstream_response_headers,''), COALESCE(upstream_request_body,''), COALESCE(upstream_response_body,''), COALESCE(upstream_provider,''), COALESCE(upstream_model,'')"
+	cols := "id, timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method, COALESCE(request_content,''), COALESCE(response_content,''), COALESCE(user_id,''), COALESCE(api_key_id,''), COALESCE(is_proxy_call,0), COALESCE(call_type,''), COALESCE(upstream_request_headers,''), COALESCE(upstream_response_headers,''), COALESCE(upstream_request_body,''), COALESCE(upstream_response_body,''), COALESCE(upstream_provider,''), COALESCE(upstream_model,''), COALESCE(client_request_headers,'')"
 	if userID != "" {
 		gormDB.Raw("SELECT COUNT(*) FROM request_logs WHERE user_id = ?", userID).Row().Scan(&total)
 		rows, err = gormDB.Raw("SELECT "+cols+" FROM request_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?", userID, limit).Rows()
@@ -254,7 +254,7 @@ func dbGetRecentLogs(limit int, userID string) ([]*RequestLog, int) {
 			&entry.RequestContent, &entry.ResponseContent, &entry.UserID, &entry.APIKeyID,
 			&isProxyCall, &entry.CallType, &entry.UpstreamReqHeaders, &entry.UpstreamRespHeaders,
 			&entry.UpstreamReqBody, &entry.UpstreamRespBody,
-			&entry.UpstreamProvider, &entry.UpstreamModel); err != nil {
+			&entry.UpstreamProvider, &entry.UpstreamModel, &entry.ClientReqHeaders); err != nil {
 			continue
 		}
 		entry.Timestamp, _ = time.Parse(time.RFC3339, ts)
