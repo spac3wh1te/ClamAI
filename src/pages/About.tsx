@@ -137,13 +137,28 @@ export default function About() {
             <div className="p-4 bg-primary/5 border border-primary/10 rounded-lg">
               <p className="text-sm text-muted-foreground">
                 <span className="text-primary font-medium">代理地址格式：</span>
-                <code className="ml-2 text-xs bg-secondary px-2 py-1 rounded font-mono">
+              </p>
+              <div className="mt-2 space-y-1">
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">OpenAI 兼容模式</span>（适用于 Cursor、Continue 等工具）
+                </p>
+                <code className="block text-xs bg-secondary px-2 py-1 rounded font-mono">
                   {appInfo?.deploy_mode === "server" ? "https://your-server:port" : "https://127.0.0.1"}:{appInfo?.proxy_port || "8080"}/v1/chat/completions
                 </code>
-              </p>
-              <p className="text-xs text-muted-foreground mt-2">
-                下游应用（如 Cursor、VSCode 插件、CLI 工具等）将此地址设为 API Base URL，并使用 ClamAI 生成的 API Key 进行认证即可。
-              </p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  <span className="font-medium text-foreground">原生路由模式</span>（按厂商路由，保留原始协议）
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {["openai", "anthropic", "deepseek", "qwen", "glm", "doubao", "moonshot", "siliconflow", "openrouter"].map((p) => (
+                    <code key={p} className="text-[10px] bg-secondary px-1.5 py-0.5 rounded font-mono">
+                      /{p}/v1/...
+                    </code>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  下游应用将上述地址设为 API Base URL，并使用 ClamAI 生成的 API Key 进行认证即可。所有请求自动经过安全检测。
+                </p>
+              </div>
             </div>
           </div>
         )}
