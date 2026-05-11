@@ -105,3 +105,31 @@ func dbPlaceholder(idx int) string {
 	}
 	return "?"
 }
+
+func dbTruncateMinute(column string) string {
+	if isPostgres() {
+		return fmt.Sprintf("to_char(%s AT TIME ZONE 'localtime', 'YYYY-MM-DD HH24:MI')", column)
+	}
+	return fmt.Sprintf("STRFTIME('%%Y-%%m-%%d %%H:%%M', %s, 'localtime')", column)
+}
+
+func dbTruncateHour(column string) string {
+	if isPostgres() {
+		return fmt.Sprintf("to_char(%s AT TIME ZONE 'localtime', 'YYYY-MM-DD HH24:00')", column)
+	}
+	return fmt.Sprintf("STRFTIME('%%Y-%%m-%%d %%H:00', %s, 'localtime')", column)
+}
+
+func dbTruncateDay(column string) string {
+	if isPostgres() {
+		return fmt.Sprintf("to_char(%s AT TIME ZONE 'localtime', 'YYYY-MM-DD')", column)
+	}
+	return fmt.Sprintf("DATE(%s, 'localtime')", column)
+}
+
+func dbGroupConcat(expr string, sep string) string {
+	if isPostgres() {
+		return fmt.Sprintf("STRING_AGG(%s, '%s')", expr, sep)
+	}
+	return fmt.Sprintf("GROUP_CONCAT(%s, '%s')", expr, sep)
+}

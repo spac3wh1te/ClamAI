@@ -96,6 +96,7 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 	}
 
 	if apiKey != "" {
+		log.Printf("[DEBUG] transparent proxy: upstream provider=%s, apiKey=%s (len=%d)", spec.Name, maskAPIKey(apiKey), len(apiKey))
 		switch spec.AuthType {
 		case "x-api-key":
 			proxyReq.Header.Set("x-api-key", apiKey)
@@ -103,6 +104,8 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 		default:
 			proxyReq.Header.Set("Authorization", "Bearer "+apiKey)
 		}
+	} else {
+		log.Printf("[WARN] transparent proxy: upstream provider=%s has NO api key!", spec.Name)
 	}
 	if proxyReq.Header.Get("Content-Type") == "" && len(bodyBytes) > 0 {
 		proxyReq.Header.Set("Content-Type", "application/json")

@@ -42,4 +42,7 @@ export const keysApi = {
 
   reveal: (id: string) =>
     apiRequest<RevealKeyResult>("GET", `/keys/${id}/reveal`),
+
+  toggle: (id: string, active: boolean) =>
+    apiRequest<{ success: boolean; id: string; active: boolean }>("PUT", `/keys/${id}/toggle`, { active }),
 };

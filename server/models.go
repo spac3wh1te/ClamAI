@@ -56,7 +56,7 @@ func (DBAPIKey) TableName() string { return "api_keys" }
 
 type DBRequestLog struct {
 	ID                  int64     `gorm:"primaryKey;autoIncrement"`
-	Timestamp           time.Time `gorm:"index:idx_request_logs_timestamp,sort:desc"`
+	Timestamp           time.Time `gorm:"index:idx_request_logs_timestamp,sort:desc;index:idx_rl_ts_call"`
 	Provider            string    `gorm:"size:64"`
 	Model               string    `gorm:"size:256"`
 	InputTokens         int
@@ -64,8 +64,8 @@ type DBRequestLog struct {
 	LatencyMs           int64
 	Success             bool
 	ErrorMessage        string    `gorm:"size:1024"`
-	ClientIP            string    `gorm:"column:client_ip;size:64"`
-	APIKeyUsed          string    `gorm:"column:api_key_used;size:128"`
+	ClientIP            string    `gorm:"column:client_ip;size:64;index:idx_rl_client_ip"`
+	APIKeyUsed          string    `gorm:"column:api_key_used;size:128;index:idx_rl_api_key"`
 	StatusCode          int
 	Path                string    `gorm:"size:512"`
 	Method              string    `gorm:"size:16"`
@@ -74,7 +74,7 @@ type DBRequestLog struct {
 	UserID              string    `gorm:"column:user_id;size:64;index"`
 	APIKeyID            string    `gorm:"column:api_key_id;size:64"`
 	IsProxyCall         bool      `gorm:"column:is_proxy_call;default:false"`
-	CallType            string    `gorm:"column:call_type;size:32;default:''"`
+	CallType            string    `gorm:"column:call_type;size:32;default:'';index:idx_rl_ts_call"`
 	UpstreamReqHeaders  string    `gorm:"column:upstream_request_headers;type:text"`
 	UpstreamRespHeaders string    `gorm:"column:upstream_response_headers;type:text"`
 	UpstreamReqBody     string    `gorm:"column:upstream_request_body;type:text"`
@@ -100,7 +100,7 @@ type DBSecurityAlert struct {
 	ClientIP       string    `gorm:"column:client_ip;size:64"`
 	Action         string    `gorm:"size:32"`
 	Resolved       bool      `gorm:"default:false"`
-	Severity       string    `gorm:"size:16"`
+	Severity       string    `gorm:"size:16;index:idx_sa_severity"`
 	UserID         string    `gorm:"column:user_id;size:64;index"`
 }
 

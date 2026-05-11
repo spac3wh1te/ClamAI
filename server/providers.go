@@ -205,7 +205,11 @@ func normalizeStreamChunk(chunk string) string {
 		}
 	}
 
-	result, _ := json.Marshal(data)
+	result, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[ERROR] normalizeStreamChunk: json.Marshal failed: %v", err)
+		return chunk
+	}
 	return string(result)
 }
 
@@ -227,7 +231,11 @@ func normalizeResponse(body []byte) []byte {
 		}
 	}
 
-	result, _ := json.Marshal(resp)
+	result, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("[ERROR] normalizeResponse: json.Marshal failed: %v", err)
+		return body
+	}
 	return result
 }
 
@@ -348,7 +356,11 @@ func wrapError(body []byte, status int) []byte {
 			errMap["code"] = code
 		}
 	}
-	result, _ := json.Marshal(wrapped)
+	result, err := json.Marshal(wrapped)
+	if err != nil {
+		log.Printf("[ERROR] wrapError: json.Marshal failed: %v", err)
+		return body
+	}
 	return result
 }
 

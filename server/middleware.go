@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -124,8 +126,6 @@ func (p *ProxyServer) corsMiddleware(next http.Handler) http.Handler {
 		if allowedOrigin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, X-Requested-With")
@@ -266,11 +266,11 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 
 			uid := userIDForQuery(r)
 			if uid == "" {
-				apiKeysMu.Lock()
+				apiKeysMu.RLock()
 				if info, exists := apiKeys[apiKeyUsed]; exists {
 					uid = info.UserID
 				}
-				apiKeysMu.Unlock()
+				apiKeysMu.RUnlock()
 			}
 
 			entry := &RequestLog{
@@ -306,7 +306,7 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 		}
 
 		if model != "" && apiKeyUsed != "" {
-			apiKeysMu.Lock()
+			apiKeysMu.RLock()
 			if info, exists := apiKeys[apiKeyUsed]; exists && info.Active && len(info.AllowedModels) > 0 {
 				allowed := false
 				for _, m := range info.AllowedModels {
@@ -315,14 +315,14 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 						break
 					}
 				}
-				apiKeysMu.Unlock()
+				apiKeysMu.RUnlock()
 				if !allowed {
 					log.Printf("[WARN] requestTracking: model %s not allowed for key %s", model, maskAPIKey(apiKeyUsed))
 					http.Error(w, "Forbidden: model not allowed for this API key", http.StatusForbidden)
 					return
 				}
 			} else {
-				apiKeysMu.Unlock()
+				apiKeysMu.RUnlock()
 			}
 		}
 
@@ -416,12 +416,11 @@ func (p *ProxyServer) requestTrackingMiddleware(next http.Handler) http.Handler 
 		entry.ResponseContent = respContent
 		uid := userIDForQuery(r)
 		if uid == "" {
-			// Look up the API key's UserID for proper data isolation
-			apiKeysMu.Lock()
+			apiKeysMu.RLock()
 			if info, exists := apiKeys[apiKeyUsed]; exists {
 				uid = info.UserID
 			}
-			apiKeysMu.Unlock()
+			apiKeysMu.RUnlock()
 		}
 		entry.UserID = uid
 		entry.APIKeyID = apiKeyUsed
@@ -491,8 +490,8 @@ func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 			if p.config.APIKey != "" {
 				authHeader := r.Header.Get("Authorization")
 				expectedAuth := "Bearer " + p.config.APIKey
-				log.Printf("[DEBUG] authMiddleware: /api/v1/ path, authHeader=%s, expectedAuth=%s, match=%v",
-					authHeader, expectedAuth[:min(len(expectedAuth), 20)]+"...", authHeader == expectedAuth)
+				log.Printf("[DEBUG] authMiddleware: /api/v1/ path, hasAuth=%v, match=%v",
+					authHeader != "", authHeader == expectedAuth)
 				if authHeader != expectedAuth {
 					if authHeader == "" {
 						log.Printf("[WARN] authMiddleware: /api/v1/ no auth header, allowing")
@@ -514,7 +513,7 @@ func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 
 		authHeader := r.Header.Get("Authorization")
 		apiKeyHeader := r.Header.Get("x-api-key")
-		log.Printf("[DEBUG] authMiddleware: proxy path, authHeader=%s, apiKeyHeader=%s", authHeader, apiKeyHeader)
+		log.Printf("[DEBUG] authMiddleware: proxy path, hasAuth=%v, hasApiKey=%v", authHeader != "", apiKeyHeader != "")
 
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
@@ -538,7 +537,7 @@ func (p *ProxyServer) authMiddleware(next http.Handler) http.Handler {
 			} else if apiKeyHeader != "" {
 				key = apiKeyHeader
 			}
-			log.Printf("[DEBUG] authMiddleware: checking dynamic key, key=%s...", key[:min(len(key), 8)])
+			log.Printf("[DEBUG] authMiddleware: checking dynamic key, keyLen=%d", len(key))
 			if key != "" {
 				apiKeysMu.Lock()
 				if info, exists := apiKeys[key]; exists && info.Active {
@@ -615,4 +614,22 @@ func getClientIP(r *http.Request) string {
 		return r.RemoteAddr[:idx]
 	}
 	return r.RemoteAddr
+}
+
+func generateRequestID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (p *ProxyServer) requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqID := r.Header.Get("X-Request-ID")
+		if reqID == "" {
+			reqID = generateRequestID()
+		}
+		w.Header().Set("X-Request-ID", reqID)
+		r.Header.Set("X-Request-ID", reqID)
+		next.ServeHTTP(w, r)
+	})
 }

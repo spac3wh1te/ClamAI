@@ -80,11 +80,15 @@ func checkLoginRateLimit(ip string) bool {
 func init() {
 	safeGo(func() {
 		for {
-			time.Sleep(10 * time.Minute)
+			time.Sleep(5 * time.Minute)
 			loginAttemptsMu.Lock()
 			now := time.Now()
 			for ip, info := range loginAttempts {
-				if now.Sub(info.lastTime) > loginAttemptWindow {
+				maxAge := loginAttemptWindow
+				if info.blocked {
+					maxAge = loginBlockDuration
+				}
+				if now.Sub(info.lastTime) > maxAge {
 					delete(loginAttempts, ip)
 				}
 			}
@@ -119,7 +123,7 @@ func getOrCreateJWTSecret() string {
 }
 
 func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	return string(bytes), err
 }
 

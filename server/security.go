@@ -505,12 +505,16 @@ func (p *ProxyServer) handleUpdateSecurityConfig(w http.ResponseWriter, r *http.
 	dbSaveSecurityConfig(&cfg)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+	auditLog(r, "security.config_update", "安全防护配置", "")
 }
 
 func (p *ProxyServer) handleGetSecurityAlerts(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	offset := 0
 	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
+		if l > 1000 {
+			l = 1000
+		}
 		limit = l
 	}
 	if o, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && o >= 0 {

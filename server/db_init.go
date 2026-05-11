@@ -113,9 +113,13 @@ func migrateFromJSON() error {
 						RequestCount:  info.RequestCount,
 						LastUsed:      lastUsed,
 					}
-					gormDB.Where("id = ?", key.ID).FirstOrCreate(&key)
+					if err := gormDB.Where("id = ?", key.ID).FirstOrCreate(&key).Error; err != nil {
+						log.Printf("[ERROR] migrateFromJSON: api_keys FirstOrCreate id=%s: %v", key.ID, err)
+					}
 				}
-				os.Rename(apiKeysPath, apiKeysPath+".bak")
+				if err := os.Rename(apiKeysPath, apiKeysPath+".bak"); err != nil {
+					log.Printf("[ERROR] migrateFromJSON: rename api_keys.json: %v", err)
+				}
 			}
 		}
 	}
@@ -137,28 +141,38 @@ func migrateFromJSON() error {
 					TotalLatencyMs:  j.TotalLatencyMs,
 					UpdatedAt:       time.Now().UTC(),
 				}
-				gormDB.Save(&stat)
-				for k, v := range j.RequestsByProvider {
-					td := j.TokensByProvider[k]
-					gormDB.Save(&DBStatByProvider{
-						Provider:    k,
-						Requests:    v,
-						InputTokens: td.InputTokens,
-						OutputTokens: td.OutputTokens,
-					})
-				}
-				for k, v := range j.RequestsByModel {
-					gormDB.Save(&DBStatByModel{Model: k, Requests: v})
-				}
-				for k, v := range j.DailyStats {
-					gormDB.Save(&DBStatDaily{
-						Date:        k,
-						Requests:    v.Requests,
-						InputTokens: v.InputTokens,
-						OutputTokens: v.OutputTokens,
-					})
-				}
-				os.Rename(statsPath, statsPath+".bak")
+				if err := gormDB.Save(&stat).Error; err != nil {
+						log.Printf("[ERROR] migrateFromJSON: save stat: %v", err)
+					}
+					for k, v := range j.RequestsByProvider {
+						td := j.TokensByProvider[k]
+						if err := gormDB.Save(&DBStatByProvider{
+							Provider:     k,
+							Requests:     v,
+							InputTokens:  td.InputTokens,
+							OutputTokens: td.OutputTokens,
+						}).Error; err != nil {
+							log.Printf("[ERROR] migrateFromJSON: save stat_by_provider(%s): %v", k, err)
+						}
+					}
+					for k, v := range j.RequestsByModel {
+						if err := gormDB.Save(&DBStatByModel{Model: k, Requests: v}).Error; err != nil {
+							log.Printf("[ERROR] migrateFromJSON: save stat_by_model(%s): %v", k, err)
+						}
+					}
+					for k, v := range j.DailyStats {
+						if err := gormDB.Save(&DBStatDaily{
+							Date:         k,
+							Requests:     v.Requests,
+							InputTokens:  v.InputTokens,
+							OutputTokens: v.OutputTokens,
+						}).Error; err != nil {
+							log.Printf("[ERROR] migrateFromJSON: save stat_daily(%s): %v", k, err)
+						}
+					}
+					if err := os.Rename(statsPath, statsPath+".bak"); err != nil {
+						log.Printf("[ERROR] migrateFromJSON: rename stats.json: %v", err)
+					}
 			}
 		}
 	}
@@ -186,9 +200,13 @@ func migrateFromJSON() error {
 						Path:         entry.Path,
 						Method:       entry.Method,
 					}
-					gormDB.Create(&rl)
+					if err := gormDB.Create(&rl).Error; err != nil {
+						log.Printf("[ERROR] migrateFromJSON: create request_log: %v", err)
+					}
 				}
-				os.Rename(logsPath, logsPath+".bak")
+				if err := os.Rename(logsPath, logsPath+".bak"); err != nil {
+					log.Printf("[ERROR] migrateFromJSON: rename logs.json: %v", err)
+				}
 			}
 		}
 	}

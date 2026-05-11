@@ -491,7 +491,7 @@ func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
 
 	runAt := formatTimeNow()
 	for _, kr := range keyResults {
-		gormDB.Create(&DBSystemAnalysisKeyResult{
+		if err := gormDB.Create(&DBSystemAnalysisKeyResult{
 			TaskID:        taskID,
 			HistoryID:     historyID,
 			APIKeyID:      kr.APIKeyID,
@@ -508,7 +508,9 @@ func executeSystemAnalysisTask(taskID string, task map[string]interface{}) {
 			ThreatScore:   kr.ThreatScore,
 			ThreatSignals: kr.ThreatSignals,
 			Analyzed:      kr.Analyzed,
-		})
+		}).Error; err != nil {
+			log.Printf("[ERROR] executeSystemAnalysisTask: create key result for key=%s: %v", kr.APIKeyID, err)
+		}
 	}
 
 	systemAnalysisConfigMu.RLock()
@@ -550,7 +552,9 @@ func dbInsertSystemAnalysisTaskHistory(taskID, riskLevel, summary, detail, dimen
 		SkippedCount: skippedCount,
 		RunAt:         time.Now().UTC(),
 	}
-	gormDB.Create(&record)
+	if err := gormDB.Create(&record).Error; err != nil {
+		log.Printf("[ERROR] dbInsertSystemAnalysisTaskHistory: %v", err)
+	}
 	return record.ID
 }
 

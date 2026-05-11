@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
@@ -86,36 +90,64 @@ func main() {
 		log.Printf("[MAIN] TLS disabled (plain HTTP)")
 	}
 
-	// Start admin server (management API) in a goroutine
+	var adminSrv, proxySrv *http.Server
+
 	safeGo(func() {
 		if config.EnableTLS && tlsConfig != nil {
-			srv := &http.Server{
+			adminSrv = &http.Server{
 				Addr:      adminAddr,
 				Handler:   proxy.adminRouter,
 				TLSConfig: tlsConfig.Clone(),
 			}
-			if err := srv.ListenAndServeTLS("", ""); err != nil {
+			if err := adminSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("[MAIN] Admin server error: %v", err)
 			}
 		} else {
-			if err := http.ListenAndServe(adminAddr, proxy.adminRouter); err != nil {
+			adminSrv = &http.Server{
+				Addr:    adminAddr,
+				Handler: proxy.adminRouter,
+			}
+			if err := adminSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("[MAIN] Admin server error: %v", err)
 			}
 		}
 	})
 
-	// Start proxy server (model API) on main goroutine
 	if config.EnableTLS && tlsConfig != nil {
-		server := &http.Server{
+		proxySrv = &http.Server{
 			Addr:      addr,
 			Handler:   proxy.router,
 			TLSConfig: tlsConfig,
 		}
-		if err := server.ListenAndServeTLS("", ""); err != nil {
+	} else {
+		proxySrv = &http.Server{
+			Addr:    addr,
+			Handler: proxy.router,
+		}
+	}
+
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		sig := <-quit
+		log.Printf("[MAIN] Received signal %v, shutting down gracefully...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if proxySrv != nil {
+			proxySrv.Shutdown(ctx)
+		}
+		if adminSrv != nil {
+			adminSrv.Shutdown(ctx)
+		}
+		log.Printf("[MAIN] Server shutdown complete")
+	}()
+
+	if config.EnableTLS && tlsConfig != nil {
+		if err := proxySrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[MAIN] Proxy server error: %v", err)
 		}
 	} else {
-		if err := http.ListenAndServe(addr, proxy.router); err != nil {
+		if err := proxySrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[MAIN] Proxy server error: %v", err)
 		}
 	}

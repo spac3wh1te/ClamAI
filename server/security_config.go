@@ -306,7 +306,11 @@ func dbLoadSecurityConfig() SecurityConfig {
 }
 
 func dbSaveSecurityConfig(cfg *SecurityConfig) {
-	configJSON, _ := sonic.Marshal(cfg)
+	configJSON, err := sonic.Marshal(cfg)
+	if err != nil {
+		log.Printf("[ERROR] dbSaveSecurityConfig: sonic.Marshal failed: %v", err)
+		return
+	}
 	if err := gormDB.Save(&DBSecurityConfig{ID: 1, ConfigJSON: string(configJSON)}).Error; err != nil {
 		log.Printf("[ERROR] dbSaveSecurityConfig: %v", err)
 	}

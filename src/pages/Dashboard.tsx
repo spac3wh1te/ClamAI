@@ -93,41 +93,38 @@ export default function Dashboard() {
   const { data: usageStats } = useQuery({
     queryKey: ["usage-stats", period],
     queryFn: () => statsApi.usage(period) as any as UsageStats,
-    refetchInterval: 10000, staleTime: 0,
+    refetchInterval: 15000, staleTime: 10000,
   });
 
   const { data: alertStats } = useQuery({
     queryKey: ["alert-stats", period],
     queryFn: () => apiRequest<AlertStats>("GET", `/stats/alerts?period=${period}`),
-    refetchInterval: 15000, staleTime: 0,
+    refetchInterval: 30000, staleTime: 15000,
   });
 
   const { data: alertSeverityStats } = useQuery({
     queryKey: ["alert-severity-stats", period],
     queryFn: () => apiRequest<{ by_severity: Record<string, number> }>("GET", `/stats/alert-severity?period=${period}`),
-    refetchInterval: 15000, staleTime: 0,
+    refetchInterval: 30000, staleTime: 15000,
   });
 
   const { data: callerTop10 } = useQuery({
     queryKey: ["caller-top10", period],
-    queryFn: () => apiRequest<{ callers: { api_key_used: string; requests: number; input_tokens: number; output_tokens: number; owner: string; ips: string }[]; ips: { client_ip: string; requests: number; input_tokens: number; output_tokens: number; owner: string; ips: string }[] }>("GET", `/stats/callers?period=${period}`),
-    staleTime: 0, refetchInterval: 15000,
+    queryFn: () => apiRequest<{ callers: { api_key_used: string; key_preview: string; requests: number; input_tokens: number; output_tokens: number; owner: string; ips: string }[]; ips: { client_ip: string; requests: number; input_tokens: number; output_tokens: number; owner: string; ips: string }[] }>("GET", `/stats/callers?period=${period}`),
+    staleTime: 15000, refetchInterval: 30000,
   });
 
   const { data: securityTokenStats } = useQuery({
     queryKey: ["security-token-stats", period],
     queryFn: () => apiRequest<{ total_checks: number; total_tokens: number; input_tokens: number; output_tokens: number; by_type: Record<string, number> }>("GET", `/stats/security-tokens?period=${period}`),
-    staleTime: 0, refetchInterval: 15000,
+    staleTime: 15000, refetchInterval: 30000,
   });
 
-  const getCallerDisplayName = (apiKeyUsed: string): string => {
+  const getCallerDisplayName = (entry: { api_key_used: string; key_preview: string }): string => {
     const m: Record<string, string> = { behavior_analysis: "调用者行为分析", skills_detection: "Skills安全分析", agent_deep_check: "智能体安全深度分析", "security-semantic": "语义安全检测" };
-    return m[apiKeyUsed] || apiKeyUsed;
-  };
-
-  const maskKey = (key: string): string => {
-    if (!key || key.length <= 8) return "***";
-    return key.slice(0, 4) + "..." + key.slice(-4);
+    const name = m[entry.api_key_used];
+    if (name) return name;
+    return entry.key_preview || entry.api_key_used;
   };
 
   const formatOwners = (ownerStr: string): string => {
@@ -444,7 +441,7 @@ export default function Dashboard() {
                   <div key={i} className="flex items-center justify-between py-1.5 border-b border-border last:border-0">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="text-[11px] text-muted-foreground w-5 shrink-0">{i + 1}</span>
-                      <p className="text-xs text-foreground truncate font-mono">{getCallerDisplayName(c.api_key_used)}</p>
+                        <p className="text-xs text-foreground truncate font-mono">{getCallerDisplayName(c)}</p>
                       {c.owner && <span className="text-[10px] text-purple-400 shrink-0 bg-purple-400/10 px-1.5 py-0.5 rounded ml-1">@{c.owner}</span>}
                     </div>
                     <span className="text-xs text-muted-foreground shrink-0 ml-3">{c.requests} 次</span>

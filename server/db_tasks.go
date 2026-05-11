@@ -333,7 +333,9 @@ func dbInsertSkillsTaskHistory(taskID, riskLevel, summary, detail, dimensions, s
 		DurationMs: durationMs,
 		RunAt:      now,
 	}
-	gormDB.Create(&h)
+	if err := gormDB.Create(&h).Error; err != nil {
+		log.Printf("[ERROR] dbInsertSkillsTaskHistory: %v", err)
+	}
 }
 
 func dbGetSkillsTaskHistory(taskID string) ([]map[string]interface{}, error) {
@@ -374,7 +376,9 @@ func dbInsertAnalysisTaskHistory(taskID, riskLevel, summary, detail, dimensions,
 		DurationMs:   durationMs,
 		RunAt:        now,
 	}
-	gormDB.Create(&h)
+	if err := gormDB.Create(&h).Error; err != nil {
+		log.Printf("[ERROR] dbInsertAnalysisTaskHistory: %v", err)
+	}
 }
 
 func dbGetAnalysisTaskHistory(taskID string) ([]map[string]interface{}, error) {

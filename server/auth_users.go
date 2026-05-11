@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -59,6 +60,9 @@ func (p *ProxyServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	if users == nil {
 		users = []map[string]interface{}{}
 	}
+	for _, u := range users {
+		delete(u, "password_hash")
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"users": users})
 }
@@ -74,8 +78,18 @@ func (p *ProxyServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.Username == "" || len(req.Password) < 6 {
-		http.Error(w, "用户名必填，密码至少6位", http.StatusBadRequest)
+	if req.Username == "" || len(req.Password) < 8 {
+		http.Error(w, "用户名必填，密码至少8位", http.StatusBadRequest)
+		return
+	}
+	for _, c := range req.Username {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			http.Error(w, "用户名只能包含字母、数字、下划线和连字符", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(req.Username) > 32 {
+		http.Error(w, "用户名最长32位", http.StatusBadRequest)
 		return
 	}
 	if req.Role == "" {
@@ -99,6 +113,7 @@ func (p *ProxyServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "创建用户失败", http.StatusInternalServerError)
 		return
 	}
+	auditLog(r, "user.create", req.Username, "角色="+req.Role)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -137,6 +152,17 @@ func (p *ProxyServer) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "更新失败", http.StatusInternalServerError)
 		return
 	}
+	targetName := req.DisplayName
+	if targetName == "" {
+		if u, err := dbGetUserByID(id); err == nil {
+			if dn, ok := u["display_name"].(string); ok && dn != "" {
+				targetName = dn
+			} else if un, ok := u["username"].(string); ok {
+				targetName = un
+			}
+		}
+	}
+	auditLog(r, "user.update", targetName, "角色="+req.Role+" 状态="+req.Status)
 	gormDB.Where("username IN (SELECT username FROM users WHERE id = ?)", id).Delete(&DBRefreshToken{})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
@@ -160,6 +186,7 @@ func (p *ProxyServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "删除失败", http.StatusInternalServerError)
 		return
 	}
+	auditLog(r, "user.delete", username, "")
 	if username != "" {
 		gormDB.Where("username = ?", username).Delete(&DBRefreshToken{})
 	}
@@ -177,8 +204,22 @@ func (p *ProxyServer) handleResetUserPassword(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if len(req.NewPassword) < 6 {
-		http.Error(w, "密码至少6位", http.StatusBadRequest)
+	if len(req.NewPassword) < 8 {
+		http.Error(w, "密码至少8位", http.StatusBadRequest)
+		return
+	}
+	hasUpper := false
+	hasDigit := false
+	for _, c := range req.NewPassword {
+		if c >= 'A' && c <= 'Z' {
+			hasUpper = true
+		}
+		if c >= '0' && c <= '9' {
+			hasDigit = true
+		}
+	}
+	if !hasUpper || !hasDigit {
+		http.Error(w, "密码必须包含大写字母和数字", http.StatusBadRequest)
 		return
 	}
 	hash, _ := hashPassword(req.NewPassword)
@@ -186,6 +227,15 @@ func (p *ProxyServer) handleResetUserPassword(w http.ResponseWriter, r *http.Req
 		http.Error(w, "重置失败", http.StatusInternalServerError)
 		return
 	}
+	targetName := id
+	if u, err := dbGetUserByID(id); err == nil {
+		if dn, ok := u["display_name"].(string); ok && dn != "" {
+			targetName = dn
+		} else if un, ok := u["username"].(string); ok {
+			targetName = un
+		}
+	}
+	auditLog(r, "user.reset_password", targetName, "")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "密码已重置"})
 }
@@ -199,6 +249,7 @@ func (p *ProxyServer) handleSetRegistrationOpen(w http.ResponseWriter, r *http.R
 		return
 	}
 	dbSetRegistrationOpen(req.Open)
+	auditLog(r, "settings.registration", "开放注册", "状态="+strconv.FormatBool(req.Open))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,

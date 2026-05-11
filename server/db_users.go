@@ -1,8 +1,46 @@
 package main
 
 import (
+	"log"
+	"sync"
 	"time"
 )
+
+var (
+	userNameCache   = make(map[string]string)
+	userNameCacheMu sync.RWMutex
+)
+
+func invalidateUserNameCache(id string) {
+	userNameCacheMu.Lock()
+	delete(userNameCache, id)
+	userNameCacheMu.Unlock()
+}
+
+func getUserNameByID(id string) string {
+	if id == "" {
+		return ""
+	}
+	userNameCacheMu.RLock()
+	if name, ok := userNameCache[id]; ok {
+		userNameCacheMu.RUnlock()
+		return name
+	}
+	userNameCacheMu.RUnlock()
+
+	var u DBUser
+	if err := gormDB.Select("display_name, username").Where("id = ?", id).First(&u).Error; err != nil {
+		return ""
+	}
+	name := u.DisplayName
+	if name == "" {
+		name = u.Username
+	}
+	userNameCacheMu.Lock()
+	userNameCache[id] = name
+	userNameCacheMu.Unlock()
+	return name
+}
 
 func dbCreateUser(id, username, displayName, passwordHash, role string) error {
 	u := &DBUser{
@@ -40,21 +78,8 @@ func dbListUsers() ([]map[string]interface{}, error) {
 	return result, nil
 }
 
-func getUserNameByID(id string) string {
-	if id == "" {
-		return ""
-	}
-	var u DBUser
-	if err := gormDB.Select("display_name, username").Where("id = ?", id).First(&u).Error; err != nil {
-		return ""
-	}
-	if u.DisplayName != "" {
-		return u.DisplayName
-	}
-	return u.Username
-}
-
 func dbUpdateUser(id, displayName, role, status string) error {
+	invalidateUserNameCache(id)
 	return gormDB.Model(&DBUser{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"display_name": displayName, "role": role, "status": status,
 	}).Error
@@ -68,10 +93,13 @@ func dbUpdateUserPassword(id, passwordHash string) error {
 
 func dbUpdateUserLastLogin(id string) {
 	now := time.Now()
-	gormDB.Model(&DBUser{}).Where("id = ?", id).Update("last_login_at", &now)
+	if err := gormDB.Model(&DBUser{}).Where("id = ?", id).Update("last_login_at", &now).Error; err != nil {
+		log.Printf("[ERROR] dbUpdateUserLastLogin(%s): %v", id, err)
+	}
 }
 
 func dbDeleteUser(id string) error {
+	invalidateUserNameCache(id)
 	return gormDB.Where("id = ?", id).Delete(&DBUser{}).Error
 }
 
@@ -101,7 +129,9 @@ func dbGetSystemSetting(key string) string {
 
 func dbSetSystemSetting(key, value string) {
 	s := DBSystemSetting{Key: key, Value: value}
-	gormDB.Save(&s)
+	if err := gormDB.Save(&s).Error; err != nil {
+		log.Printf("[ERROR] dbSetSystemSetting(%s): %v", key, err)
+	}
 }
 
 func dbIsRegistrationOpen() bool {

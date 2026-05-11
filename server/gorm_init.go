@@ -111,5 +111,6 @@ func autoMigrateAll() error {
 		&DBAgentEnvCheck{},
 		&DBAgentConfigCheck{},
 		&DBAgentRuntimeEvent{},
+		&DBAuditLog{},
 	)
 }

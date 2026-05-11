@@ -22,6 +22,7 @@ import {
   Terminal,
   Eye,
   ClipboardCheck,
+  ClipboardList,
   Info,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -59,16 +60,16 @@ function Layout({ children }: LayoutProps) {
               { name: "会话防护", href: "/alerts/threats", icon: Bug } as Item,
             ]
           : []),
-        { name: "安全广场", href: "/security-tools", icon: ScanSearch },
       ],
     },
     ...(isAdmin
       ? [
           {
-            label: "AI 智能体安全",
+            label: "AI 智能体防护中心",
             items: [
               { name: "环境安全", href: "/agent-security/environment", icon: Bot },
               { name: "运行时安全", href: "/agent-security/runtime", icon: Terminal },
+              { name: "安全广场", href: "/security-tools", icon: ScanSearch },
             ],
           },
         ]
@@ -91,9 +92,10 @@ function Layout({ children }: LayoutProps) {
           {
             label: "审计中心",
             items: [
-              { name: "模型调用日志", href: "/model-call-logs", icon: FileText },
-              { name: "日志审计", href: "/agent-security/logs", icon: ClipboardCheck },
-              { name: "系统运行日志", href: "/system-logs", icon: Server },
+              { name: "模型日志", href: "/model-call-logs", icon: FileText },
+              { name: "智能体日志", href: "/agent-security/logs", icon: ClipboardCheck },
+              { name: "平台操作日志", href: "/audit-logs", icon: ClipboardList },
+              { name: "平台运行日志", href: "/system-logs", icon: Server },
             ],
           },
         ]

@@ -162,7 +162,7 @@ function AgentLogAuditApp() {
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <FolderSearch className="w-6 h-6 text-primary" />
-        <h2 className="text-xl font-bold">智能体日志审计</h2>
+        <h2 className="text-xl font-bold">智能体日志</h2>
       </div>
 
       <div className="bg-muted/30 rounded-lg p-4 space-y-3">
@@ -467,7 +467,7 @@ function AgentLogAuditApp() {
 
 registerSecurityApp({
   id: "agent-log-audit",
-  name: "智能体日志审计",
+  name: "智能体日志",
   description: "自动发现智能体，扫描会话日志，发现异常行为和安全风险",
   icon: FolderSearch,
   component: AgentLogAuditApp,

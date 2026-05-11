@@ -1,11 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Component, type ReactNode, useCallback, useEffect } from "react";
-
-import Dashboard from "./pages/Dashboard";
-import BasicSettings from "./pages/BasicSettings";
-import Login from "./pages/Login";
-import SetupWizard from "./pages/SetupWizard";
+import React, { Component, type ReactNode, Suspense, useCallback, useEffect } from "react";
 
 import Layout from "./components/Layout";
 import ConnectBanner from "./components/ConnectBanner";
@@ -16,20 +11,42 @@ import { AppProvider } from "./context/AppContext";
 import { SetupProvider, useSetup } from "./context/SetupContext";
 import { ThemeProvider } from "./context/ThemeContext";
 
-import ModelManagement from "./pages/ModelManagement";
-import AlertRealtime from "./pages/alerts/Realtime";
-import AlertThreats from "./pages/alerts/Threats";
-import SecurityTools from "./pages/SecurityTools";
-import SecuritySettings from "./pages/SecuritySettings";
-import UserManagement from "./pages/UserManagement";
-import KeyControl from "./pages/KeyControl";
-import RateLimit from "./pages/RateLimit";
-import ModelCallLogs from "./pages/ModelCallLogs";
-import SystemLogs from "./pages/SystemLogs";
-import AgentEnvironment from "./pages/agent/AgentEnvironment";
-import AgentRuntimeSecurity from "./pages/agent/AgentRuntimeSecurity";
-import AgentLogAudit from "./pages/agent/AgentLogAudit";
-import About from "./pages/About";
+import Login from "./pages/Login";
+import SetupWizard from "./pages/SetupWizard";
+
+const Dashboard = React.lazy(() => import("./pages/Dashboard"));
+const BasicSettings = React.lazy(() => import("./pages/BasicSettings"));
+const ModelManagement = React.lazy(() => import("./pages/ModelManagement"));
+const AlertRealtime = React.lazy(() => import("./pages/alerts/Realtime"));
+const AlertThreats = React.lazy(() => import("./pages/alerts/Threats"));
+const SecurityTools = React.lazy(() => import("./pages/SecurityTools"));
+const SecuritySettings = React.lazy(() => import("./pages/SecuritySettings"));
+const UserManagement = React.lazy(() => import("./pages/UserManagement"));
+const KeyControl = React.lazy(() => import("./pages/KeyControl"));
+const RateLimit = React.lazy(() => import("./pages/RateLimit"));
+const ModelCallLogs = React.lazy(() => import("./pages/ModelCallLogs"));
+const SystemLogs = React.lazy(() => import("./pages/SystemLogs"));
+const AgentEnvironment = React.lazy(() => import("./pages/agent/AgentEnvironment"));
+const AgentRuntimeSecurity = React.lazy(() => import("./pages/agent/AgentRuntimeSecurity"));
+const AgentLogAudit = React.lazy(() => import("./pages/agent/AgentLogAudit"));
+const AuditLogs = React.lazy(() => import("./pages/AuditLogs"));
+const About = React.lazy(() => import("./pages/About"));
+
+function LazyPage({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center"><div className="text-muted-foreground">Loading...</div></div>}>{children}</Suspense>;
+}
+
+function NotFound() {
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="text-center">
+        <h1 className="text-6xl font-bold text-muted-foreground mb-4">404</h1>
+        <p className="text-muted-foreground mb-6">页面不存在</p>
+        <button onClick={() => window.location.href = "/"} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg">返回首页</button>
+      </div>
+    </div>
+  );
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,22 +62,23 @@ function AdminRoute({ children }: { children: ReactNode }) {
 
 const mainRoutes = (
   <Routes>
-    <Route path="/" element={<Dashboard />} />
-    <Route path="/models-mgmt" element={<ModelManagement />} />
-    <Route path="/alerts/realtime" element={<AdminRoute><AlertRealtime /></AdminRoute>} />
-    <Route path="/alerts/threats" element={<AdminRoute><AlertThreats /></AdminRoute>} />
-    <Route path="/security-tools" element={<SecurityTools />} />
-    <Route path="/user-management" element={<AdminRoute><UserManagement /></AdminRoute>} />
-    <Route path="/key-control" element={<AdminRoute><KeyControl /></AdminRoute>} />
-    <Route path="/rate-limit" element={<AdminRoute><RateLimit /></AdminRoute>} />
-    <Route path="/model-call-logs" element={<AdminRoute><ModelCallLogs /></AdminRoute>} />
-    <Route path="/system-logs" element={<AdminRoute><SystemLogs /></AdminRoute>} />
-    <Route path="/agent-security/environment" element={<AdminRoute><AgentEnvironment /></AdminRoute>} />
-    <Route path="/agent-security/runtime" element={<AdminRoute><AgentRuntimeSecurity /></AdminRoute>} />
-    <Route path="/agent-security/logs" element={<AdminRoute><AgentLogAudit /></AdminRoute>} />
-    <Route path="/basic-settings" element={<BasicSettings />} />
-    <Route path="/security-settings" element={<AdminRoute><SecuritySettings /></AdminRoute>} />
-    <Route path="/about" element={<About />} />
+    <Route path="/" element={<LazyPage><Dashboard /></LazyPage>} />
+    <Route path="/models-mgmt" element={<LazyPage><ModelManagement /></LazyPage>} />
+    <Route path="/alerts/realtime" element={<LazyPage><AdminRoute><AlertRealtime /></AdminRoute></LazyPage>} />
+    <Route path="/alerts/threats" element={<LazyPage><AdminRoute><AlertThreats /></AdminRoute></LazyPage>} />
+    <Route path="/security-tools" element={<LazyPage><SecurityTools /></LazyPage>} />
+    <Route path="/user-management" element={<LazyPage><AdminRoute><UserManagement /></AdminRoute></LazyPage>} />
+    <Route path="/key-control" element={<LazyPage><AdminRoute><KeyControl /></AdminRoute></LazyPage>} />
+    <Route path="/rate-limit" element={<LazyPage><AdminRoute><RateLimit /></AdminRoute></LazyPage>} />
+    <Route path="/model-call-logs" element={<LazyPage><AdminRoute><ModelCallLogs /></AdminRoute></LazyPage>} />
+    <Route path="/system-logs" element={<LazyPage><AdminRoute><SystemLogs /></AdminRoute></LazyPage>} />
+    <Route path="/agent-security/environment" element={<LazyPage><AdminRoute><AgentEnvironment /></AdminRoute></LazyPage>} />
+    <Route path="/agent-security/runtime" element={<LazyPage><AdminRoute><AgentRuntimeSecurity /></AdminRoute></LazyPage>} />
+    <Route path="/agent-security/logs" element={<LazyPage><AdminRoute><AgentLogAudit /></AdminRoute></LazyPage>} />
+    <Route path="/audit-logs" element={<LazyPage><AdminRoute><AuditLogs /></AdminRoute></LazyPage>} />
+    <Route path="/basic-settings" element={<LazyPage><BasicSettings /></LazyPage>} />
+    <Route path="/security-settings" element={<LazyPage><AdminRoute><SecuritySettings /></AdminRoute></LazyPage>} />
+    <Route path="/about" element={<LazyPage><About /></LazyPage>} />
     <Route path="/providers" element={<Navigate to="/models-mgmt" replace />} />
     <Route path="/models" element={<Navigate to="/models-mgmt" replace />} />
     <Route path="/api-keys" element={<Navigate to="/models-mgmt" replace />} />
@@ -72,6 +90,7 @@ const mainRoutes = (
     <Route path="/settings" element={<Navigate to="/basic-settings" replace />} />
     <Route path="/security-policy" element={<Navigate to="/security-settings" replace />} />
     <Route path="/users" element={<Navigate to="/user-management" replace />} />
+    <Route path="*" element={<NotFound />} />
   </Routes>
 );
 

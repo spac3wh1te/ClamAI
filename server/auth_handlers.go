@@ -20,6 +20,8 @@ func (p *ProxyServer) setupAuthRoutes(router *mux.Router) {
 	router.HandleFunc("/auth/token", p.handleGetToken).Methods("POST")
 	router.HandleFunc("/auth/refresh", p.handleRefreshToken).Methods("POST")
 	router.HandleFunc("/auth/me", p.handleAuthMe).Methods("GET")
+	router.HandleFunc("/auth/sessions", p.handleListSessions).Methods("GET")
+	router.HandleFunc("/auth/sessions/{token}", p.handleRevokeSession).Methods("DELETE")
 }
 
 func (p *ProxyServer) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +137,18 @@ func (p *ProxyServer) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.Username == "" || len(req.Password) < 6 {
-		http.Error(w, "用户名必填，密码至少6位", http.StatusBadRequest)
+	if req.Username == "" || len(req.Password) < 8 {
+		http.Error(w, "用户名必填，密码至少8位", http.StatusBadRequest)
+		return
+	}
+	for _, c := range req.Username {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			http.Error(w, "用户名只能包含字母、数字、下划线和连字符", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(req.Username) > 32 {
+		http.Error(w, "用户名最长32位", http.StatusBadRequest)
 		return
 	}
 	if _, err := dbGetUserByUsername(req.Username); err == nil {
@@ -232,8 +244,22 @@ func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "旧密码错误", http.StatusUnauthorized)
 		return
 	}
-	if len(req.NewPassword) < 6 {
-		http.Error(w, "新密码至少6位", http.StatusBadRequest)
+	if len(req.NewPassword) < 8 {
+		http.Error(w, "新密码至少8位", http.StatusBadRequest)
+		return
+	}
+	hasUpper := false
+	hasDigit := false
+	for _, c := range req.NewPassword {
+		if c >= 'A' && c <= 'Z' {
+			hasUpper = true
+		}
+		if c >= '0' && c <= '9' {
+			hasDigit = true
+		}
+	}
+	if !hasUpper || !hasDigit {
+		http.Error(w, "密码必须包含大写字母和数字", http.StatusBadRequest)
 		return
 	}
 	newHash, _ := hashPassword(req.NewPassword)
@@ -242,4 +268,61 @@ func (p *ProxyServer) handleChangePassword(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	user2, _ := dbGetUserByID(claims.UserID)
 	json.NewEncoder(w).Encode(issueTokenPairForUser(user2))
+}
+
+func (p *ProxyServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	claims := getUserFromRequest(r)
+	if claims == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	username := claims.Username
+	isAdminUser := claims.Role == "admin"
+
+	var tokens []DBRefreshToken
+	if isAdminUser {
+		gormDB.Order("created_at DESC").Find(&tokens)
+	} else {
+		gormDB.Where("username = ?", username).Order("created_at DESC").Find(&tokens)
+	}
+
+	sessions := make([]map[string]interface{}, 0, len(tokens))
+	for _, t := range tokens {
+		sessions = append(sessions, map[string]interface{}{
+			"token_preview": maskAPIKey(t.Token),
+			"username":      t.Username,
+			"expires_at":    t.ExpiresAt.UTC().Format(time.RFC3339),
+			"created_at":    t.CreatedAt.UTC().Format(time.RFC3339),
+			"is_expired":    time.Now().After(t.ExpiresAt),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"sessions": sessions})
+}
+
+func (p *ProxyServer) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
+	claims := getUserFromRequest(r)
+	if claims == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	tokenHash := mux.Vars(r)["token"]
+	if tokenHash == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	var rt DBRefreshToken
+	if err := gormDB.Where("token LIKE ?", tokenHash+"%").First(&rt).Error; err != nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	if claims.Role != "admin" && rt.Username != claims.Username {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	gormDB.Where("token = ?", rt.Token).Delete(&DBRefreshToken{})
+	auditLog(r, "session.revoke", maskAPIKey(rt.Token), "username="+rt.Username)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }

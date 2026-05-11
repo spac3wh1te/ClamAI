@@ -289,7 +289,7 @@ type APIKeyInfo struct {
 var (
 	apiKeys             = make(map[string]*APIKeyInfo)
 	apiKeysByID         = make(map[string]*APIKeyInfo)
-	apiKeysMu           sync.Mutex
+	apiKeysMu           sync.RWMutex
 	globalConfig        *Config
 	internalAnalysisKey = generateRandomKey(32)
 )
@@ -397,6 +397,17 @@ var BuildVersion = "dev"
 
 var oauthStates = make(map[string]*OAuthStateInfo)
 var oauthStatesMu sync.Mutex
+
+func cleanupOAuthStates() {
+	oauthStatesMu.Lock()
+	defer oauthStatesMu.Unlock()
+	now := time.Now()
+	for k, v := range oauthStates {
+		if now.Sub(v.CreatedAt) > 10*time.Minute {
+			delete(oauthStates, k)
+		}
+	}
+}
 
 type OAuthStateInfo struct {
 	Provider    string    `json:"provider"`

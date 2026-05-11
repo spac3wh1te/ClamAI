@@ -159,14 +159,20 @@ func seedDefaultThreatRules() {
 	}
 
 	for _, s := range seeds {
-		patternsJSON, _ := sonic.Marshal(s.patterns)
-		gormDB.Create(&DBThreatRule{
+		patternsJSON, err := sonic.Marshal(s.patterns)
+		if err != nil {
+			log.Printf("[ERROR] seedDefaultThreatRules: marshal patterns for %s: %v", s.name, err)
+			continue
+		}
+		if err := gormDB.Create(&DBThreatRule{
 			ThreatType:   s.threatType,
 			Name:         s.name,
 			PatternsJSON: string(patternsJSON),
 			Severity:     s.severity,
 			Enabled:      true,
-		})
+		}).Error; err != nil {
+			log.Printf("[ERROR] seedDefaultThreatRules: create rule %s: %v", s.name, err)
+		}
 	}
 	log.Printf("[INFO] seedDefaultThreatRules: seeded %d default threat rules", len(seeds))
 }
@@ -206,6 +212,10 @@ func checkThreatRules(content string) (bool, string, string, string) {
 	threatMatchersMu.RLock()
 	defer threatMatchersMu.RUnlock()
 
+	if len(content) > 10000 {
+		content = content[:10000]
+	}
+
 	for tType, matchers := range threatMatchers {
 		for _, re := range matchers {
 			if re.MatchString(content) {
@@ -242,7 +252,9 @@ func (p *ProxyServer) handleListThreatRules(w http.ResponseWriter, r *http.Reque
 	var rules []map[string]interface{}
 	for _, rule := range dbRules {
 		var patterns []string
-		sonic.Unmarshal([]byte(rule.PatternsJSON), &patterns)
+		if err := sonic.Unmarshal([]byte(rule.PatternsJSON), &patterns); err != nil {
+			log.Printf("[ERROR] handleListThreatRules: unmarshal patterns for rule id=%d: %v", rule.ID, err)
+		}
 
 		rules = append(rules, map[string]interface{}{
 			"id":          rule.ID,
@@ -276,7 +288,12 @@ func (p *ProxyServer) handleCreateThreatRule(w http.ResponseWriter, r *http.Requ
 		input.Severity = "high"
 	}
 
-	patternsJSON, _ := sonic.Marshal(input.Patterns)
+	patternsJSON, err := sonic.Marshal(input.Patterns)
+	if err != nil {
+		log.Printf("[ERROR] handleCreateThreatRule: marshal patterns: %v", err)
+		http.Error(w, "failed to marshal patterns", 500)
+		return
+	}
 	rule := DBThreatRule{
 		ThreatType:   input.ThreatType,
 		Name:         input.Name,
@@ -309,15 +326,24 @@ func (p *ProxyServer) handleUpdateThreatRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	patternsJSON, _ := sonic.Marshal(input.Patterns)
-	gormDB.Model(&DBThreatRule{}).Where("id = ?", id).Updates(map[string]interface{}{
+	patternsJSON, err := sonic.Marshal(input.Patterns)
+	if err != nil {
+		log.Printf("[ERROR] handleUpdateThreatRule: marshal patterns: %v", err)
+		http.Error(w, "failed to marshal patterns", 500)
+		return
+	}
+	if err := gormDB.Model(&DBThreatRule{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"threat_type":   input.ThreatType,
 		"name":          input.Name,
 		"patterns_json": string(patternsJSON),
 		"severity":      input.Severity,
 		"enabled":       input.Enabled,
 		"updated_at":    formatTimeNow(),
-	})
+	}).Error; err != nil {
+		log.Printf("[ERROR] handleUpdateThreatRule: update rule id=%s: %v", id, err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
 
 	loadThreatRules()
 	w.Header().Set("Content-Type", "application/json")
@@ -326,7 +352,11 @@ func (p *ProxyServer) handleUpdateThreatRule(w http.ResponseWriter, r *http.Requ
 
 func (p *ProxyServer) handleDeleteThreatRule(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	gormDB.Where("id = ?", id).Delete(&DBThreatRule{})
+	if err := gormDB.Where("id = ?", id).Delete(&DBThreatRule{}).Error; err != nil {
+		log.Printf("[ERROR] handleDeleteThreatRule: delete rule id=%s: %v", id, err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	loadThreatRules()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
@@ -335,10 +365,7 @@ func (p *ProxyServer) handleDeleteThreatRule(w http.ResponseWriter, r *http.Requ
 func (p *ProxyServer) handleThreatStats(w http.ResponseWriter, r *http.Request) {
 	period := 1440
 	if d := r.URL.Query().Get("period"); d != "" {
-		if parsed, err := time.ParseDuration(d + "m"); err == nil {
-			_ = parsed
-		}
-		if p2, err := strconv.Atoi(r.URL.Query().Get("period")); err == nil && p2 > 0 {
+		if p2, err := strconv.Atoi(d); err == nil && p2 > 0 {
 			period = p2
 		}
 	}

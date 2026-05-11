@@ -174,8 +174,8 @@ export default function AgentLogAudit() {
           <Bot size={20} className="text-cyan-400" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold">AI Agent 日志审计</h1>
-          <p className="text-sm text-muted-foreground mt-1">智能体日志行为时间线与风险分析（数据持久化存储，支持增量扫描）</p>
+          <h1 className="text-2xl font-bold">智能体日志</h1>
+          <p className="text-sm text-muted-foreground mt-1">智能体行为时间线与风险分析（数据持久化存储，支持增量扫描）</p>
         </div>
       </div>
 

@@ -345,6 +345,7 @@ func (ps *ProxyServer) handleSaveConfig(w http.ResponseWriter, r *http.Request) 
 	log.Printf("[INFO] config saved to SQLite (proxy=%s)", proxyURL)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	auditLog(r, "config.save", "全局配置", "")
 }
 
 func (ps *ProxyServer) handleResetConfig(w http.ResponseWriter, r *http.Request) {
@@ -358,6 +359,7 @@ func (ps *ProxyServer) handleResetConfig(w http.ResponseWriter, r *http.Request)
 	invalidateProviderCache()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
+	auditLog(r, "config.reset", "全局配置", "")
 }
 
 func (ps *ProxyServer) handleAddProvider(w http.ResponseWriter, r *http.Request) {
@@ -397,6 +399,7 @@ func (ps *ProxyServer) handleAddProvider(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "id": strOr(provider["id"], "")})
+	auditLog(r, "provider.create", strOr(provider["name"], ""), "")
 }
 
 func syncProviderKey(providerType, apiKey string) {
@@ -460,6 +463,7 @@ func (ps *ProxyServer) handleUpdateProviderByID(w http.ResponseWriter, r *http.R
 		return
 	}
 	log.Printf("[API] handleUpdateProviderByID: updated provider %s successfully", id)
+	auditLog(r, "provider.update", strOr(provider["name"], ""), "")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -480,11 +484,17 @@ func (ps *ProxyServer) handleDeleteProviderByID(w http.ResponseWriter, r *http.R
 			}
 		}
 	}
+	var provName string
+	var prov DBProvider
+	if err := gormDB.Select("name").Where("id = ?", id).First(&prov).Error; err == nil {
+		provName = prov.Name
+	}
 	if err := dbDeleteProvider(id); err != nil {
 		log.Printf("[ERROR] handleDeleteProviderByID: dbDeleteProvider failed: %v", err)
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
+	auditLog(r, "provider.delete", provName, "")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -637,6 +647,7 @@ func (ps *ProxyServer) handleAppInfo(w http.ResponseWriter, r *http.Request) {
 
 func (ps *ProxyServer) handleAppRestart(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[APP] Received restart request via API")
+	auditLog(r, "app.restart", "服务重启", "")
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		os.Exit(0)
@@ -727,4 +738,86 @@ func serviceToMap(s ServiceConf) map[string]interface{} {
 	b, _ := json.Marshal(s)
 	json.Unmarshal(b, &m)
 	return m
+}
+
+func (ps *ProxyServer) handleConfigBackup(w http.ResponseWriter, r *http.Request) {
+	backup := map[string]interface{}{}
+
+	var providers []DBProvider
+	gormDB.Find(&providers)
+	backup["providers"] = providers
+
+	var mappings []DBModelMapping
+	gormDB.Find(&mappings)
+	backup["model_mappings"] = mappings
+
+	var settings []DBSystemSetting
+	gormDB.Find(&settings)
+	backup["settings"] = settings
+
+	var secConfig DBSecurityConfig
+	gormDB.First(&secConfig)
+	backup["security_config"] = secConfig
+
+	var rateConfig DBRateLimitConfig
+	gormDB.First(&rateConfig)
+	backup["rate_limit_config"] = rateConfig
+
+	backup["exported_at"] = time.Now().UTC().Format(time.RFC3339)
+	backup["version"] = BuildVersion
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=clamai-backup-"+time.Now().Format("20060102-150405")+".json")
+	json.NewEncoder(w).Encode(backup)
+	auditLog(r, "config.backup", "配置备份", "")
+}
+
+func (ps *ProxyServer) handleConfigRestore(w http.ResponseWriter, r *http.Request) {
+	var backup map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&backup); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if providers, ok := backup["providers"]; ok {
+		var list []DBProvider
+		if err := json.Unmarshal(providers, &list); err == nil {
+			for _, p := range list {
+				gormDB.Save(&p)
+			}
+		}
+	}
+	if mappings, ok := backup["model_mappings"]; ok {
+		var list []DBModelMapping
+		if err := json.Unmarshal(mappings, &list); err == nil {
+			for _, m := range list {
+				gormDB.Save(&m)
+			}
+		}
+	}
+	if settings, ok := backup["settings"]; ok {
+		var list []DBSystemSetting
+		if err := json.Unmarshal(settings, &list); err == nil {
+			for _, s := range list {
+				gormDB.Save(&s)
+			}
+		}
+	}
+	if secConfig, ok := backup["security_config"]; ok {
+		var sc DBSecurityConfig
+		if err := json.Unmarshal(secConfig, &sc); err == nil {
+			gormDB.Save(&sc)
+		}
+	}
+	if rateConfig, ok := backup["rate_limit_config"]; ok {
+		var rc DBRateLimitConfig
+		if err := json.Unmarshal(rateConfig, &rc); err == nil {
+			gormDB.Save(&rc)
+		}
+	}
+
+	invalidateProviderCache()
+	auditLog(r, "config.restore", "配置恢复", "")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

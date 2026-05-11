@@ -245,11 +245,26 @@ func dbListProfiles(userIDs ...string) []map[string]interface{} {
 }
 
 func dbSaveProfile(id, name, createdBy string, prov, mappings, gateway, advanced, service map[string]interface{}) error {
-	pj, _ := json.Marshal(prov)
-	mj, _ := json.Marshal(mappings)
-	gj, _ := json.Marshal(gateway)
-	aj, _ := json.Marshal(advanced)
-	sj, _ := json.Marshal(service)
+	pj, err := json.Marshal(prov)
+	if err != nil {
+		log.Printf("[ERROR] dbSaveProfile: marshal providers: %v", err)
+	}
+	mj, err := json.Marshal(mappings)
+	if err != nil {
+		log.Printf("[ERROR] dbSaveProfile: marshal mappings: %v", err)
+	}
+	gj, err := json.Marshal(gateway)
+	if err != nil {
+		log.Printf("[ERROR] dbSaveProfile: marshal gateway: %v", err)
+	}
+	aj, err := json.Marshal(advanced)
+	if err != nil {
+		log.Printf("[ERROR] dbSaveProfile: marshal advanced: %v", err)
+	}
+	sj, err := json.Marshal(service)
+	if err != nil {
+		log.Printf("[ERROR] dbSaveProfile: marshal service: %v", err)
+	}
 	p := &DBProfile{
 		ID: id, Name: name, CreatedBy: createdBy,
 		ProvidersJSON: string(pj), MappingsJSON: string(mj),
@@ -265,11 +280,21 @@ func dbLoadProfile(id string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("profile not found")
 	}
 	var prov, mappings, gateway, advanced, service map[string]interface{}
-	json.Unmarshal([]byte(p.ProvidersJSON), &prov)
-	json.Unmarshal([]byte(p.MappingsJSON), &mappings)
-	json.Unmarshal([]byte(p.GatewayJSON), &gateway)
-	json.Unmarshal([]byte(p.AdvancedJSON), &advanced)
-	json.Unmarshal([]byte(p.ServiceJSON), &service)
+	if err := json.Unmarshal([]byte(p.ProvidersJSON), &prov); err != nil {
+		log.Printf("[ERROR] dbLoadProfile: unmarshal providers for id=%s: %v", id, err)
+	}
+	if err := json.Unmarshal([]byte(p.MappingsJSON), &mappings); err != nil {
+		log.Printf("[ERROR] dbLoadProfile: unmarshal mappings for id=%s: %v", id, err)
+	}
+	if err := json.Unmarshal([]byte(p.GatewayJSON), &gateway); err != nil {
+		log.Printf("[ERROR] dbLoadProfile: unmarshal gateway for id=%s: %v", id, err)
+	}
+	if err := json.Unmarshal([]byte(p.AdvancedJSON), &advanced); err != nil {
+		log.Printf("[ERROR] dbLoadProfile: unmarshal advanced for id=%s: %v", id, err)
+	}
+	if err := json.Unmarshal([]byte(p.ServiceJSON), &service); err != nil {
+		log.Printf("[ERROR] dbLoadProfile: unmarshal service for id=%s: %v", id, err)
+	}
 	return map[string]interface{}{
 		"name": p.Name, "providers": prov, "mappings": mappings,
 		"gateway": gateway, "advanced": advanced, "service": service,

@@ -239,12 +239,12 @@ func resolveUserIDFromRequest(r *http.Request) string {
 	}
 	rawKey := extractAPIKeyFromRequest(r)
 	if rawKey != "" {
-		apiKeysMu.Lock()
+		apiKeysMu.RLock()
 		if info, ok := apiKeys[rawKey]; ok && info.UserID != "" {
-			apiKeysMu.Unlock()
+			apiKeysMu.RUnlock()
 			return info.UserID
 		}
-		apiKeysMu.Unlock()
+		apiKeysMu.RUnlock()
 	}
 	return ""
 }
@@ -252,12 +252,12 @@ func resolveUserIDFromRequest(r *http.Request) string {
 func resolveAPIKeyIDFromRequest(r *http.Request) string {
 	rawKey := extractAPIKeyFromRequest(r)
 	if rawKey != "" {
-		apiKeysMu.Lock()
+		apiKeysMu.RLock()
 		if info, ok := apiKeys[rawKey]; ok {
-			apiKeysMu.Unlock()
+			apiKeysMu.RUnlock()
 			return info.ID
 		}
-		apiKeysMu.Unlock()
+		apiKeysMu.RUnlock()
 	}
 	return ""
 }
@@ -395,7 +395,7 @@ func storeRefreshToken(username, token string) error {
 func consumeRefreshToken(token string) (string, error) {
 	var rt DBRefreshToken
 	if err := gormDB.Where("token = ?", token).First(&rt).Error; err != nil {
-		return "", fmt.Errorf("invalid refresh token")
+		return "", fmt.Errorf("invalid or already used refresh token")
 	}
 
 	if time.Now().After(rt.ExpiresAt) {
@@ -403,9 +403,14 @@ func consumeRefreshToken(token string) (string, error) {
 		return "", fmt.Errorf("refresh token expired")
 	}
 
-	if err := gormDB.Where("token = ?", token).Delete(&DBRefreshToken{}).Error; err != nil {
+	result := gormDB.Where("token = ?", token).Delete(&DBRefreshToken{})
+	if result.Error != nil {
 		return "", fmt.Errorf("internal error")
 	}
+	if result.RowsAffected == 0 {
+		return "", fmt.Errorf("invalid or already used refresh token")
+	}
+
 	return rt.Username, nil
 }
 

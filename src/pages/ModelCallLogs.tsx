@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { statsApi } from "../api/stats";
 import {
@@ -10,6 +10,7 @@ import {
   Check,
   ArrowRight,
   X,
+  RefreshCw,
 } from "lucide-react";
 
 interface RequestLog {
@@ -149,13 +150,13 @@ export default function ModelCallLogs() {
   const [limit, setLimit] = useState(50);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const { data: logs, isLoading } = useQuery({
+  const { data: logs, isLoading, refetch } = useQuery({
     queryKey: ["request-logs", limit],
     queryFn: async () => {
       const result = await statsApi.logs({ limit });
       return (result.logs || []) as unknown as RequestLog[];
     },
-    refetchInterval: 5000,
+    refetchInterval: 15000,
   });
 
   const toggleStatus = (status: string) => {
@@ -164,7 +165,7 @@ export default function ModelCallLogs() {
     );
   };
 
-  const filteredLogs =
+  const filteredLogs = useMemo(() =>
     logs?.filter((log) => {
       const matchesSearch =
         searchTerm === "" ||
@@ -186,7 +187,7 @@ export default function ModelCallLogs() {
         (selectedType === "model-call" && ((log.call_type === "model-call") || log.is_proxy_call || !!log.upstream_provider)) ||
         (selectedType === "direct-call" && log.call_type === "direct-call");
       return matchesSearch && matchesStatus && matchesType;
-    }) || [];
+    }) || [], [logs, searchTerm, selectedStatuses, selectedType]);
 
   const stats = {
     total: filteredLogs.length,
@@ -209,9 +210,17 @@ export default function ModelCallLogs() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">模型调用日志</h1>
-        <p className="text-sm text-muted-foreground mt-1">查看所有模型调用的详细记录与请求/响应内容</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">模型日志</h1>
+          <p className="text-sm text-muted-foreground mt-1">查看所有模型调用的详细记录与请求/响应内容</p>
+        </div>
+        <button
+          onClick={() => refetch()}
+          className="flex items-center gap-1.5 px-3 py-2 text-sm border border-border rounded-lg hover:bg-accent"
+        >
+          <RefreshCw className="w-4 h-4" /> 刷新
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

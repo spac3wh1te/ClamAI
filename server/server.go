@@ -259,6 +259,8 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/config", p.handleGetConfig).Methods("GET")
 	api.HandleFunc("/config", p.handleSaveConfig).Methods("PUT")
 	api.HandleFunc("/config/reset", p.handleResetConfig).Methods("POST")
+	api.HandleFunc("/config/backup", p.handleConfigBackup).Methods("GET")
+	api.HandleFunc("/config/restore", p.handleConfigRestore).Methods("POST")
 	api.HandleFunc("/profiles", p.handleListProfiles).Methods("GET")
 	api.HandleFunc("/profiles", p.handleSaveAsProfile).Methods("POST")
 	api.HandleFunc("/profiles/{id}", p.handleProfileAction).Methods("PUT")
@@ -278,6 +280,7 @@ func (p *ProxyServer) setupRoutes() {
 	api.HandleFunc("/keys", p.handleListAPIKeys).Methods("GET")
 	api.HandleFunc("/keys", p.handleCreateAPIKey).Methods("POST")
 	api.HandleFunc("/keys/{id}", p.handleUpdateAPIKey).Methods("PUT")
+	api.HandleFunc("/keys/{id}/toggle", p.handleToggleAPIKey).Methods("PUT")
 	api.HandleFunc("/keys/{id}", p.handleDeleteAPIKey).Methods("DELETE")
 	api.HandleFunc("/keys/{id}/reveal", p.handleRevealAPIKey).Methods("GET")
 	api.HandleFunc("/stats/usage", p.handleStatsUsage).Methods("GET")
@@ -332,10 +335,13 @@ func (p *ProxyServer) setupRoutes() {
 	log.Printf("[SETUP] Auth routes registered")
 	p.setupUserRoutes(api)
 	log.Printf("[SETUP] User routes registered")
+	p.setupAuditRoutes(api)
+	log.Printf("[SETUP] Audit routes registered")
 	p.setupFrontendRoutes()
 	log.Printf("[SETUP] Frontend routes registered (or skipped if not server mode)")
 
 	p.adminRouter.Use(p.corsMiddleware)
+	p.adminRouter.Use(p.requestIDMiddleware)
 	p.adminRouter.Use(p.apiLoggingMiddleware)
 	p.adminRouter.Use(p.rateLimitMiddleware)
 	p.adminRouter.Use(p.adminAuthMiddleware)
@@ -348,14 +354,18 @@ func (p *ProxyServer) setupRoutes() {
 func (p *ProxyServer) periodicSave() {
 	saveTicker := time.NewTicker(10 * time.Second)
 	cleanTicker := time.NewTicker(1 * time.Hour)
+	oauthCleanTicker := time.NewTicker(5 * time.Minute)
 	defer saveTicker.Stop()
 	defer cleanTicker.Stop()
+	defer oauthCleanTicker.Stop()
 	for {
 		select {
 		case <-saveTicker.C:
 			dbSaveStats(p.stats)
 		case <-cleanTicker.C:
 			dbCleanupLogs()
+		case <-oauthCleanTicker.C:
+			cleanupOAuthStates()
 		}
 	}
 }

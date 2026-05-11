@@ -83,53 +83,44 @@ func dbLoadStats(stats *RequestStats) {
 	stats.TokensByModel = make(map[string]TokenDetail)
 	stats.DailyStats = make(map[string]*DailyStat)
 
-	rows, err := gormDB.Raw(`SELECT
-		COUNT(*) as total,
-		SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success,
-		SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as errors,
-		COALESCE(SUM(input_tokens), 0) as input_tokens,
-		COALESCE(SUM(output_tokens), 0) as output_tokens,
-		COALESCE(SUM(latency_ms), 0) as total_latency,
-		COALESCE(NULLIF(provider, ''), upstream_provider) as provider, model, DATE(timestamp, 'localtime') as date
-		FROM request_logs WHERE call_type = 'client'
-		GROUP BY COALESCE(NULLIF(provider, ''), upstream_provider), model, DATE(timestamp, 'localtime')`).Rows()
-	if err != nil {
-		log.Printf("[ERROR] dbLoadStats: failed to load from request_logs: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var total, success, errors, inputTok, outputTok, totalLat int64
-		var provider, model, date string
-		if err := rows.Scan(&total, &success, &errors, &inputTok, &outputTok, &totalLat, &provider, &model, &date); err != nil {
-			continue
-		}
-		stats.TotalRequests += total
-		stats.SuccessRequests += success
-		stats.ErrorRequests += errors
-		stats.InputTokens += inputTok
-		stats.OutputTokens += outputTok
-		stats.TotalLatencyMs += totalLat
-		stats.RequestsByProvider[provider] += total
-		td := stats.TokensByProvider[provider]
-		td.InputTokens += inputTok
-		td.OutputTokens += outputTok
-		stats.TokensByProvider[provider] = td
-		stats.RequestsByModel[model] += total
-		td2 := stats.TokensByModel[model]
-		td2.InputTokens += inputTok
-		td2.OutputTokens += outputTok
-		stats.TokensByModel[model] = td2
-		if _, ok := stats.DailyStats[date]; !ok {
-			stats.DailyStats[date] = &DailyStat{}
-		}
-		stats.DailyStats[date].Requests += total
-		stats.DailyStats[date].InputTokens += inputTok
-		stats.DailyStats[date].OutputTokens += outputTok
+	var mainStat DBStat
+	if err := gormDB.First(&mainStat).Error; err == nil {
+		stats.TotalRequests = mainStat.TotalRequests
+		stats.SuccessRequests = mainStat.SuccessRequests
+		stats.ErrorRequests = mainStat.ErrorRequests
+		stats.InputTokens = mainStat.InputTokens
+		stats.OutputTokens = mainStat.OutputTokens
+		stats.TotalLatencyMs = mainStat.TotalLatencyMs
 	}
 
-	log.Printf("[INFO] dbLoadStats: total=%d, success=%d (recalculated from request_logs)", stats.TotalRequests, stats.SuccessRequests)
+	var providerStats []DBStatByProvider
+	gormDB.Find(&providerStats)
+	for _, ps := range providerStats {
+		stats.RequestsByProvider[ps.Provider] = ps.Requests
+		td := TokenDetail{InputTokens: ps.InputTokens, OutputTokens: ps.OutputTokens}
+		stats.TokensByProvider[ps.Provider] = td
+		stats.TotalRequests += ps.Requests
+		stats.InputTokens += ps.InputTokens
+		stats.OutputTokens += ps.OutputTokens
+	}
+
+	var modelStats []DBStatByModel
+	gormDB.Find(&modelStats)
+	for _, ms := range modelStats {
+		stats.RequestsByModel[ms.Model] = ms.Requests
+	}
+
+	var dailyStats []DBStatDaily
+	gormDB.Find(&dailyStats)
+	for _, ds := range dailyStats {
+		stats.DailyStats[ds.Date] = &DailyStat{
+			Requests:    ds.Requests,
+			InputTokens: ds.InputTokens,
+			OutputTokens: ds.OutputTokens,
+		}
+	}
+
+	log.Printf("[INFO] dbLoadStats: total=%d, success=%d (from pre-computed tables)", stats.TotalRequests, stats.SuccessRequests)
 }
 
 func dbInsertLog(entry *RequestLog) {
@@ -199,14 +190,15 @@ func dbCleanupLogs() {
 }
 
 func dbLoadLogs(lb *LogBuffer) {
-	rows, err := gormDB.Raw("SELECT timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method FROM request_logs ORDER BY id ASC").Rows()
+	const loadLimit = 10000
+	rows, err := gormDB.Raw("SELECT timestamp, provider, model, input_tokens, output_tokens, latency_ms, success, error_message, client_ip, api_key_used, status_code, path, method FROM request_logs ORDER BY id DESC LIMIT ?", loadLimit).Rows()
 	if err != nil {
 		log.Printf("[ERROR] dbLoadLogs: %v", err)
 		return
 	}
 	defer rows.Close()
 
-	count := 0
+	var entries []*RequestLog
 	for rows.Next() {
 		entry := &RequestLog{}
 		var ts string
@@ -218,10 +210,12 @@ func dbLoadLogs(lb *LogBuffer) {
 		}
 		entry.Timestamp, _ = time.Parse(time.RFC3339, ts)
 		entry.Success = success == 1
-		lb.Add(entry)
-		count++
+		entries = append(entries, entry)
 	}
-	log.Printf("[INFO] dbLoadLogs: loaded %d entries", count)
+	for i := len(entries) - 1; i >= 0; i-- {
+		lb.Add(entries[i])
+	}
+	log.Printf("[INFO] dbLoadLogs: loaded %d entries", len(entries))
 }
 
 func dbGetRecentLogs(limit int, userID string) ([]*RequestLog, int) {
@@ -465,11 +459,11 @@ func dbGetUsageStats(periodMinutes int) *DBUsageStats {
 
 	groupBy := ""
 	if granularity == "minute" {
-		groupBy = "STRFTIME('%Y-%m-%d %H:%M', timestamp, 'localtime')"
+		groupBy = dbTruncateMinute("timestamp")
 	} else if granularity == "hour" {
-		groupBy = "STRFTIME('%Y-%m-%d %H:00', timestamp, 'localtime')"
+		groupBy = dbTruncateHour("timestamp")
 	} else {
-		groupBy = "DATE(timestamp, 'localtime')"
+		groupBy = dbTruncateDay("timestamp")
 	}
 
 	providerExpr := "COALESCE(NULLIF(provider, ''), upstream_provider)"
@@ -640,13 +634,14 @@ func dbGetUsageStatsForUser(periodMinutes int, userID string) *DBUsageStats {
 }
 
 type CallerTopEntry struct {
-	APIKeyUsed   string `json:"api_key_used"`
-	ClientIP     string `json:"client_ip"`
-	Requests     int64  `json:"requests"`
-	InputTokens  int64  `json:"input_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
-	Owner        string `json:"owner"`
-	IPs          string `json:"ips"`
+	APIKeyUsed  string `json:"api_key_used"`
+	KeyPreview  string `json:"key_preview"`
+	ClientIP    string `json:"client_ip"`
+	Requests    int64  `json:"requests"`
+	InputTokens int64  `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+	Owner       string `json:"owner"`
+	IPs         string `json:"ips"`
 }
 
 func dbGetCallerTop10(periodMinutes int, userID string, isAdmin bool) []CallerTopEntry {
@@ -672,10 +667,22 @@ func dbGetCallerTop10(periodMinutes int, userID string, isAdmin bool) []CallerTo
 	defer rows.Close()
 
 	var result []CallerTopEntry
+	internalKeys := map[string]bool{
+		"behavior_analysis": true,
+		"skills_detection":  true,
+		"agent_deep_check":  true,
+		"security-semantic": true,
+	}
 	for rows.Next() {
 		var e CallerTopEntry
 		if err := rows.Scan(&e.APIKeyUsed, &e.Requests, &e.InputTokens, &e.OutputTokens, &e.Owner); err != nil {
 			continue
+		}
+		if internalKeys[e.APIKeyUsed] {
+			e.KeyPreview = ""
+		} else {
+			e.KeyPreview = maskAPIKey(e.APIKeyUsed)
+			e.APIKeyUsed = ""
 		}
 		result = append(result, e)
 	}
@@ -686,7 +693,7 @@ func dbGetIPTop10(periodMinutes int, userID string, isAdmin bool) []CallerTopEnt
 	cutoff := time.Now().Add(-time.Duration(periodMinutes) * time.Minute).UTC()
 	query := `SELECT r.client_ip, COUNT(*) as cnt,
 		COALESCE(SUM(r.input_tokens), 0) as it, COALESCE(SUM(r.output_tokens), 0) as ot,
-		GROUP_CONCAT(COALESCE(u.display_name, u.username, ''), ',') as ips
+		` + dbGroupConcat("COALESCE(u.display_name, u.username, '')", ",") + ` as ips
 		FROM request_logs r
 		LEFT JOIN users u ON r.user_id = u.id
 		WHERE r.timestamp >= ? AND r.client_ip != '' AND r.call_type = 'client'`

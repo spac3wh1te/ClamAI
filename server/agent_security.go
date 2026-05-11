@@ -106,7 +106,10 @@ func (p *ProxyServer) handleAgentLogsParse(w http.ResponseWriter, r *http.Reques
 		AgentName string `json:"agent_name"`
 		Path      string `json:"path"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	homeDir, _ := os.UserHomeDir()
 	scanPaths := []string{}
@@ -116,7 +119,13 @@ func (p *ProxyServer) handleAgentLogsParse(w http.ResponseWriter, r *http.Reques
 			http.Error(w, "Invalid path", http.StatusBadRequest)
 			return
 		}
-		if !strings.HasPrefix(absPath, homeDir) {
+		evalPath, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+		evaledHome, _ := filepath.EvalSymlinks(homeDir)
+		if evaledHome == "" || !strings.HasPrefix(evalPath, evaledHome) {
 			http.Error(w, "Path not allowed", http.StatusForbidden)
 			return
 		}
@@ -225,7 +234,7 @@ func (p *ProxyServer) handleAgentLogsParse(w http.ResponseWriter, r *http.Reques
 			if evt.RuleName != "" {
 				target = evt.RuleName
 			}
-			gormDB.Create(&DBAgentRuntimeEvent{
+			if err := gormDB.Create(&DBAgentRuntimeEvent{
 				AgentName:   evt.AgentName,
 				EventAt:     parseTime(evt.Timestamp),
 				EventType:   evt.EventType,
@@ -235,7 +244,9 @@ func (p *ProxyServer) handleAgentLogsParse(w http.ResponseWriter, r *http.Reques
 				Details:     truncateStr(evt.Content, 4000),
 				LogSource:   evt.FilePath,
 				ContentHash: hash,
-			})
+			}).Error; err != nil {
+				log.Printf("[ERROR] handleAgentLogsParse: create event: %v", err)
+			}
 			newCount++
 		}
 	}

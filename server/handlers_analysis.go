@@ -768,8 +768,17 @@ func (p *ProxyServer) executeSkillsTask(taskID string, task map[string]interface
 			dbUpdateSkillsTaskResult(taskID, "error", "无效的文件路径", "", "")
 			return
 		}
+		evalPath, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			dbUpdateSkillsTaskResult(taskID, "error", "无效的文件路径", "", "")
+			return
+		}
 		dataDir := getDataDir()
-		if !strings.HasPrefix(absPath, dataDir) {
+		evaledDataDir, _ := filepath.EvalSymlinks(dataDir)
+		if evaledDataDir == "" {
+			evaledDataDir = dataDir
+		}
+		if !strings.HasPrefix(evalPath, evaledDataDir) {
 			dbUpdateSkillsTaskResult(taskID, "error", "仅允许读取应用数据目录下的文件", "", "")
 			return
 		}

@@ -98,6 +98,7 @@ func (p *ProxyServer) handleCreateAPIKey(w http.ResponseWriter, r *http.Request)
 	apiKeysByID[id] = info
 	apiKeysMu.Unlock()
 	dbSaveAPIKey(info)
+	auditLog(r, "apikey.create", req.Name, "")
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -150,6 +151,7 @@ func (p *ProxyServer) handleUpdateAPIKey(w http.ResponseWriter, r *http.Request)
 	now := time.Now()
 	info.LastSynced = &now
 	dbSaveAPIKey(info)
+	auditLog(r, "apikey.update", info.Name, "")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -171,12 +173,14 @@ func (p *ProxyServer) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request)
 	apiKeysMu.Lock()
 
 	var found bool
+	var keyName string
 	if info, exists := apiKeysByID[id]; exists {
 		if !isAdmin && userID != "" && info.UserID != userID {
 			apiKeysMu.Unlock()
 			http.Error(w, "Forbidden: not your API key", http.StatusForbidden)
 			return
 		}
+		keyName = info.Name
 		delete(apiKeys, info.Key)
 		delete(apiKeysByID, id)
 		found = true
@@ -186,6 +190,7 @@ func (p *ProxyServer) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Forbidden: not your API key", http.StatusForbidden)
 			return
 		}
+		keyName = info.Name
 		delete(apiKeysByID, info.ID)
 		delete(apiKeys, id)
 		found = true
@@ -199,6 +204,7 @@ func (p *ProxyServer) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request)
 	}
 
 	dbDeleteAPIKey(id)
+	auditLog(r, "apikey.delete", keyName, "")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
@@ -231,6 +237,37 @@ func (p *ProxyServer) handleRevealAPIKey(w http.ResponseWriter, r *http.Request)
 	}
 
 	http.Error(w, "API key not found", http.StatusNotFound)
+}
+
+func (p *ProxyServer) handleToggleAPIKey(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	var req struct {
+		Active bool `json:"active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	apiKeysMu.Lock()
+	defer apiKeysMu.Unlock()
+
+	info, exists := apiKeysByID[id]
+	if !exists {
+		http.Error(w, "API key not found", http.StatusNotFound)
+		return
+	}
+
+	info.Active = req.Active
+	dbSaveAPIKey(info)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"id":      info.ID,
+		"active":  info.Active,
+	})
 }
 
 func generateKeyID() string {

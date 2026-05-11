@@ -35,10 +35,16 @@ func (p *ProxyServer) handleAgentLogScan(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Invalid path", http.StatusBadRequest)
 			return
 		}
+		evalPath, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
 		allowedDirs := []string{homeDir, getDataDir()}
 		allowed := false
 		for _, d := range allowedDirs {
-			if strings.HasPrefix(absPath, d) {
+			evaledDir, _ := filepath.EvalSymlinks(d)
+			if evaledDir != "" && strings.HasPrefix(evalPath, evaledDir) {
 				allowed = true
 				break
 			}

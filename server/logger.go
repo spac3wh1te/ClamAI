@@ -170,13 +170,42 @@ func sanitizeHeadersForJSON(h map[string]string) map[string]string {
 	return safe
 }
 
+var sensitiveFields = map[string]bool{
+	"password": true, "old_password": true, "new_password": true,
+	"api_key": true, "key_value": true, "secret": true, "secret_value": true,
+	"refresh_token": true, "access_token": true, "token": true,
+}
+
+func redactSensitiveFields(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		m := make(map[string]interface{})
+		for k, v2 := range val {
+			if sensitiveFields[k] {
+				m[k] = "***REDACTED***"
+			} else {
+				m[k] = redactSensitiveFields(v2)
+			}
+		}
+		return m
+	case []interface{}:
+		arr := make([]interface{}, len(val))
+		for i, v2 := range val {
+			arr[i] = redactSensitiveFields(v2)
+		}
+		return arr
+	default:
+		return val
+	}
+}
+
 func sanitizeBodyForJSON(b []byte) string {
 	if len(b) == 0 {
 		return ""
 	}
 	var v interface{}
 	if json.Unmarshal(b, &v) == nil {
-		out, _ := json.Marshal(v)
+		out, _ := json.Marshal(redactSensitiveFields(v))
 		return string(out)
 	}
 	return "[binary data]"

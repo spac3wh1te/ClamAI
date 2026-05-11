@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -100,7 +103,9 @@ func (p *ProxyServer) handleStartOAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func generateOAuthState() string {
-	return fmt.Sprintf("state_%d", time.Now().UnixNano())
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func buildAuthURL(provider, state, redirectURI string) string {
@@ -124,8 +129,34 @@ func getProviderNames(providers map[string]Provider) []string {
 	return names
 }
 
+func maskProviderKeys(providers []map[string]interface{}) []map[string]interface{} {
+	masked := make([]map[string]interface{}, len(providers))
+	for i, pr := range providers {
+		m := make(map[string]interface{}, len(pr))
+		for k, v := range pr {
+			m[k] = v
+		}
+		if keys, ok := pr["api_keys"].([]map[string]interface{}); ok {
+			newKeys := make([]map[string]interface{}, len(keys))
+			for j, km := range keys {
+				nkm := make(map[string]interface{}, len(km))
+				for k2, v2 := range km {
+					nkm[k2] = v2
+				}
+				if kv, ok := nkm["key_value"].(string); ok && len(kv) > 8 {
+					nkm["key_value"] = kv[:4] + "..." + kv[len(kv)-4:]
+				}
+				newKeys[j] = nkm
+			}
+			m["api_keys"] = newKeys
+		}
+		masked[i] = m
+	}
+	return masked
+}
+
 func (p *ProxyServer) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	providers := dbListProviders()
+	providers := maskProviderKeys(dbListProviders())
 	userID, isAdmin := getUserAndRole(r)
 	if !isAdmin && userID != "" {
 		filtered := make([]map[string]interface{}, 0, len(providers))
@@ -666,6 +697,9 @@ func (p *ProxyServer) handleStatsLogs(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			if l > 1000 {
+				l = 1000
+			}
 			limit = l
 		}
 	}
@@ -696,11 +730,27 @@ func (p *ProxyServer) handleServiceLogs(w http.ResponseWriter, r *http.Request) 
 	}
 
 	logFilePath := getLogFilePath()
-	data, err := os.ReadFile(logFilePath)
+	f, err := os.Open(logFilePath)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"lines": []string{}, "total": 0, "error": err.Error()})
 		return
+	}
+	defer f.Close()
+
+	const maxReadSize = 2 * 1024 * 1024
+	var data []byte
+	fi, _ := f.Stat()
+	if fi.Size() > maxReadSize {
+		f.Seek(-maxReadSize, 2)
+		buf := make([]byte, maxReadSize)
+		n, _ := f.Read(buf)
+		data = buf[:n]
+		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
+			data = data[idx+1:]
+		}
+	} else {
+		data, _ = io.ReadAll(f)
 	}
 
 	lines := bytes.Split(data, []byte("\n"))
