@@ -89,7 +89,7 @@ export default function About() {
                 <a href="https://github.com/chenflux/ClamAI" target="_blank" rel="noopener noreferrer"
                   className="flex items-center gap-1 text-primary hover:underline">
                   <Github size={12} />
-                  <span>chenflux/ClamAI</span>
+                  <span>https://github.com/chenflux/ClamAI</span>
                   <ExternalLink size={10} />
                 </a>
               </div>
@@ -100,7 +100,7 @@ export default function About() {
                 <RefreshCw size={16} />
                 获取更新
               </button>
-              <button onClick={() => window.open("https://github.com/chenflux/ClamAI", "_blank")}
+              <button onClick={() => window.open("https://github.com/chenflux/ClamAI/tree/dev/docs", "_blank")}
                 className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-sm">
                 <BookOpen size={16} />
                 使用文档
@@ -144,24 +144,35 @@ export default function About() {
               <p className="text-xs text-muted-foreground mt-2">
                 ClamAI 通过<strong>厂商前缀路由</strong>分发请求。每个 AI 服务商有独立路径前缀，请求格式为：
               </p>
-              <div className="mt-2 space-y-1.5">
-                {[
-                  { prefix: "openai", name: "OpenAI", example: "gpt-4o" },
-                  { prefix: "anthropic", name: "Anthropic", example: "claude-sonnet-4-20250514" },
-                  { prefix: "deepseek", name: "DeepSeek", example: "deepseek-chat" },
-                  { prefix: "qwen", name: "通义千问", example: "qwen-max" },
-                  { prefix: "glm", name: "智谱", example: "glm-4" },
-                  { prefix: "doubao", name: "豆包", example: "doubao-pro-32k" },
-                  { prefix: "moonshot", name: "Moonshot", example: "moonshot-v1-8k" },
-                  { prefix: "siliconflow", name: "SiliconFlow", example: "Qwen/Qwen2.5-72B" },
-                  { prefix: "openrouter", name: "OpenRouter", example: "openai/gpt-4o" },
-                ].map((p) => (
-                  <div key={p.prefix} className="flex items-center gap-2 text-xs">
-                    <code className="bg-secondary px-1.5 py-0.5 rounded font-mono w-44 shrink-0">/{p.prefix}/v1/chat/completions</code>
-                    <span className="text-muted-foreground">{p.name}</span>
-                    <span className="text-muted-foreground">例: {p.example}</span>
-                  </div>
-                ))}
+              <div className="mt-3 border rounded-md overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-secondary">
+                      <th className="text-left px-3 py-1.5 font-medium">路径前缀</th>
+                      <th className="text-left px-3 py-1.5 font-medium">服务商</th>
+                      <th className="text-left px-3 py-1.5 font-medium">模型示例</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { prefix: "openai", name: "OpenAI", example: "gpt-4o" },
+                      { prefix: "anthropic", name: "Anthropic", example: "claude-sonnet-4-20250514" },
+                      { prefix: "deepseek", name: "DeepSeek", example: "deepseek-chat" },
+                      { prefix: "qwen", name: "通义千问", example: "qwen-max" },
+                      { prefix: "glm", name: "智谱", example: "glm-4" },
+                      { prefix: "doubao", name: "豆包", example: "doubao-pro-32k" },
+                      { prefix: "moonshot", name: "Moonshot", example: "moonshot-v1-8k" },
+                      { prefix: "siliconflow", name: "SiliconFlow", example: "Qwen/Qwen2.5-72B" },
+                      { prefix: "openrouter", name: "OpenRouter", example: "openai/gpt-4o" },
+                    ].map((p) => (
+                      <tr key={p.prefix} className="border-t">
+                        <td className="px-3 py-1.5"><code className="font-mono text-primary">/{p.prefix}/v1/</code></td>
+                        <td className="px-3 py-1.5">{p.name}</td>
+                        <td className="px-3 py-1.5 text-muted-foreground">{p.example}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
               <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                 <p><span className="text-foreground font-medium">认证方式：</span>使用 ClamAI 在「密钥管控」中生成的 API Key，通过 <code className="bg-secondary px-1 rounded">Authorization: Bearer sk-...</code> 传入。</p>
