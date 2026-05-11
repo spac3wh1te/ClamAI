@@ -135,29 +135,38 @@ export default function About() {
               })}
             </div>
             <div className="p-4 bg-primary/5 border border-primary/10 rounded-lg">
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm">
                 <span className="text-primary font-medium">代理地址格式：</span>
-              </p>
-              <div className="mt-2 space-y-1">
-                <p className="text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">OpenAI 兼容模式</span>（适用于 Cursor、Continue 等工具）
-                </p>
-                <code className="block text-xs bg-secondary px-2 py-1 rounded font-mono">
-                  {appInfo?.deploy_mode === "server" ? "https://your-server:port" : "https://127.0.0.1"}:{appInfo?.proxy_port || "8080"}/v1/chat/completions
+                <code className="ml-1 text-xs bg-secondary px-2 py-0.5 rounded font-mono">
+                  {"{host}:{proxy_port}"}/{/*{provider}*/}{"{provider}"}/v1/...
                 </code>
-                <p className="text-xs text-muted-foreground mt-2">
-                  <span className="font-medium text-foreground">原生路由模式</span>（按厂商路由，保留原始协议）
-                </p>
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {["openai", "anthropic", "deepseek", "qwen", "glm", "doubao", "moonshot", "siliconflow", "openrouter"].map((p) => (
-                    <code key={p} className="text-[10px] bg-secondary px-1.5 py-0.5 rounded font-mono">
-                      /{p}/v1/...
-                    </code>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  下游应用将上述地址设为 API Base URL，并使用 ClamAI 生成的 API Key 进行认证即可。所有请求自动经过安全检测。
-                </p>
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                ClamAI 通过<strong>厂商前缀路由</strong>分发请求。每个 AI 服务商有独立路径前缀，请求格式为：
+              </p>
+              <div className="mt-2 space-y-1.5">
+                {[
+                  { prefix: "openai", name: "OpenAI", example: "gpt-4o" },
+                  { prefix: "anthropic", name: "Anthropic", example: "claude-sonnet-4-20250514" },
+                  { prefix: "deepseek", name: "DeepSeek", example: "deepseek-chat" },
+                  { prefix: "qwen", name: "通义千问", example: "qwen-max" },
+                  { prefix: "glm", name: "智谱", example: "glm-4" },
+                  { prefix: "doubao", name: "豆包", example: "doubao-pro-32k" },
+                  { prefix: "moonshot", name: "Moonshot", example: "moonshot-v1-8k" },
+                  { prefix: "siliconflow", name: "SiliconFlow", example: "Qwen/Qwen2.5-72B" },
+                  { prefix: "openrouter", name: "OpenRouter", example: "openai/gpt-4o" },
+                ].map((p) => (
+                  <div key={p.prefix} className="flex items-center gap-2 text-xs">
+                    <code className="bg-secondary px-1.5 py-0.5 rounded font-mono w-44 shrink-0">/{p.prefix}/v1/chat/completions</code>
+                    <span className="text-muted-foreground">{p.name}</span>
+                    <span className="text-muted-foreground">例: {p.example}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                <p><span className="text-foreground font-medium">认证方式：</span>使用 ClamAI 在「密钥管控」中生成的 API Key，通过 <code className="bg-secondary px-1 rounded">Authorization: Bearer sk-...</code> 传入。</p>
+                <p><span className="text-foreground font-medium">模型列表：</span>访问 <code className="bg-secondary px-1 rounded">{"{host}:{port}"}/v1/models</code> 查看所有可用模型（格式：<code className="bg-secondary px-1 rounded">{"{provider}:{model}"}</code>）。</p>
+                <p><span className="text-foreground font-medium">路由原理：</span>请求路径中的 <code className="bg-secondary px-1 rounded">/{"{provider}"}/v1/</code> 前缀决定转发给哪个服务商，安全检测在转发前自动执行。</p>
               </div>
             </div>
           </div>
