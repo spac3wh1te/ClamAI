@@ -13,7 +13,6 @@ on:
 env:
   GO_VERSION: "1.24"
   NODE_VERSION: "20"
-  RUST_VERSION: "stable"
 
 jobs:
   frontend:
@@ -33,7 +32,7 @@ jobs:
           path: dist/
 
   go-service:
-    name: Go Service (${{ matrix.target }})
+    name: Go (${{ matrix.target }})
     runs-on: windows-latest
     needs: frontend
     strategy:
@@ -84,10 +83,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           $ver = "${{ github.event.inputs.version }}"
-          if (-not $ver) {
-            $tag = "${{ github.ref_name }}"
-            $ver = $tag -replace '^v',''
-          }
+          if (-not $ver) { $ver = "${{ github.ref_name }}" -replace '^v','' }
           $ldflags = ""
           if ("${{ matrix.goos }}" -eq "windows") { $ldflags = "-H windowsgui" }
           $ldflags += " -X main.BuildVersion=$ver"
@@ -138,89 +134,11 @@ jobs:
             src-tauri/target/${{ matrix.rust-target }}/release/bundle/msi/*.msi
             src-tauri/target/${{ matrix.rust-target }}/release/clamai.exe
 
-  tauri-linux-x64:
-    name: Tauri Linux (x86_64)
-    runs-on: ubuntu-latest
-    needs: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: dist/
-      - run: npm ci
-      - name: Build Tauri
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tauriScript: npx tauri
-          args: --target x86_64-unknown-linux-gnu
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tauri-x86_64-linux
-          path: |
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/**/*.deb
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/**/*.AppImage
-            src-tauri/target/x86_64-unknown-linux-gnu/release/clamai
-
-  tauri-macos:
-    name: Tauri macOS (${{ matrix.target }})
-    runs-on: macos-latest
-    needs: frontend
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-mac
-            rust-target: x86_64-apple-darwin
-          - target: arm64-mac
-            rust-target: aarch64-apple-darwin
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-target }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: dist/
-      - run: npm ci
-      - name: Build Tauri
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tauriScript: npx tauri
-          args: --target ${{ matrix.rust-target }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tauri-${{ matrix.target }}
-          path: |
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/macos/*.app
-            src-tauri/target/${{ matrix.rust-target }}/release/clamai
-
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [go-service, tauri-windows, tauri-linux-x64, tauri-macos]
+    needs: [go-service, tauri-windows]
     permissions:
       contents: write
     steps:
@@ -240,13 +158,6 @@ jobs:
           find artifacts/tauri-x86_64-win -name "*.msi" -exec cp {} release/ClamAI-x86_64-win.msi \; 2>/dev/null || true
           cp artifacts/tauri-arm64-win/clamai.exe                  release/ClamAI-arm64-win.exe 2>/dev/null || true
           find artifacts/tauri-arm64-win -name "*.msi" -exec cp {} release/ClamAI-arm64-win.msi \; 2>/dev/null || true
-          find artifacts/tauri-x86_64-linux -name "*.deb" -exec cp {} release/ClamAI-x86_64-linux.deb \; 2>/dev/null || true
-          find artifacts/tauri-x86_64-linux -name "*.AppImage" -exec cp {} release/ClamAI-x86_64-linux.AppImage \; 2>/dev/null || true
-          find artifacts/tauri-x86_64-linux -name "clamai" -exec cp {} release/ClamAI-x86_64-linux \; 2>/dev/null || true
-          find artifacts/tauri-x86_64-mac -name "*.dmg" -exec cp {} release/ClamAI-x86_64-macos.dmg \; 2>/dev/null || true
-          find artifacts/tauri-arm64-mac -name "*.dmg" -exec cp {} release/ClamAI-arm64-macos.dmg \; 2>/dev/null || true
-          find artifacts/tauri-x86_64-mac -name "clamai" -exec cp {} release/ClamAI-x86_64-macos \; 2>/dev/null || true
-          find artifacts/tauri-arm64-mac -name "clamai" -exec cp {} release/ClamAI-arm64-macos \; 2>/dev/null || true
           echo "=== Release artifacts ==="
           ls -la release/
       - name: Create GitHub Release
