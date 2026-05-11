@@ -15,13 +15,13 @@ xcopy /E /Y /Q dist\* server\frontend\dist\
 
 echo [3/3] Building Go service...
 cd server
-go build -tags server -o ClamAI-service.exe .
+go build -tags server -o ClamAI-Server.exe .
 if %errorlevel% neq 0 (
     echo Go build failed!
     exit /b 1
 )
 
 echo.
-taskkill /f /im ClamAI-service.exe >nul 2>nul & timeout /t 1 /nobreak >nul & echo Stopped
-start /b "" ".\ClamAI-service.exe" --port 38080 --admin-port 38085 --host 0.0.0.0
+taskkill /f /im ClamAI-Server.exe >nul 2>nul & timeout /t 1 /nobreak >nul & echo Stopped
+start /b "" ".\ClamAI-Server.exe" --port 38080 --admin-port 38085 --host 0.0.0.0
 

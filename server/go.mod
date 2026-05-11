@@ -1,4 +1,4 @@
-module ClamAI-service
+module ClamAI-server
 
 go 1.25.0
 

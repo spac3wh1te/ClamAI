@@ -166,28 +166,28 @@ set "TGT=%~1"
 if "%TGT%"=="x86_64-win" (
     set "B_GOOS=windows"
     set "B_GOARCH=amd64"
-    set "B_OUT=ClamAI-service.exe"
+    set "B_OUT=ClamAI-Server.exe"
     set "B_ARCHDIR=x86_64"
     set "B_COPY_RUST=1"
 )
 if "%TGT%"=="x86_64-linux" (
     set "B_GOOS=linux"
     set "B_GOARCH=amd64"
-    set "B_OUT=ClamAI-service"
+    set "B_OUT=ClamAI-Server"
     set "B_ARCHDIR=x86_64"
     set "B_COPY_RUST=0"
 )
 if "%TGT%"=="arm64-win" (
     set "B_GOOS=windows"
     set "B_GOARCH=arm64"
-    set "B_OUT=ClamAI-service.exe"
+    set "B_OUT=ClamAI-Server.exe"
     set "B_ARCHDIR=arm64"
     set "B_COPY_RUST=0"
 )
 if "%TGT%"=="arm64-linux" (
     set "B_GOOS=linux"
     set "B_GOARCH=arm64"
-    set "B_OUT=ClamAI-service"
+    set "B_OUT=ClamAI-Server"
     set "B_ARCHDIR=arm64"
     set "B_COPY_RUST=0"
 )

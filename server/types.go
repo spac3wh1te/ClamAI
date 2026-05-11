@@ -38,7 +38,7 @@ func initLogging() *os.File {
 		exePath = "."
 	}
 	dir := filepath.Dir(exePath)
-	logFile := filepath.Join(dir, "clamai-service.log")
+	logFile := filepath.Join(dir, "clamai-server.log")
 
 	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -62,7 +62,7 @@ func initLogging() *os.File {
 func getLogFilePath() string {
 	exePath, _ := os.Executable()
 	dir := filepath.Dir(exePath)
-	return filepath.Join(dir, "clamai-service.log")
+	return filepath.Join(dir, "clamai-server.log")
 }
 
 func applyDBLogLevel() {

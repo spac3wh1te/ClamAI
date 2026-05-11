@@ -17,6 +17,12 @@
 
 ---
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/chenflux/blogs_picture/master/2026-05-11_193600_417.png" alt="ClamAI 安全总览" width="800" />
+</p>
+
+---
+
 ## 功能特性
 
 - **Provider-native 透明代理** — 按服务商原生协议透传，不做格式转换，零延迟开销
@@ -42,17 +48,17 @@ npm install && npm run build
 # 编译 Go 服务
 cd server
 cp -r ../dist frontend/dist/
-go build -tags server -o ClamAI-service .
+go build -tags server -o ClamAI-Server .
 
 # 启动（默认监听 0.0.0.0:38080 + 0.0.0.0:38081）
-./ClamAI-service --port 38080 --admin-port 38081 --host 0.0.0.0
+./ClamAI-Server --port 38080 --admin-port 38081 --host 0.0.0.0
 ```
 
 打开浏览器访问 `http://localhost:38081/admin/`，首次使用会进入设置向导。
 
 ### PC 桌面模式
 
-下载 Release 中的 `ClamAI.exe` + `ClamAI-service.exe`，双击启动即可。
+下载 Release 中的 `ClamAI.exe` + `ClamAI-Server.exe`，双击启动即可。
 
 ### 在外部工具中使用
 

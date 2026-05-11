@@ -87,10 +87,10 @@ impl ProxyService {
 
     fn get_proxy_binary_path(&self) -> Result<std::path::PathBuf> {
         #[cfg(target_os = "windows")]
-        let binary_name = "ClamAI-service.exe";
+        let binary_name = "ClamAI-Server.exe";
 
         #[cfg(not(target_os = "windows"))]
-        let binary_name = "ClamAI-service";
+        let binary_name = "ClamAI-Server";
 
         let exe_path = std::env::current_exe()?;
         tracing::info!("[ProxyService] 当前exe路径: {}", exe_path.display());
