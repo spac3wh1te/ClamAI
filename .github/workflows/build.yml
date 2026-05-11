@@ -148,16 +148,26 @@ jobs:
       - name: Organize artifacts
         run: |
           mkdir -p release
-          cp artifacts/service-x86_64-win/ClamAI-Server.exe        release/ClamAI-Server-x86_64-win.exe
-          cp artifacts/service-x86_64-linux/ClamAI-Server          release/ClamAI-Server-x86_64-linux
-          cp artifacts/service-arm64-win/ClamAI-Server.exe         release/ClamAI-Server-arm64-win.exe
-          cp artifacts/service-arm64-linux/ClamAI-Server           release/ClamAI-Server-arm64-linux
-          cp artifacts/service-x86_64-mac/ClamAI-Server            release/ClamAI-Server-x86_64-macos 2>/dev/null || true
-          cp artifacts/service-arm64-mac/ClamAI-Server             release/ClamAI-Server-arm64-macos 2>/dev/null || true
-          cp artifacts/tauri-x86_64-win/clamai.exe                 release/ClamAI-x86_64-win.exe 2>/dev/null || true
-          find artifacts/tauri-x86_64-win -name "*.msi" -exec cp {} release/ClamAI-x86_64-win.msi \; 2>/dev/null || true
-          cp artifacts/tauri-arm64-win/clamai.exe                  release/ClamAI-arm64-win.exe 2>/dev/null || true
-          find artifacts/tauri-arm64-win -name "*.msi" -exec cp {} release/ClamAI-arm64-win.msi \; 2>/dev/null || true
+          echo "--- Packaging Windows x86_64 ---"
+          mkdir -p pack/win-x64
+          cp artifacts/service-x86_64-win/ClamAI-Server.exe pack/win-x64/ClamAI-Server.exe
+          cp artifacts/tauri-x86_64-win/clamai.exe pack/win-x64/ClamAI.exe 2>/dev/null || true
+          find artifacts/tauri-x86_64-win -name "*.msi" -exec cp {} pack/win-x64/ \; 2>/dev/null || true
+          cd pack/win-x64 && zip -r ../../release/ClamAI-win-x64.zip . && cd -
+          echo "--- Packaging Windows ARM64 ---"
+          mkdir -p pack/win-arm64
+          cp artifacts/service-arm64-win/ClamAI-Server.exe pack/win-arm64/ClamAI-Server.exe
+          cp artifacts/tauri-arm64-win/clamai.exe pack/win-arm64/ClamAI.exe 2>/dev/null || true
+          find artifacts/tauri-arm64-win -name "*.msi" -exec cp {} pack/win-arm64/ \; 2>/dev/null || true
+          cd pack/win-arm64 && zip -r ../../release/ClamAI-win-arm64.zip . && cd -
+          echo "--- Packaging Linux x86_64 ---"
+          cp artifacts/service-x86_64-linux/ClamAI-Server release/ClamAI-Server-linux-x64
+          echo "--- Packaging Linux ARM64 ---"
+          cp artifacts/service-arm64-linux/ClamAI-Server release/ClamAI-Server-linux-arm64
+          echo "--- Packaging macOS x86_64 ---"
+          cp artifacts/service-x86_64-mac/ClamAI-Server release/ClamAI-Server-macos-x64 2>/dev/null || true
+          echo "--- Packaging macOS ARM64 ---"
+          cp artifacts/service-arm64-mac/ClamAI-Server release/ClamAI-Server-macos-arm64 2>/dev/null || true
           echo "=== Release artifacts ==="
           ls -la release/
       - name: Create GitHub Release
