@@ -131,8 +131,9 @@ jobs:
         with:
           name: tauri-${{ matrix.target }}
           path: |
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/msi/*.msi
-            src-tauri/target/${{ matrix.rust-target }}/release/clamai.exe
+            _build/rust/target/${{ matrix.rust-target }}/release/bundle/msi/*.msi
+            _build/rust/target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
+            _build/rust/target/${{ matrix.rust-target }}/release/clamai.exe
 
   release:
     name: Create Release
@@ -153,12 +154,14 @@ jobs:
           cp artifacts/service-x86_64-win/ClamAI-Server.exe pack/win-x64/ClamAI-Server.exe
           cp artifacts/tauri-x86_64-win/clamai.exe pack/win-x64/ClamAI.exe 2>/dev/null || true
           find artifacts/tauri-x86_64-win -name "*.msi" -exec cp {} pack/win-x64/ \; 2>/dev/null || true
+          find artifacts/tauri-x86_64-win -name "*-setup.exe" -exec cp {} pack/win-x64/ \; 2>/dev/null || true
           cd pack/win-x64 && zip -r ../../release/ClamAI-win-x64.zip . && cd -
           echo "--- Packaging Windows ARM64 ---"
           mkdir -p pack/win-arm64
           cp artifacts/service-arm64-win/ClamAI-Server.exe pack/win-arm64/ClamAI-Server.exe
           cp artifacts/tauri-arm64-win/clamai.exe pack/win-arm64/ClamAI.exe 2>/dev/null || true
           find artifacts/tauri-arm64-win -name "*.msi" -exec cp {} pack/win-arm64/ \; 2>/dev/null || true
+          find artifacts/tauri-arm64-win -name "*-setup.exe" -exec cp {} pack/win-arm64/ \; 2>/dev/null || true
           cd pack/win-arm64 && zip -r ../../release/ClamAI-win-arm64.zip . && cd -
           echo "--- Packaging Linux x86_64 ---"
           cp artifacts/service-x86_64-linux/ClamAI-Server release/ClamAI-Server-linux-x64
