@@ -124,6 +124,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
         with:
           tauriScript: npx tauri
           args: --target ${{ matrix.rust-target }}
@@ -131,9 +132,9 @@ jobs:
         with:
           name: tauri-${{ matrix.target }}
           path: |
-            _build/rust/target/${{ matrix.rust-target }}/release/bundle/msi/*.msi
-            _build/rust/target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
-            _build/rust/target/${{ matrix.rust-target }}/release/clamai.exe
+            target/${{ matrix.rust-target }}/release/bundle/msi/*.msi
+            target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
+            target/${{ matrix.rust-target }}/release/clamai.exe
 
   release:
     name: Create Release
