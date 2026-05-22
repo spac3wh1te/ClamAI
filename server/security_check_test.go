@@ -89,6 +89,57 @@ func TestNormalizeContent(t *testing.T) {
 	}
 }
 
+func TestKeywordWhitelistExemptsBlacklistedContent(t *testing.T) {
+	cfg := SecurityConfig{
+		KeywordByCategory: map[string]map[string][]string{
+			"sensitive_data": {"high": {"secret"}},
+		},
+		KeywordLevels:     []string{"high"},
+		KeywordWhitelist:  []string{"safe secret"},
+	}
+	rebuildMatchers(&cfg)
+
+	matched, _, _, _ := checkKeywords("this is a safe secret example")
+	if matched {
+		t.Fatal("expected whitelist match to exempt blacklisted keyword")
+	}
+}
+
+func TestKeywordWhitelistDoesNotDisableOtherBlacklistedContent(t *testing.T) {
+	cfg := SecurityConfig{
+		KeywordByCategory: map[string]map[string][]string{
+			"sensitive_data": {"high": {"secret"}},
+		},
+		KeywordLevels:     []string{"high"},
+		KeywordWhitelist:  []string{"safe secret"},
+	}
+	rebuildMatchers(&cfg)
+
+	matched, cat, level, kw := checkKeywords("this contains secret only")
+	if !matched {
+		t.Fatal("expected blacklisted keyword to match when whitelist does not match")
+	}
+	if cat != "sensitive_data" || level != "high" || kw != "secret" {
+		t.Fatalf("match = (%q, %q, %q), want (sensitive_data, high, secret)", cat, level, kw)
+	}
+}
+
+func TestKeywordWhitelistUsesSameNormalizationAsBlacklist(t *testing.T) {
+	cfg := SecurityConfig{
+		KeywordByCategory: map[string]map[string][]string{
+			"sensitive_data": {"high": {"secret"}},
+		},
+		KeywordLevels:     []string{"high"},
+		KeywordWhitelist:  []string{"safe-secret"},
+	}
+	rebuildMatchers(&cfg)
+
+	matched, _, _, _ := checkKeywords("this is a safe secret example")
+	if matched {
+		t.Fatal("expected whitelist normalization to ignore punctuation like blacklist matching")
+	}
+}
+
 func TestExtractJSON(t *testing.T) {
 	tests := []struct {
 		name  string

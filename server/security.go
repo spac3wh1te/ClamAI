@@ -486,6 +486,9 @@ func (p *ProxyServer) handleUpdateSecurityConfig(w http.ResponseWriter, r *http.
 	if cfg.Keywords == nil {
 		cfg.Keywords = []string{}
 	}
+	if cfg.KeywordWhitelist == nil {
+		cfg.KeywordWhitelist = []string{}
+	}
 	if cfg.BlockMessage == "" {
 		cfg.BlockMessage = "抱歉，您的内容涉及敏感信息，已被安全策略拦截。"
 	}

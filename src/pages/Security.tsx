@@ -57,6 +57,7 @@ const defaultConfig: SecurityConfig = {
     sensitive_data: { critical: [], high: [], medium: [], low: [] },
   },
   keyword_levels: ["critical", "high", "medium", "low"],
+  keyword_whitelist: [],
   block_message: "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
   semantic_model: "",
   semantic_threshold: 0.8,
@@ -168,6 +169,18 @@ export default function Security({ initialTab }: { initialTab?: "config" | "keyw
     kcat[level] = (kcat[level] || []).filter((k: string) => k !== kw);
     const newKBC = { ...cfg.keyword_by_category, [kwTab]: kcat };
     updateDraft({ keyword_by_category: newKBC });
+  };
+
+  const addWhitelistKeyword = (kw: string) => {
+    const trimmed = kw.trim();
+    if (!trimmed) return;
+    const existing = cfg.keyword_whitelist || [];
+    if (existing.includes(trimmed)) return;
+    updateDraft({ keyword_whitelist: [...existing, trimmed] });
+  };
+
+  const removeWhitelistKeyword = (kw: string) => {
+    updateDraft({ keyword_whitelist: (cfg.keyword_whitelist || []).filter((k) => k !== kw) });
   };
 
   const getCatKwCount = (cat: string) => {
@@ -477,7 +490,47 @@ export default function Security({ initialTab }: { initialTab?: "config" | "keyw
       {tab === "keyword" && (
         <div className="space-y-6">
           <div className="bg-card rounded-lg p-6 border border-border">
-            <h3 className="text-lg font-semibold mb-4">关键词词库</h3>
+            <h3 className="text-lg font-semibold mb-2">全局白名单</h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              黑名单关键词命中后，如果同一段内容也命中白名单，则本次关键词命中会被豁免。
+            </p>
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                placeholder="添加白名单关键词..."
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const input = e.currentTarget;
+                    addWhitelistKeyword(input.value);
+                    input.value = "";
+                  }
+                }}
+                className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {(cfg.keyword_whitelist || []).map((kw) => (
+                <span
+                  key={kw}
+                  className="flex items-center gap-0.5 px-2 py-0.5 rounded text-xs border bg-green-500/10 text-green-400 border-green-500/30"
+                >
+                  {kw}
+                  <button
+                    onClick={() => removeWhitelistKeyword(kw)}
+                    className="hover:opacity-70 ml-0.5"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              {(cfg.keyword_whitelist || []).length === 0 && (
+                <span className="text-xs text-muted-foreground">暂无</span>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-card rounded-lg p-6 border border-border">
+            <h3 className="text-lg font-semibold mb-4">黑名单词库</h3>
 
             <div className="flex flex-wrap gap-2 mb-4 border-b border-border pb-3">
               {CATEGORIES.map((cat) => {

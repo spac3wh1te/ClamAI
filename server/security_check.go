@@ -64,6 +64,7 @@ func checkKeywords(content string) (bool, string, string, string) {
 	matcherMap := acMatchers
 	dictMap := acDicts
 	levelIdxMap := acLevelForIdx
+	whitelistMatcher := keywordWhitelistMatcher
 	acBuildMu.Unlock()
 
 	if hasAC {
@@ -73,6 +74,9 @@ func checkKeywords(content string) (bool, string, string, string) {
 			levels := levelIdxMap[cat]
 			hits := matcher.Match([]byte(normalized))
 			if len(hits) > 0 {
+				if whitelistMatcher != nil && len(whitelistMatcher.Match([]byte(normalized))) > 0 {
+					return false, "", "", ""
+				}
 				idx := hits[0]
 				kw := dict[idx]
 				level := "high"
@@ -90,6 +94,10 @@ func checkKeywords(content string) (bool, string, string, string) {
 	regexpsMu.Unlock()
 	for _, re := range regexps {
 		if re.MatchString(content) {
+			normalized := normalizeContent(content)
+			if whitelistMatcher != nil && len(whitelistMatcher.Match([]byte(normalized))) > 0 {
+				return false, "", "", ""
+			}
 			return true, "sensitive_data", "high", re.String()
 		}
 	}

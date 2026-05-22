@@ -31,18 +31,19 @@ type DirectionConfig struct {
 }
 
 type SecurityConfig struct {
-	Enabled           bool                              `json:"enabled"`
-	Input             DirectionConfig                   `json:"input"`
-	Output            DirectionConfig                   `json:"output"`
-	Keywords          []string                          `json:"keywords"`
-	KeywordByLevel    map[string][]string               `json:"keyword_by_level"`
-	KeywordByCategory map[string]map[string][]string    `json:"keyword_by_category"`
-	KeywordLevels     []string                          `json:"keyword_levels"`
-	BlockMessage      string                            `json:"block_message"`
-	SemanticModel     string                            `json:"semantic_model"`
-	SemanticThreshold float64                           `json:"semantic_threshold"`
-	SemanticPrompt    string                            `json:"semantic_prompt"`
-	AutoBanKey        bool                              `json:"auto_ban_key"`
+	Enabled           bool                           `json:"enabled"`
+	Input             DirectionConfig                `json:"input"`
+	Output            DirectionConfig                `json:"output"`
+	Keywords          []string                       `json:"keywords"`
+	KeywordByLevel    map[string][]string            `json:"keyword_by_level"`
+	KeywordByCategory map[string]map[string][]string `json:"keyword_by_category"`
+	KeywordLevels     []string                       `json:"keyword_levels"`
+	KeywordWhitelist  []string                       `json:"keyword_whitelist"`
+	BlockMessage      string                         `json:"block_message"`
+	SemanticModel     string                         `json:"semantic_model"`
+	SemanticThreshold float64                        `json:"semantic_threshold"`
+	SemanticPrompt    string                         `json:"semantic_prompt"`
+	AutoBanKey        bool                           `json:"auto_ban_key"`
 }
 
 type SecurityAlert struct {
@@ -66,13 +67,24 @@ var (
 	compiledRegexps []*regexp.Regexp
 	regexpsMu      sync.Mutex
 
-	acMatchers   map[string]*ahocorasick.Matcher
-	acDicts      map[string][]string
-	acLevelForIdx map[string][]string
-	acBuildMu    sync.Mutex
+	acMatchers             map[string]*ahocorasick.Matcher
+	acDicts                map[string][]string
+	acLevelForIdx          map[string][]string
+	keywordWhitelistMatcher *ahocorasick.Matcher
+	acBuildMu              sync.Mutex
 )
 
 var securityCategories = []string{"sensitive_data", "pornography", "violence", "politics", "terrorism"}
+
+func normalizeKeywordPattern(kw string) string {
+	var buf strings.Builder
+	for _, ch := range kw {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch > 127 {
+			buf.WriteRune(ch)
+		}
+	}
+	return buf.String()
+}
 
 var defaultSemanticSystemPrompt = `你是一个内容安全分类引擎。你的唯一任务是对输入内容进行安全分类评分。
 
@@ -125,6 +137,19 @@ func rebuildMatchers(cfg *SecurityConfig) {
 	acMatchers = make(map[string]*ahocorasick.Matcher)
 	acDicts = make(map[string][]string)
 	acLevelForIdx = make(map[string][]string)
+	keywordWhitelistMatcher = nil
+
+	whitelistWords := make([]string, 0, len(cfg.KeywordWhitelist))
+	for _, kw := range cfg.KeywordWhitelist {
+		word := normalizeKeywordPattern(kw)
+		if word != "" {
+			whitelistWords = append(whitelistWords, word)
+		}
+	}
+	if len(whitelistWords) > 0 {
+		keywordWhitelistMatcher = ahocorasick.NewStringMatcher(whitelistWords)
+		log.Printf("[INFO] AC whitelist matcher built with %d keywords", len(whitelistWords))
+	}
 
 	enabledLevels := make(map[string]bool)
 	for _, lvl := range cfg.KeywordLevels {
@@ -151,17 +176,9 @@ func rebuildMatchers(cfg *SecurityConfig) {
 				continue
 			}
 			for _, kw := range kws {
-				if kw == "" {
-					continue
-				}
-				var buf strings.Builder
-				for _, ch := range kw {
-					if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch > 127 {
-						buf.WriteRune(ch)
-					}
-				}
-				if buf.Len() > 0 {
-					allWords = append(allWords, buf.String())
+				word := normalizeKeywordPattern(kw)
+				if word != "" {
+					allWords = append(allWords, word)
 					allLevels = append(allLevels, level)
 				}
 			}
@@ -228,9 +245,10 @@ func defaultSecurityConfig() SecurityConfig {
 			SemanticEnabled:   false,
 			VectorEnabled:     false,
 		},
-		Keywords:       []string{},
-		KeywordLevels:  []string{"critical", "high", "medium", "low"},
-		BlockMessage:   "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
+		Keywords:         []string{},
+		KeywordLevels:    []string{"critical", "high", "medium", "low"},
+		KeywordWhitelist: []string{},
+		BlockMessage:     "抱歉，您的内容涉及敏感信息，已被安全策略拦截。",
 		SemanticThreshold: 0.8,
 	}
 }
@@ -252,6 +270,9 @@ func dbLoadSecurityConfig() SecurityConfig {
 
 	if cfg.Keywords == nil {
 		cfg.Keywords = []string{}
+	}
+	if cfg.KeywordWhitelist == nil {
+		cfg.KeywordWhitelist = []string{}
 	}
 	if cfg.BlockMessage == "" {
 		cfg.BlockMessage = "抱歉，您的内容涉及敏感信息，已被安全策略拦截。"

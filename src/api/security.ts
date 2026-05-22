@@ -17,6 +17,7 @@ export interface SecurityConfig {
   keyword_by_level: Record<string, string[]>;
   keyword_by_category: Record<string, Record<string, string[]>>;
   keyword_levels: string[];
+  keyword_whitelist: string[];
   block_message: string;
   semantic_model: string;
   semantic_threshold: number;
