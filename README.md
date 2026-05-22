@@ -48,6 +48,7 @@ npm install && npm run build
 # 编译 Go 服务
 cd server
 cp -r ../dist frontend/dist/
+mkdir frontend
 go build -tags server -o ClamAI-Server .
 
 # 启动（默认监听 0.0.0.0:38080 + 0.0.0.0:38081）
