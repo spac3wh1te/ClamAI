@@ -411,38 +411,20 @@ func (p *ProxyServer) handleDirectModeTestChat(w http.ResponseWriter, req struct
 	json.Unmarshal(respBody, &result)
 	usage, ok := result["usage"].(map[string]interface{})
 	if !ok {
-		dbInsertLog(&RequestLog{
-			Timestamp:    startTime,
-			Provider:    req.ProviderType,
-			Model:       modelToSend,
-			InputTokens: 0,
-			OutputTokens: 0,
-			LatencyMs:   int64(latency),
-			Success:     false,
-			ErrorMessage: "No usage in response",
-			ClientIP:    "direct-test",
-			APIKeyUsed:  apiKey,
-			StatusCode:  200,
-			Path:        endpoint,
-			Method:      "POST",
-			CallType:   "direct-call",
-		})
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false, "message": "No usage in response", "latency_ms": latency, "input_tokens": 0, "output_tokens": 0,
-		})
-		return
+		log.Printf("[WARN] handleDirectModeTestChat: no usage in response from %s, response still valid", endpoint)
 	}
 	var inputTokens, outputTokens int
-	if v, ok := usage["prompt_tokens"].(float64); ok {
-		inputTokens = int(v)
-	} else if v, ok := usage["input_tokens"].(float64); ok {
-		inputTokens = int(v)
-	}
-	if v, ok := usage["completion_tokens"].(float64); ok {
-		outputTokens = int(v)
-	} else if v, ok := usage["output_tokens"].(float64); ok {
-		outputTokens = int(v)
+	if ok {
+		if v, ok := usage["prompt_tokens"].(float64); ok {
+			inputTokens = int(v)
+		} else if v, ok := usage["input_tokens"].(float64); ok {
+			inputTokens = int(v)
+		}
+		if v, ok := usage["completion_tokens"].(float64); ok {
+			outputTokens = int(v)
+		} else if v, ok := usage["output_tokens"].(float64); ok {
+			outputTokens = int(v)
+		}
 	}
 
 	dbInsertLog(&RequestLog{
