@@ -31,6 +31,11 @@ var (
 	threatMatchersMu sync.RWMutex
 )
 
+// threatWhitelist — 已知安全词汇，避免被命令注入/路径遍历等规则误报
+var threatWhitelist = map[string]bool{
+	"skill": true,
+}
+
 func seedDefaultThreatRules() {
 	var count int64
 	gormDB.Model(&DBThreatRule{}).Count(&count)
@@ -220,11 +225,27 @@ func checkThreatRules(content string) (bool, string, string, string) {
 		for _, re := range matchers {
 			if re.MatchString(content) {
 				match := re.FindString(content)
+				// 白名单检查：提取反引号内单词，若在安全列表中则跳过
+				if len(threatWhitelist) > 0 {
+					word := extractBacktickWord(match)
+					if word != "" && threatWhitelist[word] {
+						continue
+					}
+				}
 				return true, tType, "high", match
 			}
 		}
 	}
 	return false, "", "", ""
+}
+
+// extractBacktickWord 从反引号样式中提取纯小写单词，如 "`SkillK`" → "skill"
+func extractBacktickWord(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) < 3 || s[0] != '`' || s[len(s)-1] != '`' {
+		return ""
+	}
+	return strings.ToLower(s[1 : len(s)-1])
 }
 
 func (p *ProxyServer) setupThreatRoutes(api *mux.Router) {
