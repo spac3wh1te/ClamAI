@@ -22,6 +22,9 @@ const CATEGORIES = [
   { id: "sensitive_data", label: "敏感数据", color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/30" },
 ] as const;
 
+const WHITELIST_TAB = { id: "whitelist", label: "白名单", color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/30" } as const;
+const KEYWORD_TABS = [...CATEGORIES, WHITELIST_TAB] as const;
+
 const LEVELS = [
   { id: "critical", label: "严重", color: "text-red-400" },
   { id: "high", label: "高危", color: "text-orange-400" },
@@ -186,6 +189,11 @@ export default function Security({ initialTab }: { initialTab?: "config" | "keyw
   const getCatKwCount = (cat: string) => {
     const catMap = cfg.keyword_by_category?.[cat] || {};
     return Object.values(catMap).reduce((s: number, v: any) => s + (v?.length || 0), 0);
+  };
+
+  const getKeywordTabCount = (tabId: string) => {
+    if (tabId === "whitelist") return (cfg.keyword_whitelist || []).length;
+    return getCatKwCount(tabId);
   };
 
   const defaultPrompt = `你是一个内容安全分类引擎。你的唯一任务是对输入内容进行安全分类评分。
@@ -490,51 +498,11 @@ export default function Security({ initialTab }: { initialTab?: "config" | "keyw
       {tab === "keyword" && (
         <div className="space-y-6">
           <div className="bg-card rounded-lg p-6 border border-border">
-            <h3 className="text-lg font-semibold mb-2">全局白名单</h3>
-            <p className="text-xs text-muted-foreground mb-3">
-              黑名单关键词命中后，如果同一段内容也命中白名单，则本次关键词命中会被豁免。
-            </p>
-            <div className="flex gap-2 mb-3">
-              <input
-                type="text"
-                placeholder="添加白名单关键词..."
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const input = e.currentTarget;
-                    addWhitelistKeyword(input.value);
-                    input.value = "";
-                  }
-                }}
-                className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {(cfg.keyword_whitelist || []).map((kw) => (
-                <span
-                  key={kw}
-                  className="flex items-center gap-0.5 px-2 py-0.5 rounded text-xs border bg-green-500/10 text-green-400 border-green-500/30"
-                >
-                  {kw}
-                  <button
-                    onClick={() => removeWhitelistKeyword(kw)}
-                    className="hover:opacity-70 ml-0.5"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              ))}
-              {(cfg.keyword_whitelist || []).length === 0 && (
-                <span className="text-xs text-muted-foreground">暂无</span>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-card rounded-lg p-6 border border-border">
-            <h3 className="text-lg font-semibold mb-4">黑名单词库</h3>
+            <h3 className="text-lg font-semibold mb-4">关键词词库</h3>
 
             <div className="flex flex-wrap gap-2 mb-4 border-b border-border pb-3">
-              {CATEGORIES.map((cat) => {
-                const count = getCatKwCount(cat.id);
+              {KEYWORD_TABS.map((cat) => {
+                const count = getKeywordTabCount(cat.id);
                 const active = kwTab === cat.id;
                 return (
                   <button
@@ -549,61 +517,110 @@ export default function Security({ initialTab }: { initialTab?: "config" | "keyw
               })}
             </div>
 
-            <div className="space-y-3">
-              {(() => {
-                const curCat = CATEGORIES.find((c) => c.id === kwTab) || CATEGORIES[0];
-                return LEVELS.map((level) => {
-                const catMap = getKCat();
-                const kws: string[] = catMap[level.id] || [];
-                const levelEnabled = (cfg.keyword_levels || []).includes(level.id);
-                return (
-                  <div key={level.id} className={`border rounded-lg p-3 ${levelEnabled ? "border-border" : "border-border/50 opacity-60"}`}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={`text-xs font-medium ${level.color}`}>[{level.label}]</span>
-                      <span className="text-xs text-muted-foreground">{kws.length} 个词</span>
-                    </div>
-                    <div className="flex gap-2 mb-2">
-                      <input
-                        type="text"
-                        placeholder={`添加${level.label}级关键词...`}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            const input = e.currentTarget;
-                            addKeywordToCat(level.id, input.value);
-                            input.value = "";
-                          }
-                        }}
-                        className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {kws.map((kw) => (
-                        <span
-                          key={kw}
-                          className={`flex items-center gap-0.5 px-2 py-0.5 rounded text-xs border ${catMap[level.id]?.includes(kw) ? `${curCat.bg} ${curCat.color} border-current` : "bg-secondary text-secondary-foreground border-border"}`}
-                        >
-                          {kw}
-                          <button
-                            onClick={() => removeKeywordFromCat(level.id, kw)}
-                            className="hover:opacity-70 ml-0.5"
-                          >
-                            <X size={10} />
-                          </button>
-                        </span>
-                      ))}
-                      {kws.length === 0 && (
-                        <span className="text-xs text-muted-foreground">暂无</span>
-                      )}
-                    </div>
+            {kwTab === "whitelist" ? (
+              <div className="space-y-3">
+                <div className="border rounded-lg p-3 border-green-500/30 bg-green-500/5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-medium text-green-400">[白名单]</span>
+                    <span className="text-xs text-muted-foreground">{(cfg.keyword_whitelist || []).length} 个词</span>
                   </div>
-                );
-              });
-              })()}
-            </div>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      placeholder="添加白名单关键词..."
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const input = e.currentTarget;
+                          addWhitelistKeyword(input.value);
+                          input.value = "";
+                        }
+                      }}
+                      className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {(cfg.keyword_whitelist || []).map((kw) => (
+                      <span
+                        key={kw}
+                        className="flex items-center gap-0.5 px-2 py-0.5 rounded text-xs border bg-green-500/10 text-green-400 border-green-500/30"
+                      >
+                        {kw}
+                        <button
+                          onClick={() => removeWhitelistKeyword(kw)}
+                          className="hover:opacity-70 ml-0.5"
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                    {(cfg.keyword_whitelist || []).length === 0 && (
+                      <span className="text-xs text-muted-foreground">暂无</span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  白名单为全局配置。黑名单关键词命中后，如果同一段内容也命中白名单，则本次关键词命中会被豁免。
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {(() => {
+                  const curCat = CATEGORIES.find((c) => c.id === kwTab) || CATEGORIES[0];
+                  return LEVELS.map((level) => {
+                  const catMap = getKCat();
+                  const kws: string[] = catMap[level.id] || [];
+                  const levelEnabled = (cfg.keyword_levels || []).includes(level.id);
+                  return (
+                    <div key={level.id} className={`border rounded-lg p-3 ${levelEnabled ? "border-border" : "border-border/50 opacity-60"}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`text-xs font-medium ${level.color}`}>[{level.label}]</span>
+                        <span className="text-xs text-muted-foreground">{kws.length} 个词</span>
+                      </div>
+                      <div className="flex gap-2 mb-2">
+                        <input
+                          type="text"
+                          placeholder={`添加${level.label}级关键词...`}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              const input = e.currentTarget;
+                              addKeywordToCat(level.id, input.value);
+                              input.value = "";
+                            }
+                          }}
+                          className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {kws.map((kw) => (
+                          <span
+                            key={kw}
+                            className={`flex items-center gap-0.5 px-2 py-0.5 rounded text-xs border ${catMap[level.id]?.includes(kw) ? `${curCat.bg} ${curCat.color} border-current` : "bg-secondary text-secondary-foreground border-border"}`}
+                          >
+                            {kw}
+                            <button
+                              onClick={() => removeKeywordFromCat(level.id, kw)}
+                              className="hover:opacity-70 ml-0.5"
+                            >
+                              <X size={10} />
+                            </button>
+                          </span>
+                        ))}
+                        {kws.length === 0 && (
+                          <span className="text-xs text-muted-foreground">暂无</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                });
+                })()}
+              </div>
+            )}
 
-            <p className="text-xs text-muted-foreground mt-3">
-              分类分级说明：严重级匹配最严格，低危级最宽松。请求进来时根据输入/输出检测配置中启用的分类进行检查。
-            </p>
+            {kwTab !== "whitelist" && (
+              <p className="text-xs text-muted-foreground mt-3">
+                分类分级说明：严重级匹配最严格，低危级最宽松。请求进来时根据输入/输出检测配置中启用的分类进行检查。
+              </p>
+            )}
           </div>
 
           {/* 分类启用配置 */}
