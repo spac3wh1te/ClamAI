@@ -421,6 +421,8 @@ func NewProvider(providerType, apiKey string) (Provider, error) {
 		return NewMiniMaxTokenPlanProvider(apiKey), nil
 	case "arkcode":
 		return NewArkCodeProvider(apiKey), nil
+	case "custom":
+		return NewCustomProvider(apiKey), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}

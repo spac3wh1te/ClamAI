@@ -241,3 +241,28 @@ func (p *DoubaoProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 	doProxy(w, proxyReq)
 }
+
+// ==================== Custom提供商 (自定义/中转站 OpenAI兼容) ====================
+type CustomProvider struct {
+	name    string
+	baseURL string
+	apiKey  string
+}
+
+func NewCustomProvider(apiKey string) *CustomProvider {
+	return &CustomProvider{
+		name:    "custom",
+		baseURL: "",
+		apiKey:  apiKey,
+	}
+}
+
+func (p *CustomProvider) GetName() string      { return p.name }
+func (p *CustomProvider) GetBaseURL() string    { return p.baseURL }
+func (p *CustomProvider) SetBaseURL(url string) { p.baseURL = url }
+func (p *CustomProvider) GetAPIKey() string     { return p.apiKey }
+func (p *CustomProvider) FetchModels() []string { return fetchModelsForProvider(p.baseURL, p.apiKey, "Bearer") }
+func (p *CustomProvider) TestConnection() error { return testConnection(p.baseURL+"/models", p.apiKey, "Bearer") }
+func (p *CustomProvider) ProxyRequest(w http.ResponseWriter, r *http.Request) {
+	proxyOpenAIRequest(p.baseURL, p.apiKey)(w, r)
+}

@@ -123,6 +123,7 @@ export default function Providers() {
       moonshot: "Kimi[月之暗面]",
       yi: "零一万物Yi",
       openrouter: "OpenRouter",
+      custom: "自定义/中转站",
     };
     return labels[type] || type;
   };
@@ -444,6 +445,12 @@ function AddProviderDialog({
         "openai/gpt-4o",
         "anthropic/claude-3.5-sonnet",
       ],
+    },
+    {
+      value: "custom",
+      label: "自定义/中转站 (OpenAI兼容)",
+      baseUrl: "",
+      models: [],
     },
   ];
 

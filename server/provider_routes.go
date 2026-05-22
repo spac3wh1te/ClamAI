@@ -50,12 +50,12 @@ func (p *ProxyServer) matchRoute(path string) *ProviderRouteSpec {
 	return nil
 }
 
-func buildUpstreamURL(requestPath string, spec *ProviderRouteSpec) string {
+func buildUpstreamURL(requestPath string, spec *ProviderRouteSpec, baseURL string) string {
 	suffix := strings.TrimPrefix(requestPath, spec.PathPrefix)
 	if spec.UpstreamRewrite != "" {
-		return spec.UpstreamBase + spec.UpstreamRewrite + suffix
+		return baseURL + spec.UpstreamRewrite + suffix
 	}
-	return spec.UpstreamBase + suffix
+	return baseURL + suffix
 }
 
 var DefaultProviderRoutes = []ProviderRouteSpec{
@@ -153,6 +153,13 @@ var DefaultProviderRoutes = []ProviderRouteSpec{
 	{
 		Name: "openrouter", PathPrefix: "/openrouter/v1",
 		UpstreamBase: "https://openrouter.ai/api", UpstreamRewrite: "/v1",
+		AuthType: "bearer",
+		Security: SecurityExtraction{TextPaths: []string{"messages[*].content"}},
+		Usage:    UsageExtraction{ModelPath: "model", UsagePath: "usage", InputField: "prompt_tokens", OutputField: "completion_tokens"},
+	},
+	{
+		Name: "custom", PathPrefix: "/custom/v1",
+		UpstreamBase: "", UpstreamRewrite: "/v1",
 		AuthType: "bearer",
 		Security: SecurityExtraction{TextPaths: []string{"messages[*].content"}},
 		Usage:    UsageExtraction{ModelPath: "model", UsagePath: "usage", InputField: "prompt_tokens", OutputField: "completion_tokens"},

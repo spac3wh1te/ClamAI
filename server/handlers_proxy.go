@@ -64,7 +64,7 @@ func (p *ProxyServer) handleTransparentProxy(w http.ResponseWriter, r *http.Requ
 	}
 	r.Body.Close()
 
-	upstreamURL := buildUpstreamURL(r.URL.Path, spec)
+	upstreamURL := buildUpstreamURL(r.URL.Path, spec, upstreamBase)
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
 	}

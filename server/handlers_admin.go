@@ -209,6 +209,9 @@ func (p *ProxyServer) handleTestProvider(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
+		if baseURL, ok := found["base_url"].(string); ok && baseURL != "" {
+			provider.SetBaseURL(baseURL)
+		}
 		if req.FetchModelsOnly {
 			models := provider.FetchModels()
 			modelsJSON, _ := json.Marshal(models)
